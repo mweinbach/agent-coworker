@@ -2319,12 +2319,11 @@ fn is_nested_posix_shell(cmd_basename: &str) -> bool {
 /// Strict command allowlist for unsandboxed native shell execution (Claude SDK `Bash` and
 /// Antigravity ACP `run_cmd` / `execute`), where Cowork's OS sandbox does not wrap the subprocess.
 ///
-/// Only audited POSIX core utilities whose file/directory operands can be statically verified
-/// against Cowork's read/write boundaries — plus `cd`, recursively validated POSIX `sh -c`, and
-/// allowlisted local `git` subcommands — are permitted. Network tools (`curl`, `wget`, `ssh`),
-/// interpreters, archive extractors, patchers, build runners, config-file loaders, and arbitrary
-/// `$PATH` binaries are denied by default (they remain available in Cowork's OS-sandboxed `bash`
-/// tool).
+/// Only audited POSIX core utilities whose options and file/directory operands can be statically
+/// verified against Cowork's read/write boundaries — plus `cd` and recursively validated POSIX
+/// `sh -c` — are permitted. Network tools (`curl`, `wget`, `ssh`), `git`, interpreters, archive
+/// extractors, patchers, build runners, config-file loaders, and arbitrary `$PATH` binaries are
+/// denied by default (they remain available in Cowork's OS-sandboxed `bash` tool).
 fn is_unsandboxed_allowed_command(cmd_basename: &str) -> bool {
     if is_nested_posix_shell(cmd_basename) {
         return true;
@@ -2413,137 +2412,702 @@ fn is_unsandboxed_allowed_command(cmd_basename: &str) -> bool {
 
 const MAX_SHELL_POSSIBLE_DIRS: usize = 16;
 
-fn short_flag_bundle_contains(arg: &str, needle: char) -> bool {
-    arg.strip_prefix('-')
-        .is_some_and(|short| !short.starts_with('-') && short.contains(needle))
+/// Strict audited option allowlist for an unsandboxed native shell utility.
+///
+/// Using an exact option allowlist rather than a denylist prevents GNU `getopt_long`
+/// unique-prefix abbreviations (e.g. `sort --compress-prog=./helper` for `--compress-program`,
+/// `diff --from=...`, `wc --files0=...`, `grep --rec`) and unreviewed utility flags from
+/// executing helpers, loading indirect file lists, or bypassing implicit-cwd search checks.
+#[derive(Clone, Copy)]
+struct AuditedCommandOptions {
+    /// Short flags taking no argument (may be bundled, e.g. `-rn`).
+    short_bool: &'static str,
+    /// Short flags requiring a non-write value (attached or next token, e.g. `-n10` or `-n 10`).
+    short_val: &'static str,
+    /// Short flags requiring a write-target path value (e.g. `cp -t DIR`).
+    short_write_val: &'static str,
+    /// Exact long flags taking no argument (`--flag` only; `--flag=...` rejected).
+    long_bool: &'static [&'static str],
+    /// Exact long flags requiring a non-write value (`--flag VAL` or `--flag=VAL`).
+    long_val: &'static [&'static str],
+    /// Exact long flags requiring a write-target path value (`--target-directory DIR` or `=DIR`).
+    long_write_val: &'static [&'static str],
+    /// Exact long flags accepting an optional inline value (`--flag` or `--flag=VAL`; never consumes next token).
+    long_opt_val: &'static [&'static str],
+    /// Permit legacy `-<digits>` (e.g. `head -20`, `tail -50`).
+    allow_legacy_numeric: bool,
+    /// Permit negative numbers `-<digits>[.<digits>]` (e.g. `seq -5 5`).
+    allow_negative_number: bool,
 }
 
-fn reject_unsafe_unsandboxed_command_arg(
-    cmd: &str,
-    text: &str,
-    lower_arg: &str,
-) -> Result<(), String> {
-    let blocked = match cmd {
-        "printf" => text == "-v" || text.starts_with("-v") || short_flag_bundle_contains(text, 'v'),
-        "tree" => text == "-o" || text.starts_with("-o") || short_flag_bundle_contains(text, 'o'),
-        "find" => {
-            matches!(
-                lower_arg,
-                "-exec"
-                    | "-execdir"
-                    | "-ok"
-                    | "-okdir"
-                    | "-fprint"
-                    | "-fprint0"
-                    | "-fprintf"
-                    | "-fls"
-                    | "-files0-from"
-                    | "--files0-from"
-                    | "-delete"
-            ) || lower_arg.starts_with("-files0-from=")
-                || lower_arg.starts_with("--files0-from=")
-        }
-        "fd" => {
-            matches!(
-                lower_arg,
-                "-x" | "--exec"
-                    | "-X"
-                    | "--exec-batch"
-                    | "--ignore-file"
-                    | "--list-details"
-                    | "--base-directory"
-                    | "--config"
-            ) || lower_arg.starts_with("--exec=")
-                || lower_arg.starts_with("--exec-batch=")
-                || lower_arg.starts_with("--ignore-file=")
-                || lower_arg.starts_with("--base-directory=")
-                || lower_arg.starts_with("--config=")
-                || short_flag_bundle_contains(text, 'x')
-                || short_flag_bundle_contains(text, 'X')
-        }
-        "rg" => {
-            matches!(
-                lower_arg,
-                "--pre"
-                    | "--pre-glob"
-                    | "-z"
-                    | "--search-zip"
-                    | "--ignore-file"
-                    | "--files-from"
-                    | "--hostname-bin"
-                    | "--hyperlink-format"
-            ) || lower_arg.starts_with("--pre=")
-                || lower_arg.starts_with("--pre-glob=")
-                || lower_arg.starts_with("--ignore-file=")
-                || lower_arg.starts_with("--files-from=")
-                || lower_arg.starts_with("--hostname-bin=")
-                || lower_arg.starts_with("--hyperlink-format=")
-                || short_flag_bundle_contains(text, 'z')
-        }
-        "sort" => {
-            matches!(
-                lower_arg,
-                "-o" | "--output"
-                    | "--files0-from"
-                    | "--compress-program"
-                    | "--random-source"
-                    | "-T"
-                    | "--temporary-directory"
-            ) || lower_arg.starts_with("--output=")
-                || lower_arg.starts_with("--files0-from=")
-                || lower_arg.starts_with("--compress-program=")
-                || lower_arg.starts_with("--random-source=")
-                || lower_arg.starts_with("--temporary-directory=")
-                || short_flag_bundle_contains(text, 'o')
-                || short_flag_bundle_contains(text, 'T')
-        }
-        "wc" | "du" => {
-            matches!(lower_arg, "--files0-from" | "--exclude-from" | "-X")
-                || lower_arg.starts_with("--files0-from=")
-                || lower_arg.starts_with("--exclude-from=")
-                || short_flag_bundle_contains(text, 'X')
-        }
-        "diff" => {
-            matches!(
-                lower_arg,
-                "--from-file" | "--to-file" | "--exclude-from" | "-X"
-            ) || lower_arg.starts_with("--from-file=")
-                || lower_arg.starts_with("--to-file=")
-                || lower_arg.starts_with("--exclude-from=")
-                || short_flag_bundle_contains(text, 'X')
-        }
-        "date" => {
-            matches!(lower_arg, "-f" | "--file" | "-s" | "--set")
-                || lower_arg.starts_with("--file=")
-                || lower_arg.starts_with("--set=")
-                || short_flag_bundle_contains(text, 'f')
-                || short_flag_bundle_contains(text, 's')
-        }
-        "cp" => {
-            matches!(lower_arg, "-s" | "--symbolic-link" | "-l" | "--link")
-                || short_flag_bundle_contains(text, 's')
-                || short_flag_bundle_contains(text, 'l')
-        }
-        "grep" | "egrep" | "fgrep" => {
-            lower_arg == "--exclude-from" || lower_arg.starts_with("--exclude-from=")
-        }
-        "md5sum" | "shasum" | "sha1sum" | "sha256sum" | "sha512sum" => {
-            matches!(lower_arg, "-c" | "--check") || short_flag_bundle_contains(text, 'c')
-        }
-        _ => false,
-    };
-    if blocked {
-        return Err(format!(
-            "'{cmd} {text}' is blocked in unsandboxed native shell execution."
-        ));
+const NO_OPTIONS: AuditedCommandOptions = AuditedCommandOptions {
+    short_bool: "",
+    short_val: "",
+    short_write_val: "",
+    long_bool: &[],
+    long_val: &[],
+    long_write_val: &[],
+    long_opt_val: &[],
+    allow_legacy_numeric: false,
+    allow_negative_number: false,
+};
+
+fn audited_options_for_command(cmd: &str) -> AuditedCommandOptions {
+    match cmd {
+        "true" | "false" | "whoami" | "sleep" | "rev" | "printf" | "cksum" => NO_OPTIONS,
+        "pwd" => AuditedCommandOptions {
+            short_bool: "LP",
+            long_bool: &["--logical", "--physical"],
+            ..NO_OPTIONS
+        },
+        "basename" => AuditedCommandOptions {
+            short_bool: "az",
+            short_val: "s",
+            long_bool: &["--multiple", "--zero"],
+            long_val: &["--suffix"],
+            ..NO_OPTIONS
+        },
+        "dirname" => AuditedCommandOptions {
+            short_bool: "z",
+            long_bool: &["--zero"],
+            ..NO_OPTIONS
+        },
+        "seq" => AuditedCommandOptions {
+            short_bool: "w",
+            short_val: "s",
+            long_bool: &["--equal-width"],
+            long_val: &["--separator"],
+            allow_negative_number: true,
+            ..NO_OPTIONS
+        },
+        "uname" => AuditedCommandOptions {
+            short_bool: "asnrvmpio",
+            long_bool: &[
+                "--all",
+                "--kernel-name",
+                "--nodename",
+                "--kernel-release",
+                "--kernel-version",
+                "--machine",
+                "--processor",
+                "--hardware-platform",
+                "--operating-system",
+            ],
+            ..NO_OPTIONS
+        },
+        "date" => AuditedCommandOptions {
+            short_bool: "uR",
+            long_bool: &["--utc", "--universal", "--rfc-email"],
+            long_opt_val: &["--iso-8601", "--rfc-3339"],
+            ..NO_OPTIONS
+        },
+        "id" => AuditedCommandOptions {
+            short_bool: "ugGnrz",
+            long_bool: &[
+                "--user", "--group", "--groups", "--name", "--real", "--zero",
+            ],
+            ..NO_OPTIONS
+        },
+        "wc" => AuditedCommandOptions {
+            short_bool: "cmlLw",
+            long_bool: &[
+                "--bytes",
+                "--chars",
+                "--lines",
+                "--max-line-length",
+                "--words",
+            ],
+            ..NO_OPTIONS
+        },
+        "uniq" => AuditedCommandOptions {
+            short_bool: "cdDiuz",
+            short_val: "fsw",
+            long_bool: &[
+                "--count",
+                "--repeated",
+                "--unique",
+                "--ignore-case",
+                "--zero-terminated",
+            ],
+            long_val: &["--skip-fields", "--skip-chars", "--check-chars"],
+            long_opt_val: &["--all-repeated", "--group"],
+            ..NO_OPTIONS
+        },
+        "cut" => AuditedCommandOptions {
+            short_bool: "snz",
+            short_val: "bcfd",
+            long_bool: &["--only-delimited", "--complement", "--zero-terminated"],
+            long_val: &[
+                "--bytes",
+                "--characters",
+                "--fields",
+                "--delimiter",
+                "--output-delimiter",
+            ],
+            ..NO_OPTIONS
+        },
+        "tr" => AuditedCommandOptions {
+            short_bool: "cCdst",
+            long_bool: &[
+                "--complement",
+                "--delete",
+                "--squeeze-repeats",
+                "--truncate-set1",
+            ],
+            ..NO_OPTIONS
+        },
+        "paste" => AuditedCommandOptions {
+            short_bool: "sz",
+            short_val: "d",
+            long_bool: &["--serial", "--zero-terminated"],
+            long_val: &["--delimiters"],
+            ..NO_OPTIONS
+        },
+        "nl" => AuditedCommandOptions {
+            short_bool: "p",
+            short_val: "bdfhilnsvw",
+            long_bool: &["--no-renumber"],
+            long_val: &[
+                "--body-numbering",
+                "--section-delimiter",
+                "--footer-numbering",
+                "--header-numbering",
+                "--line-increment",
+                "--join-blank-lines",
+                "--number-format",
+                "--number-separator",
+                "--starting-line-number",
+                "--number-width",
+            ],
+            ..NO_OPTIONS
+        },
+        "fold" => AuditedCommandOptions {
+            short_bool: "bs",
+            short_val: "w",
+            long_bool: &["--bytes", "--spaces"],
+            long_val: &["--width"],
+            ..NO_OPTIONS
+        },
+        "fmt" => AuditedCommandOptions {
+            short_bool: "cstu",
+            short_val: "wgp",
+            long_bool: &[
+                "--crown-margin",
+                "--split-only",
+                "--tagged-paragraph",
+                "--uniform-spacing",
+            ],
+            long_val: &["--width", "--goal", "--prefix"],
+            ..NO_OPTIONS
+        },
+        "column" => AuditedCommandOptions {
+            short_bool: "txn",
+            short_val: "soc",
+            long_bool: &["--table", "--fillrows"],
+            long_val: &["--separator", "--output-separator", "--output-width"],
+            ..NO_OPTIONS
+        },
+        "expand" => AuditedCommandOptions {
+            short_bool: "i",
+            short_val: "t",
+            long_bool: &["--initial"],
+            long_val: &["--tabs"],
+            ..NO_OPTIONS
+        },
+        "unexpand" => AuditedCommandOptions {
+            short_bool: "a",
+            short_val: "t",
+            long_bool: &["--all", "--first-only"],
+            long_val: &["--tabs"],
+            ..NO_OPTIONS
+        },
+        "comm" => AuditedCommandOptions {
+            short_bool: "123z",
+            long_bool: &[
+                "--check-order",
+                "--nocheck-order",
+                "--total",
+                "--zero-terminated",
+            ],
+            long_val: &["--output-delimiter"],
+            ..NO_OPTIONS
+        },
+        "join" => AuditedCommandOptions {
+            short_bool: "iz",
+            short_val: "12aejotv",
+            long_bool: &[
+                "--ignore-case",
+                "--check-order",
+                "--nocheck-order",
+                "--header",
+                "--zero-terminated",
+            ],
+            ..NO_OPTIONS
+        },
+        "sort" => AuditedCommandOptions {
+            short_bool: "bdfgiMhnRrVcCmsuz",
+            short_val: "kSt",
+            long_bool: &[
+                "--ignore-leading-blanks",
+                "--dictionary-order",
+                "--ignore-case",
+                "--general-numeric-sort",
+                "--ignore-nonprinting",
+                "--month-sort",
+                "--human-numeric-sort",
+                "--numeric-sort",
+                "--random-sort",
+                "--reverse",
+                "--version-sort",
+                "--merge",
+                "--stable",
+                "--unique",
+                "--zero-terminated",
+            ],
+            long_val: &["--key", "--buffer-size", "--field-separator"],
+            long_opt_val: &["--check", "--sort"],
+            ..NO_OPTIONS
+        },
+        "tee" => AuditedCommandOptions {
+            short_bool: "ai",
+            long_bool: &["--append", "--ignore-interrupts"],
+            ..NO_OPTIONS
+        },
+        "cat" => AuditedCommandOptions {
+            short_bool: "AbeEnstTuv",
+            long_bool: &[
+                "--show-all",
+                "--number-nonblank",
+                "--show-ends",
+                "--number",
+                "--squeeze-blank",
+                "--show-tabs",
+                "--show-nonprinting",
+            ],
+            ..NO_OPTIONS
+        },
+        "head" | "tail" => AuditedCommandOptions {
+            short_bool: "qvz",
+            short_val: "nc",
+            long_bool: &["--quiet", "--silent", "--verbose", "--zero-terminated"],
+            long_val: &["--lines", "--bytes"],
+            allow_legacy_numeric: true,
+            ..NO_OPTIONS
+        },
+        "stat" => AuditedCommandOptions {
+            short_bool: "Lftxrs",
+            short_val: "c",
+            long_bool: &["--dereference", "--file-system", "--terse"],
+            long_val: &["--format", "--printf"],
+            ..NO_OPTIONS
+        },
+        "readlink" => AuditedCommandOptions {
+            short_bool: "femnqsvz",
+            long_bool: &[
+                "--canonicalize",
+                "--canonicalize-existing",
+                "--canonicalize-missing",
+                "--no-newline",
+                "--quiet",
+                "--silent",
+                "--verbose",
+                "--zero",
+            ],
+            ..NO_OPTIONS
+        },
+        "realpath" => AuditedCommandOptions {
+            short_bool: "emLPqsz",
+            long_bool: &[
+                "--canonicalize-existing",
+                "--canonicalize-missing",
+                "--logical",
+                "--physical",
+                "--quiet",
+                "--strip",
+                "--no-symlinks",
+                "--zero",
+            ],
+            ..NO_OPTIONS
+        },
+        "diff" => AuditedCommandOptions {
+            short_bool: "ucqsrNabwBEZiptTydnef",
+            short_val: "UCWx",
+            long_bool: &[
+                "--brief",
+                "--report-identical-files",
+                "--recursive",
+                "--new-file",
+                "--text",
+                "--ignore-space-change",
+                "--ignore-all-space",
+                "--ignore-blank-lines",
+                "--ignore-tab-expansion",
+                "--ignore-trailing-space",
+                "--ignore-case",
+                "--show-c-function",
+                "--expand-tabs",
+                "--initial-tab",
+                "--side-by-side",
+                "--no-dereference",
+                "--strip-trailing-cr",
+                "--minimal",
+                "--suppress-common-lines",
+            ],
+            long_val: &["--width", "--exclude"],
+            long_opt_val: &["--unified", "--context", "--color"],
+            ..NO_OPTIONS
+        },
+        "cmp" => AuditedCommandOptions {
+            short_bool: "bls",
+            short_val: "in",
+            long_bool: &["--print-bytes", "--verbose", "--quiet", "--silent"],
+            long_val: &["--ignore-initial", "--bytes"],
+            ..NO_OPTIONS
+        },
+        "md5" => AuditedCommandOptions {
+            short_bool: "qr",
+            ..NO_OPTIONS
+        },
+        "md5sum" | "sha1sum" | "sha256sum" | "sha512sum" => AuditedCommandOptions {
+            short_bool: "btz",
+            long_bool: &["--binary", "--text", "--tag", "--zero"],
+            ..NO_OPTIONS
+        },
+        "shasum" => AuditedCommandOptions {
+            short_bool: "btU0",
+            short_val: "a",
+            long_bool: &["--binary", "--text", "--UNIVERSAL", "--01"],
+            long_val: &["--algorithm"],
+            ..NO_OPTIONS
+        },
+        "ls" | "dir" => AuditedCommandOptions {
+            short_bool: "aAl1hrRtSdFpCmxinogGLHsucUvXQbBfqk",
+            short_val: "wTI",
+            long_bool: &[
+                "--all",
+                "--almost-all",
+                "--human-readable",
+                "--reverse",
+                "--recursive",
+                "--directory",
+                "--group-directories-first",
+                "--dereference",
+                "--no-group",
+                "--numeric-uid-gid",
+                "--size",
+                "--inode",
+                "--literal",
+                "--quote-name",
+                "--full-time",
+            ],
+            long_val: &[
+                "--time-style",
+                "--sort",
+                "--width",
+                "--tabsize",
+                "--ignore",
+                "--hide",
+                "--format",
+                "--time",
+            ],
+            long_opt_val: &["--color", "--classify"],
+            ..NO_OPTIONS
+        },
+        "tree" => AuditedCommandOptions {
+            short_bool: "adfilpshugDFqNrtvCnQcx",
+            short_val: "LPI",
+            long_bool: &[
+                "--dirsfirst",
+                "--noreport",
+                "--gitignore",
+                "--prune",
+                "--full-path",
+                "--du",
+            ],
+            long_val: &["--sort", "--filelimit"],
+            ..NO_OPTIONS
+        },
+        "du" => AuditedCommandOptions {
+            short_bool: "abchHkLmPsSx0",
+            short_val: "dB",
+            long_bool: &[
+                "--all",
+                "--apparent-size",
+                "--bytes",
+                "--total",
+                "--human-readable",
+                "--dereference",
+                "--one-file-system",
+                "--summarize",
+                "--separate-dirs",
+                "--null",
+            ],
+            long_val: &["--max-depth", "--block-size", "--exclude", "--threshold"],
+            ..NO_OPTIONS
+        },
+        "grep" | "egrep" | "fgrep" => AuditedCommandOptions {
+            short_bool: "EFGPivwxycLloqsbHhnTuZaIrRU",
+            short_val: "emABCd",
+            long_bool: &[
+                "--extended-regexp",
+                "--fixed-strings",
+                "--basic-regexp",
+                "--perl-regexp",
+                "--ignore-case",
+                "--invert-match",
+                "--word-regexp",
+                "--line-regexp",
+                "--count",
+                "--files-without-match",
+                "--files-with-matches",
+                "--only-matching",
+                "--quiet",
+                "--silent",
+                "--no-messages",
+                "--byte-offset",
+                "--with-filename",
+                "--no-filename",
+                "--line-number",
+                "--initial-tab",
+                "--null",
+                "--text",
+                "--recursive",
+                "--dereference-recursive",
+                "--no-ignore-case",
+                "--line-buffered",
+            ],
+            long_val: &[
+                "--regexp",
+                "--max-count",
+                "--after-context",
+                "--before-context",
+                "--context",
+                "--directories",
+                "--include",
+                "--exclude",
+                "--exclude-dir",
+                "--binary-files",
+                "--label",
+            ],
+            long_opt_val: &["--color", "--colour"],
+            ..NO_OPTIONS
+        },
+        "rg" => AuditedCommandOptions {
+            short_bool: "FiSsvwxclnNHIoquLap0UPbh",
+            short_val: "eABCmgtTjMdr",
+            long_bool: &[
+                "--fixed-strings",
+                "--ignore-case",
+                "--smart-case",
+                "--case-sensitive",
+                "--invert-match",
+                "--word-regexp",
+                "--line-regexp",
+                "--count",
+                "--count-matches",
+                "--files-with-matches",
+                "--files-without-match",
+                "--files",
+                "--line-number",
+                "--no-line-number",
+                "--with-filename",
+                "--no-filename",
+                "--only-matching",
+                "--quiet",
+                "--follow",
+                "--hidden",
+                "--no-ignore",
+                "--no-ignore-vcs",
+                "--no-ignore-dot",
+                "--no-ignore-global",
+                "--no-ignore-parent",
+                "--text",
+                "--pretty",
+                "--heading",
+                "--no-heading",
+                "--column",
+                "--vimgrep",
+                "--json",
+                "--multiline",
+                "--multiline-dotall",
+                "--pcre2",
+                "--stats",
+                "--null",
+                "--trim",
+                "--passthru",
+                "--no-messages",
+                "--no-config",
+                "--sort-files",
+                "--byte-offset",
+            ],
+            long_val: &[
+                "--regexp",
+                "--after-context",
+                "--before-context",
+                "--context",
+                "--max-count",
+                "--glob",
+                "--iglob",
+                "--type",
+                "--type-not",
+                "--max-depth",
+                "--max-columns",
+                "--threads",
+                "--sort",
+                "--sortr",
+                "--color",
+                "--replace",
+                "--max-filesize",
+            ],
+            ..NO_OPTIONS
+        },
+        "fd" => AuditedCommandOptions {
+            short_bool: "HIsigFaLp01qu",
+            short_val: "dteEcjS",
+            long_bool: &[
+                "--hidden",
+                "--no-ignore",
+                "--no-ignore-vcs",
+                "--no-ignore-parent",
+                "--case-sensitive",
+                "--ignore-case",
+                "--glob",
+                "--fixed-strings",
+                "--absolute-path",
+                "--follow",
+                "--full-path",
+                "--print0",
+                "--quiet",
+                "--strip-cwd-prefix",
+                "--unrestricted",
+                "--prune",
+                "--show-errors",
+            ],
+            long_val: &[
+                "--max-depth",
+                "--min-depth",
+                "--exact-depth",
+                "--type",
+                "--extension",
+                "--exclude",
+                "--color",
+                "--max-results",
+                "--changed-within",
+                "--changed-before",
+                "--size",
+                "--threads",
+                "--path-separator",
+            ],
+            ..NO_OPTIONS
+        },
+        "mkdir" => AuditedCommandOptions {
+            short_bool: "pv",
+            short_val: "m",
+            long_bool: &["--parents", "--verbose"],
+            long_val: &["--mode"],
+            ..NO_OPTIONS
+        },
+        "touch" => AuditedCommandOptions {
+            short_bool: "acm",
+            short_val: "td",
+            long_bool: &["--no-create"],
+            long_val: &["--date"],
+            ..NO_OPTIONS
+        },
+        "cp" => AuditedCommandOptions {
+            short_bool: "afinPprRuvLHT",
+            short_write_val: "t",
+            long_bool: &[
+                "--archive",
+                "--force",
+                "--interactive",
+                "--no-clobber",
+                "--no-dereference",
+                "--recursive",
+                "--update",
+                "--verbose",
+                "--dereference",
+                "--no-target-directory",
+            ],
+            long_write_val: &["--target-directory"],
+            long_opt_val: &["--preserve"],
+            ..NO_OPTIONS
+        },
+        "mv" => AuditedCommandOptions {
+            short_bool: "finuvT",
+            short_write_val: "t",
+            long_bool: &[
+                "--force",
+                "--interactive",
+                "--no-clobber",
+                "--update",
+                "--verbose",
+                "--no-target-directory",
+            ],
+            long_write_val: &["--target-directory"],
+            ..NO_OPTIONS
+        },
+        "rm" => AuditedCommandOptions {
+            short_bool: "fiIrRdv",
+            long_bool: &["--force", "--recursive", "--dir", "--verbose"],
+            long_opt_val: &["--interactive"],
+            ..NO_OPTIONS
+        },
+        "rmdir" => AuditedCommandOptions {
+            short_bool: "pv",
+            long_bool: &["--parents", "--ignore-fail-on-non-empty", "--verbose"],
+            ..NO_OPTIONS
+        },
+        "chmod" => AuditedCommandOptions {
+            short_bool: "RfvrwxXst",
+            long_bool: &["--recursive", "--silent", "--quiet", "--verbose"],
+            ..NO_OPTIONS
+        },
+        "truncate" => AuditedCommandOptions {
+            short_bool: "co",
+            short_val: "s",
+            long_bool: &["--no-create", "--io-blocks"],
+            long_val: &["--size"],
+            ..NO_OPTIONS
+        },
+        _ => NO_OPTIONS,
     }
-    Ok(())
+}
+
+fn is_negative_number_token(text: &str) -> bool {
+    let Some(rest) = text.strip_prefix('-') else {
+        return false;
+    };
+    if rest.is_empty() {
+        return false;
+    }
+    let mut saw_dot = false;
+    let mut saw_digit = false;
+    for ch in rest.chars() {
+        if ch.is_ascii_digit() {
+            saw_digit = true;
+        } else if ch == '.' && !saw_dot {
+            saw_dot = true;
+        } else {
+            return false;
+        }
+    }
+    saw_digit
 }
 
 #[derive(Default)]
-struct SimpleCommandSearchState {
+struct ArgValidationOutcome {
+    force_write_operand: bool,
+    attached_short_value: Option<String>,
+    treat_as_option_eq: bool,
+}
+
+#[derive(Default)]
+struct SimpleCommandOptionState {
     saw_end_of_options: bool,
-    expect_flag_value: bool,
+    expect_option_value: bool,
+    expect_write_option_value: bool,
+    expect_grep_directories_value: bool,
     saw_pattern_flag: bool,
     is_recursive_grep: bool,
     positional_args: usize,
@@ -2551,131 +3115,294 @@ struct SimpleCommandSearchState {
     find_saw_root: bool,
 }
 
-impl SimpleCommandSearchState {
+impl SimpleCommandOptionState {
     fn reset(&mut self) {
         *self = Self::default();
     }
 
-    fn observe_arg(&mut self, cmd: &str, arg: &str, lower_arg: &str) {
+    fn validate_and_observe(
+        &mut self,
+        cmd: &str,
+        arg: &str,
+        lower_arg: &str,
+    ) -> Result<ArgValidationOutcome, String> {
+        if self.expect_option_value {
+            let force_write = self.expect_write_option_value;
+            let was_grep_dir = self.expect_grep_directories_value;
+            self.expect_option_value = false;
+            self.expect_write_option_value = false;
+            self.expect_grep_directories_value = false;
+            if was_grep_dir && lower_arg == "recurse" {
+                self.is_recursive_grep = true;
+            }
+            return Ok(ArgValidationOutcome {
+                force_write_operand: force_write,
+                attached_short_value: None,
+                treat_as_option_eq: false,
+            });
+        }
+
+        // `echo` has no exec/read/write/variable-assignment options on POSIX/GNU/BSD/Bash.
+        if cmd == "echo" {
+            return Ok(ArgValidationOutcome::default());
+        }
+
+        // `find` uses single-dash multi-letter predicates rather than getopt_long.
         if cmd == "find" {
             if !self.find_saw_expr {
+                if matches!(arg, "-H" | "-L" | "-P" | "--") {
+                    return Ok(ArgValidationOutcome::default());
+                }
                 if arg.starts_with('-') || matches!(arg, "!" | "(" | ")" | ",") {
                     self.find_saw_expr = true;
                 } else {
                     self.find_saw_root = true;
+                    return Ok(ArgValidationOutcome::default());
                 }
             }
-            return;
+            if arg.starts_with('-') {
+                let is_bool_pred = matches!(
+                    arg,
+                    "-depth"
+                        | "-d"
+                        | "-empty"
+                        | "-readable"
+                        | "-writable"
+                        | "-executable"
+                        | "-prune"
+                        | "-print"
+                        | "-print0"
+                        | "-ls"
+                        | "-quit"
+                        | "-not"
+                        | "-and"
+                        | "-or"
+                        | "-a"
+                        | "-o"
+                        | "-true"
+                        | "-false"
+                        | "-xdev"
+                        | "-mount"
+                        | "-follow"
+                        | "-ignore_readdir_race"
+                        | "-noignore_readdir_race"
+                        | "-daystart"
+                        | "-noleaf"
+                );
+                let is_val_pred = matches!(
+                    arg,
+                    "-name"
+                        | "-iname"
+                        | "-path"
+                        | "-ipath"
+                        | "-wholename"
+                        | "-iwholename"
+                        | "-regex"
+                        | "-iregex"
+                        | "-regextype"
+                        | "-type"
+                        | "-xtype"
+                        | "-maxdepth"
+                        | "-mindepth"
+                        | "-size"
+                        | "-mtime"
+                        | "-mmin"
+                        | "-atime"
+                        | "-amin"
+                        | "-ctime"
+                        | "-cmin"
+                        | "-perm"
+                        | "-links"
+                        | "-inum"
+                );
+                if is_val_pred {
+                    self.expect_option_value = true;
+                    return Ok(ArgValidationOutcome::default());
+                }
+                if is_bool_pred {
+                    return Ok(ArgValidationOutcome::default());
+                }
+                return Err(format!(
+                    "Option/predicate '{cmd} {arg}' is not allowed in unsandboxed native shell execution."
+                ));
+            }
+            return Ok(ArgValidationOutcome::default());
         }
 
-        let is_grep_like = matches!(cmd, "grep" | "egrep" | "fgrep" | "rg");
-        if is_grep_like {
-            if self.expect_flag_value {
-                if matches!(cmd, "grep" | "egrep" | "fgrep") && lower_arg == "recurse" {
-                    self.is_recursive_grep = true;
+        // `test` / `[` use single-dash test operators rather than getopt_long.
+        if matches!(cmd, "test" | "[") {
+            if arg.starts_with('-') {
+                if matches!(arg, "-z" | "-n") {
+                    self.expect_option_value = true;
+                    return Ok(ArgValidationOutcome::default());
                 }
-                self.expect_flag_value = false;
-                return;
+                if matches!(
+                    arg,
+                    "-e" | "-f"
+                        | "-d"
+                        | "-r"
+                        | "-w"
+                        | "-x"
+                        | "-s"
+                        | "-L"
+                        | "-h"
+                        | "-b"
+                        | "-c"
+                        | "-p"
+                        | "-S"
+                        | "-u"
+                        | "-g"
+                        | "-k"
+                        | "-O"
+                        | "-G"
+                        | "-t"
+                        | "-a"
+                        | "-o"
+                        | "-eq"
+                        | "-ne"
+                        | "-lt"
+                        | "-le"
+                        | "-gt"
+                        | "-ge"
+                        | "-nt"
+                        | "-ot"
+                        | "-ef"
+                ) {
+                    return Ok(ArgValidationOutcome::default());
+                }
+                return Err(format!(
+                    "Option '{cmd} {arg}' is not allowed in unsandboxed native shell execution."
+                ));
             }
-            if !self.saw_end_of_options {
-                if arg == "--" {
-                    self.saw_end_of_options = true;
-                    return;
-                }
-                if arg.starts_with("--") {
-                    if matches!(
-                        lower_arg,
-                        "--recursive" | "--dereference-recursive" | "--directories=recurse"
-                    ) {
-                        self.is_recursive_grep = true;
+            return Ok(ArgValidationOutcome::default());
+        }
+
+        if !self.saw_end_of_options {
+            if arg == "--" {
+                self.saw_end_of_options = true;
+                return Ok(ArgValidationOutcome::default());
+            }
+
+            if arg.starts_with("--") {
+                let spec = audited_options_for_command(cmd);
+                let (flag_name, eq_val) = match arg.split_once('=') {
+                    Some((lhs, rhs)) => (lhs, Some(rhs)),
+                    None => (arg, None),
+                };
+
+                if let Some(rhs) = eq_val {
+                    let is_val = spec.long_val.contains(&flag_name);
+                    let is_write_val = spec.long_write_val.contains(&flag_name);
+                    let is_opt_val = spec.long_opt_val.contains(&flag_name);
+                    if !is_val && !is_write_val && !is_opt_val {
+                        return Err(format!(
+                            "Option '{cmd} {arg}' is not allowed in unsandboxed native shell execution."
+                        ));
                     }
-                    if matches!(lower_arg, "--regexp" | "--file") {
-                        self.saw_pattern_flag = true;
-                        self.expect_flag_value = true;
-                    } else if lower_arg.starts_with("--regexp=") || lower_arg.starts_with("--file=")
-                    {
-                        self.saw_pattern_flag = true;
-                    } else if matches!(
-                        lower_arg,
-                        "--max-count"
-                            | "--after-context"
-                            | "--before-context"
-                            | "--context"
-                            | "--directories"
-                            | "--include"
-                            | "--exclude"
-                            | "--exclude-dir"
-                            | "--exclude-from"
-                            | "--label"
-                            | "--glob"
-                            | "--iglob"
-                            | "--type"
-                            | "--type-not"
-                            | "--max-depth"
-                            | "--threads"
-                    ) {
-                        self.expect_flag_value = true;
-                    }
-                    return;
-                }
-                if let Some(short) = arg.strip_prefix('-')
-                    && !short.is_empty()
-                {
                     if matches!(cmd, "grep" | "egrep" | "fgrep")
-                        && (short.contains('r') || short.contains('R') || short == "drecurse")
+                        && flag_name == "--directories"
+                        && rhs.eq_ignore_ascii_case("recurse")
                     {
                         self.is_recursive_grep = true;
                     }
-                    if short == "e" || short == "f" {
+                    if matches!(cmd, "grep" | "egrep" | "fgrep" | "rg") && flag_name == "--regexp" {
                         self.saw_pattern_flag = true;
-                        self.expect_flag_value = true;
-                    } else if short.starts_with('e') || short.starts_with('f') {
-                        self.saw_pattern_flag = true;
-                    } else if matches!(
-                        short,
-                        "m" | "A" | "B" | "C" | "g" | "t" | "T" | "d" | "j" | "M"
-                    ) {
-                        self.expect_flag_value = true;
                     }
-                    return;
+                    return Ok(ArgValidationOutcome {
+                        force_write_operand: is_write_val,
+                        attached_short_value: None,
+                        treat_as_option_eq: true,
+                    });
                 }
+
+                if spec.long_bool.contains(&flag_name) || spec.long_opt_val.contains(&flag_name) {
+                    if matches!(cmd, "grep" | "egrep" | "fgrep")
+                        && matches!(flag_name, "--recursive" | "--dereference-recursive")
+                    {
+                        self.is_recursive_grep = true;
+                    }
+                    if cmd == "rg" && flag_name == "--files" {
+                        self.saw_pattern_flag = true;
+                    }
+                    return Ok(ArgValidationOutcome::default());
+                }
+                if spec.long_val.contains(&flag_name) {
+                    self.expect_option_value = true;
+                    if matches!(cmd, "grep" | "egrep" | "fgrep" | "rg") && flag_name == "--regexp" {
+                        self.saw_pattern_flag = true;
+                    }
+                    if matches!(cmd, "grep" | "egrep" | "fgrep") && flag_name == "--directories" {
+                        self.expect_grep_directories_value = true;
+                    }
+                    return Ok(ArgValidationOutcome::default());
+                }
+                if spec.long_write_val.contains(&flag_name) {
+                    self.expect_option_value = true;
+                    self.expect_write_option_value = true;
+                    return Ok(ArgValidationOutcome::default());
+                }
+                return Err(format!(
+                    "Option '{cmd} {arg}' is not allowed in unsandboxed native shell execution."
+                ));
             }
-            self.positional_args += 1;
-            return;
+
+            if let Some(short) = arg.strip_prefix('-')
+                && !short.is_empty()
+            {
+                let spec = audited_options_for_command(cmd);
+                if spec.allow_legacy_numeric && short.chars().all(|c| c.is_ascii_digit()) {
+                    return Ok(ArgValidationOutcome::default());
+                }
+                if spec.allow_negative_number && is_negative_number_token(arg) {
+                    self.positional_args += 1;
+                    return Ok(ArgValidationOutcome::default());
+                }
+
+                let mut chars = short.chars();
+                while let Some(ch) = chars.next() {
+                    if spec.short_bool.contains(ch) {
+                        if matches!(cmd, "grep" | "egrep" | "fgrep") && matches!(ch, 'r' | 'R') {
+                            self.is_recursive_grep = true;
+                        }
+                        continue;
+                    }
+                    let is_val = spec.short_val.contains(ch);
+                    let is_write_val = spec.short_write_val.contains(ch);
+                    if is_val || is_write_val {
+                        let tail = chars.as_str();
+                        if matches!(cmd, "grep" | "egrep" | "fgrep" | "rg") && ch == 'e' {
+                            self.saw_pattern_flag = true;
+                        }
+                        if tail.is_empty() {
+                            self.expect_option_value = true;
+                            self.expect_write_option_value = is_write_val;
+                            if matches!(cmd, "grep" | "egrep" | "fgrep") && ch == 'd' {
+                                self.expect_grep_directories_value = true;
+                            }
+                            return Ok(ArgValidationOutcome::default());
+                        }
+                        if matches!(cmd, "grep" | "egrep" | "fgrep")
+                            && ch == 'd'
+                            && tail.eq_ignore_ascii_case("recurse")
+                        {
+                            self.is_recursive_grep = true;
+                        }
+                        return Ok(ArgValidationOutcome {
+                            force_write_operand: is_write_val,
+                            attached_short_value: Some(tail.to_owned()),
+                            treat_as_option_eq: false,
+                        });
+                    }
+                    return Err(format!(
+                        "Option '-{ch}' in '{cmd} {arg}' is not allowed in unsandboxed native shell execution."
+                    ));
+                }
+                return Ok(ArgValidationOutcome::default());
+            }
         }
 
-        if matches!(cmd, "fd" | "ls" | "dir" | "tree" | "du") {
-            if self.expect_flag_value {
-                self.expect_flag_value = false;
-                return;
-            }
-            if !self.saw_end_of_options {
-                if arg == "--" {
-                    self.saw_end_of_options = true;
-                    return;
-                }
-                if arg.starts_with('-') && arg != "-" {
-                    if matches!(
-                        lower_arg,
-                        "-d" | "--max-depth"
-                            | "-t"
-                            | "--type"
-                            | "-e"
-                            | "--extension"
-                            | "-E"
-                            | "--exclude"
-                            | "-L"
-                            | "-P"
-                            | "-I"
-                            | "--maxdepth"
-                    ) {
-                        self.expect_flag_value = true;
-                    }
-                    return;
-                }
-            }
-            self.positional_args += 1;
-        }
+        self.positional_args += 1;
+        Ok(ArgValidationOutcome::default())
     }
 
     fn uses_implicit_cwd_root(&self, cmd: &str) -> bool {
@@ -2759,7 +3486,7 @@ fn validate_native_shell_command_text(
     let mut nested_shell_got_script = false;
     let mut saw_cd_arg = false;
     let mut cd_updated_this_cmd = false;
-    let mut search_state = SimpleCommandSearchState::default();
+    let mut option_state = SimpleCommandOptionState::default();
 
     let is_fd_dup_spec = |s: &str| -> bool {
         s == "-"
@@ -2774,7 +3501,7 @@ fn validate_native_shell_command_text(
                                  nested_shell_got_script: bool,
                                  pending_redirect: bool,
                                  in_conditional_chain: bool,
-                                 search_state: &SimpleCommandSearchState,
+                                 option_state: &SimpleCommandOptionState,
                                  possible_dirs: &mut Vec<PathBuf>,
                                  cd_updated_this_cmd: &mut bool|
      -> Result<(), String> {
@@ -2797,7 +3524,7 @@ fn validate_native_shell_command_text(
                 "Nested shell '{current_cmd}' without an inline -c command is blocked in unsandboxed native shell execution."
             ));
         }
-        if search_state.uses_implicit_cwd_root(current_cmd) {
+        if option_state.uses_implicit_cwd_root(current_cmd) {
             for dir in possible_dirs.iter() {
                 let canonical = assert_read_path_allowed(dir, ctx).map_err(|e| e.to_string())?;
                 assert_search_root_has_no_protected_descendant(&canonical, ctx)?;
@@ -2865,7 +3592,7 @@ fn validate_native_shell_command_text(
                     nested_shell_got_script = false;
                     saw_cd_arg = false;
                     cd_updated_this_cmd = false;
-                    search_state.reset();
+                    option_state.reset();
                 } else if op == ")" {
                     finish_simple_command(
                         &current_cmd,
@@ -2876,7 +3603,7 @@ fn validate_native_shell_command_text(
                             || expect_fd_dup_or_write
                             || expect_fd_dup_only,
                         in_conditional_chain,
-                        &search_state,
+                        &option_state,
                         &mut possible_dirs,
                         &mut cd_updated_this_cmd,
                     )?;
@@ -2900,7 +3627,7 @@ fn validate_native_shell_command_text(
                     nested_shell_got_script = false;
                     saw_cd_arg = false;
                     cd_updated_this_cmd = false;
-                    search_state.reset();
+                    option_state.reset();
                 } else {
                     finish_simple_command(
                         &current_cmd,
@@ -2911,7 +3638,7 @@ fn validate_native_shell_command_text(
                             || expect_fd_dup_or_write
                             || expect_fd_dup_only,
                         in_conditional_chain,
-                        &search_state,
+                        &option_state,
                         &mut possible_dirs,
                         &mut cd_updated_this_cmd,
                     )?;
@@ -2967,7 +3694,7 @@ fn validate_native_shell_command_text(
                     nested_shell_got_script = false;
                     saw_cd_arg = false;
                     cd_updated_this_cmd = false;
-                    search_state.reset();
+                    option_state.reset();
                 }
             }
             ShellToken::Word {
@@ -3092,7 +3819,7 @@ fn validate_native_shell_command_text(
                     nested_shell_got_script = false;
                     saw_cd_arg = false;
                     cd_updated_this_cmd = false;
-                    search_state.reset();
+                    option_state.reset();
                     continue;
                 }
 
@@ -3147,27 +3874,20 @@ fn validate_native_shell_command_text(
                     continue;
                 }
 
-                // Block command-specific code-execution, config-indirection, link-creation,
-                // and implicit-target flags on allowlisted utilities.
+                // Enforce the strict audited option allowlist for allowlisted utilities (rejecting
+                // GNU getopt_long abbreviated unsafe flags and unreviewed options) and update
+                // implicit-cwd search tracking in lockstep.
                 let lower_arg = text.to_ascii_lowercase();
-                reject_unsafe_unsandboxed_command_arg(&current_cmd, text, &lower_arg)?;
-                search_state.observe_arg(&current_cmd, text, &lower_arg);
+                let arg_outcome =
+                    option_state.validate_and_observe(&current_cmd, text, &lower_arg)?;
 
                 let is_mut = is_mutating_shell_command(&current_cmd);
 
-                // Inspect `key=value` arguments (e.g. `of=/dev/sda`, `--file=credential-link`, `file=@/etc/passwd`).
-                if let Some((lhs, rhs)) = text.split_once('=') {
+                // Inspect `key=value` arguments (e.g. `--target-directory=.git/hooks`, `of=/dev/sda`).
+                if arg_outcome.treat_as_option_eq
+                    && let Some((_, rhs)) = text.split_once('=')
+                {
                     let rhs_clean = rhs.strip_prefix('@').unwrap_or(rhs);
-                    if lhs.eq_ignore_ascii_case("of") {
-                        for dir in &possible_dirs {
-                            validate_shell_path_token(rhs_clean, dir, ctx, true, false)?;
-                        }
-                        continue;
-                    }
-                    let force_write = matches!(
-                        lhs.to_ascii_lowercase().as_str(),
-                        "--output" | "--out" | "-o" | "--dest" | "--target-directory"
-                    );
                     for dir in &possible_dirs {
                         validate_shell_operand_candidate(
                             rhs_clean,
@@ -3177,51 +3897,34 @@ fn validate_native_shell_command_text(
                             ctx,
                             &current_cmd,
                             is_mut,
-                            force_write,
+                            arg_outcome.force_write_operand,
                         )?;
                     }
                     continue;
                 }
 
-                // Inspect concatenated short-flag path operands (e.g. `grep -fcredential-link`,
-                // `grep -f/etc/passwd`, `cp -t.git/hooks evil`).
-                if let Some(short) = text.strip_prefix('-')
-                    && !short.starts_with('-')
-                    && short.len() > 1
-                {
-                    let mut chars = short.chars();
-                    let flag_char = chars.next().unwrap_or_default();
-                    let tail = chars.as_str();
-                    let tail_clean = tail.strip_prefix('@').unwrap_or(tail);
-                    let flag_takes_file = match flag_char {
-                        'f' => matches!(
-                            current_cmd.as_str(),
-                            "grep" | "egrep" | "fgrep" | "rg" | "date"
-                        ),
-                        'F' => current_cmd == "git",
-                        't' | 'T' => matches!(current_cmd.as_str(), "cp" | "mv"),
-                        'o' => current_cmd == "sort",
-                        _ => false,
-                    };
-                    if flag_takes_file
-                        || looks_like_filesystem_path(tail_clean)
-                        || tail_clean.contains('/')
-                        || tail_clean.contains('\\')
+                // Inspect attached short-flag value operands (e.g. `cp -t.git/hooks evil`).
+                if let Some(attached) = arg_outcome.attached_short_value.as_deref() {
+                    let attached_clean = attached.strip_prefix('@').unwrap_or(attached);
+                    if arg_outcome.force_write_operand
+                        || looks_like_filesystem_path(attached_clean)
+                        || attached_clean.contains('/')
+                        || attached_clean.contains('\\')
                     {
-                        let force_write = matches!(flag_char, 'o' | 't' | 'T');
                         for dir in &possible_dirs {
                             validate_shell_operand_candidate(
-                                tail_clean,
+                                attached_clean,
                                 *has_unquoted_glob,
                                 *has_unquoted_brace,
                                 dir,
                                 ctx,
                                 &current_cmd,
                                 is_mut,
-                                force_write,
+                                arg_outcome.force_write_operand,
                             )?;
                         }
                     }
+                    continue;
                 }
 
                 // Inspect both explicit path tokens and relative file/symlink/glob operands.
@@ -3235,7 +3938,7 @@ fn validate_native_shell_command_text(
                         ctx,
                         &current_cmd,
                         is_mut,
-                        false,
+                        arg_outcome.force_write_operand,
                     )?;
                 }
             }
@@ -3248,7 +3951,7 @@ fn validate_native_shell_command_text(
         nested_shell_got_script,
         expect_write_target || expect_read_target || expect_fd_dup_or_write || expect_fd_dup_only,
         in_conditional_chain,
-        &search_state,
+        &option_state,
         &mut possible_dirs,
         &mut cd_updated_this_cmd,
     )?;

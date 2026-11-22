@@ -17,8 +17,8 @@ use crate::views::settings::icons;
 use crate::views::settings::manage_models_dialog;
 use crate::views::settings::primitives::{
     ConfirmDialogSpec, EmptyState, EntityIconSize, Section, StatusTone, callout_banner,
-    confirm_dialog, entity_icon, management_targets, mini_switch, search_input, settings_page,
-    status_pill,
+    confirm_dialog, entity_icon, find_management_target, management_targets, mini_switch,
+    search_input, settings_page, status_pill,
 };
 use crate::views::settings::providers_utils::{
     extract_rate_limit_hint, format_auth_method_label, model_display_name, provider_status_badge,
@@ -1208,10 +1208,8 @@ fn provider_card(
 /// Renders the Models & Providers settings page.
 pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
     let targets = management_targets(s);
-    let active_ws_id = s
-        .resolve_management_workspace_id()
-        .filter(|id| targets.iter().any(|entry| entry.id == *id))
-        .or_else(|| targets.first().map(|entry| entry.id.as_str()));
+    let active_ws_id = find_management_target(s, &targets, s.resolve_management_workspace_id())
+        .map(|entry| entry.id.as_str());
     let active_ws: Option<&WorkspaceRecord> =
         active_ws_id.and_then(|id| s.workspaces.iter().find(|w| w.id == id));
     let statuses: &[ProviderStatusSummary] = active_ws_id

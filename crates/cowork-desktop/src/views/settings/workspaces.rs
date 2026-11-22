@@ -13,7 +13,8 @@ use crate::theme::ThemeTokens;
 use crate::views::settings::icons;
 use crate::views::settings::primitives::{
     ConfirmDialogSpec, EmptyState, Section, SettingsRow, StatusTone, confirm_dialog,
-    management_targets, mini_switch, settings_page, status_pill, update_desktop_settings,
+    find_management_target, management_targets, mini_switch, settings_page, status_pill,
+    update_desktop_settings,
 };
 use crate::views::settings::providers::is_provider_connected;
 use crate::views::settings::providers_utils::sort_and_filter_providers;
@@ -459,10 +460,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
     };
     let runtime = s.workspace_runtime_by_id.get(&ws_id);
     let targets = management_targets(s);
-    let active_target = targets
-        .iter()
-        .find(|target| target.id == ws_id)
-        .or_else(|| targets.first());
+    let active_target = find_management_target(s, &targets, Some(ws_id.as_str()));
 
     let mut overlays: Vec<El> = Vec::new();
     let mut sections: Vec<El> = Vec::new();

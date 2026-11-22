@@ -681,6 +681,39 @@ pub fn management_targets(s: &AppState) -> Vec<ManagementTarget> {
     targets
 }
 
+/// Matches a workspace ID to its display [`ManagementTarget`], mapping any
+/// non-archived standalone (`one_off_chat`) workspace onto the grouped
+/// `"Chats"` target instead of falling back to an unrelated project.
+pub fn match_management_target<'a>(
+    s: &AppState,
+    targets: &'a [ManagementTarget],
+    workspace_id: &str,
+) -> Option<&'a ManagementTarget> {
+    if let Some(target) = targets.iter().find(|entry| entry.id == workspace_id) {
+        return Some(target);
+    }
+    if s.workspaces
+        .iter()
+        .any(|ws| ws.id == workspace_id && !ws.archived && ws.one_off_chat)
+    {
+        return targets.iter().find(|entry| entry.is_chats);
+    }
+    None
+}
+
+/// Resolves an optional workspace ID to its display [`ManagementTarget`],
+/// resolving any standalone (`one_off_chat`) workspace to the grouped
+/// `"Chats"` target before falling back to the first available target.
+pub fn find_management_target<'a>(
+    s: &AppState,
+    targets: &'a [ManagementTarget],
+    workspace_id: Option<&str>,
+) -> Option<&'a ManagementTarget> {
+    workspace_id
+        .and_then(|id| match_management_target(s, targets, id))
+        .or_else(|| targets.first())
+}
+
 /// Label of the active workspace shown in the settings nav header when
 /// `per_workspace_settings` is enabled.
 pub fn active_workspace_banner_label(s: &AppState) -> Option<String> {

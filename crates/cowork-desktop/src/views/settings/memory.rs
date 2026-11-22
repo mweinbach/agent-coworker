@@ -16,8 +16,8 @@ use crate::theme::ThemeTokens;
 use crate::views::settings::icons;
 use crate::views::settings::primitives::{
     ConfirmDialogSpec, EmptyState, Section, SettingsRow, StatusTone, compact_tabs, confirm_dialog,
-    format_timestamp_friendly, management_targets, mini_switch, search_input, settings_page,
-    status_pill,
+    find_management_target, format_timestamp_friendly, management_targets, mini_switch,
+    search_input, settings_page, status_pill,
 };
 use crate::views::settings::providers::is_provider_connected;
 use crate::views::settings::providers_utils::{model_display_name, sort_and_filter_providers};
@@ -35,6 +35,18 @@ pub fn resolve_draft_memory_id(raw: &str) -> String {
         HOT_MEMORY_ID.to_string()
     } else {
         trimmed.to_string()
+    }
+}
+
+/// Resolves the `cowork/memory/upsert` write mode for the remembered-fact dialog:
+/// editing an existing entry uses `"upsert"`, while adding a new fact preserves
+/// create-only semantics (`"create"`) so duplicate titles (including blank -> `"hot"`)
+/// are rejected instead of silently overwriting existing content.
+pub fn resolve_scoped_memory_save_mode(editing_key: Option<&str>) -> &'static str {
+    if editing_key.is_some() {
+        "upsert"
+    } else {
+        "create"
     }
 }
 
@@ -256,10 +268,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
 
     let ws_id = ws.id.clone();
     let targets = management_targets(s);
-    let active_target = targets
-        .iter()
-        .find(|target| target.id == ws_id)
-        .or_else(|| targets.first());
+    let active_target = find_management_target(s, &targets, Some(ws_id.as_str()));
     let mut overlays: Vec<El> = Vec::new();
     let mut sections: Vec<El> = Vec::new();
 
@@ -1789,6 +1798,7 @@ fn build_legacy_memory_section(
                     } else {
                         s.settings_ui.memory_draft_scope.clone()
                     };
+                    let mode = resolve_scoped_memory_save_mode(editing_id.as_deref());
                     let key = editing_id.unwrap_or_else(|| {
                         resolve_draft_memory_id(&s.settings_ui.memory_key_edit.text)
                     });
@@ -1801,7 +1811,7 @@ fn build_legacy_memory_section(
                         scope: save_scope,
                         id: Some(key),
                         content,
-                        mode: Some("upsert".to_string()),
+                        mode: Some(mode.to_string()),
                     }));
                     s.settings_ui.memory_dialog_open = false;
                     s.settings_ui.memory_editing_key = None;

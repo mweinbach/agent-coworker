@@ -15,8 +15,8 @@ use crate::views::settings::experiments::is_flag_enabled;
 use crate::views::settings::icons;
 use crate::views::settings::primitives::{
     ConfirmDialogSpec, EmptyState, Section, SettingsRow, StatusTone, callout_banner,
-    confirm_dialog, format_timestamp_friendly, management_targets, mini_switch, settings_page,
-    status_pill,
+    confirm_dialog, find_management_target, format_timestamp_friendly, management_targets,
+    mini_switch, settings_page, status_pill,
 };
 use crate::views::settings::shell::PageContent;
 
@@ -250,10 +250,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
     let ra = &s.remote_access;
     let flag_enabled = is_flag_enabled(s, "remoteAccess");
     let targets = management_targets(s);
-    let active_ws = s
-        .resolve_management_workspace_id()
-        .and_then(|id| targets.iter().find(|entry| entry.id == id))
-        .or_else(|| targets.first());
+    let active_ws = find_management_target(s, &targets, s.resolve_management_workspace_id());
 
     let mut blocks: Vec<El> = Vec::new();
     let mut header_actions: Vec<El> = Vec::new();

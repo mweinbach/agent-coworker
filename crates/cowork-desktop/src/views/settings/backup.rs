@@ -10,8 +10,8 @@ use crate::theme::ThemeTokens;
 use crate::views::settings::icons;
 use crate::views::settings::primitives::{
     ConfirmDialogSpec, EmptyState, Section, SettingsRow, StatusTone, confirm_dialog,
-    format_byte_size, format_timestamp_friendly, management_targets, mini_switch, search_input,
-    settings_page, stat_tile, status_pill,
+    find_management_target, format_byte_size, format_timestamp_friendly, management_targets,
+    mini_switch, search_input, settings_page, stat_tile, status_pill,
 };
 use crate::views::settings::shell::PageContent;
 
@@ -200,10 +200,7 @@ fn backup_list_item(entry: &BackupRowItem, selected: bool, k: &Kit, t: &ThemeTok
 /// Renders the Backups settings page.
 pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
     let targets = management_targets(s);
-    let active_target = s
-        .resolve_management_workspace_id()
-        .and_then(|id| targets.iter().find(|entry| entry.id == id))
-        .or_else(|| targets.first());
+    let active_target = find_management_target(s, &targets, s.resolve_management_workspace_id());
 
     let mut header_actions: Vec<El> = Vec::new();
     if let Some(target) = active_target {

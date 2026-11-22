@@ -9,8 +9,9 @@ use crate::state::{AppState, ServerLifecycleState, WorkspaceRecord, WorkspaceRun
 use crate::theme::ThemeTokens;
 use crate::views::settings::icons;
 use crate::views::settings::primitives::{
-    ConfirmDialogSpec, Section, SettingsRow, StatusTone, confirm_dialog, management_targets,
-    mini_switch, operation_banner, settings_page, status_pill, update_desktop_settings,
+    ConfirmDialogSpec, Section, SettingsRow, StatusTone, confirm_dialog, find_management_target,
+    management_targets, match_management_target, mini_switch, operation_banner, settings_page,
+    status_pill, update_desktop_settings,
 };
 use crate::views::settings::shell::PageContent;
 
@@ -153,16 +154,12 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
         .is_some_and(|op| op.busy);
 
     let targets = management_targets(s);
-    let selected_target_id = s
+    let active_target = s
         .settings_ui
         .developer_overflow_threshold_workspace
         .as_deref()
-        .and_then(|id| targets.iter().find(|entry| entry.id == id))
-        .map(|entry| entry.id.as_str())
-        .or_else(|| s.resolve_management_workspace_id());
-    let active_target = selected_target_id
-        .and_then(|id| targets.iter().find(|entry| entry.id == id))
-        .or_else(|| targets.first());
+        .and_then(|id| match_management_target(s, &targets, id))
+        .or_else(|| find_management_target(s, &targets, s.resolve_management_workspace_id()));
 
     let runtime_summary = match &s.runtime_diagnostics {
         Some(diag) => {

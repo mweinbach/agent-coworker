@@ -2316,3 +2316,79 @@ fn backup_page_exposes_saved_checkpoints_and_dispatches_checkpoint_actions() {
         "expected deleteCheckpoint for selected checkpoint cp-1"
     );
 }
+
+#[test]
+fn find_management_target_maps_secondary_one_off_chat_workspace_to_chats_group() {
+    use crate::views::settings::primitives::find_management_target;
+
+    let mut s = AppState::default();
+    let project = WorkspaceRecord::new("ws-proj", "Alpha Project", "/tmp/alpha", 1);
+    let mut chat_1 = WorkspaceRecord::new("ws-chat-1", "Quick Chat 1", "/tmp/chat-1", 2);
+    chat_1.one_off_chat = true;
+    let mut chat_2 = WorkspaceRecord::new("ws-chat-2", "Quick Chat 2", "/tmp/chat-2", 3);
+    chat_2.one_off_chat = true;
+    s.workspaces = vec![project, chat_1, chat_2];
+    s.active_workspace_id = Some("ws-chat-2".to_string());
+    s.desktop_settings.per_workspace_settings = true;
+
+    let targets = management_targets(&s);
+    assert_eq!(targets.len(), 2);
+    assert_eq!(targets[0].id, "ws-proj");
+    assert!(targets[1].is_chats);
+    assert_eq!(targets[1].id, "ws-chat-1");
+
+    // A secondary standalone chat workspace must resolve to the grouped Chats target,
+    // never falling back to the first project target.
+    let resolved = find_management_target(&s, &targets, Some("ws-chat-2"))
+        .expect("secondary one-off chat must resolve to Chats target");
+    assert!(resolved.is_chats);
+    assert_eq!(resolved.label, "Chats");
+    assert_eq!(resolved.id, "ws-chat-1");
+
+    // Project targets still match directly.
+    let proj_resolved = find_management_target(&s, &targets, Some("ws-proj"))
+        .expect("project target must resolve directly");
+    assert!(!proj_resolved.is_chats);
+    assert_eq!(proj_resolved.id, "ws-proj");
+}
+
+#[test]
+fn scoped_memory_dialog_uses_create_only_mode_for_new_facts_and_upsert_for_edits() {
+    use crate::views::settings::memory::{
+        HOT_MEMORY_ID, resolve_draft_memory_id, resolve_scoped_memory_save_mode,
+    };
+
+    // Adding a new remembered fact (including blank title -> "hot") uses create-only mode
+    // so duplicates are rejected instead of silently overwriting an existing entry.
+    assert_eq!(resolve_draft_memory_id(""), HOT_MEMORY_ID);
+    assert_eq!(resolve_scoped_memory_save_mode(None), "create");
+
+    // Editing an existing entry explicitly allows overwriting that entry via "upsert".
+    assert_eq!(resolve_scoped_memory_save_mode(Some("hot")), "upsert");
+    assert_eq!(
+        resolve_scoped_memory_save_mode(Some("deploy-notes")),
+        "upsert"
+    );
+
+    // Verify dispatching UpsertScopedMemory with the resolved create mode emits mode="create".
+    let mut s = AppState::default();
+    s.workspaces
+        .push(WorkspaceRecord::new("ws-1", "Alpha", "/tmp/alpha", 1));
+    s.dispatch(Action::Settings(SettingsAction::UpsertScopedMemory {
+        workspace_id: "ws-1".to_string(),
+        scope: "workspace".to_string(),
+        id: Some(resolve_draft_memory_id("")),
+        content: "Remember to run checks".to_string(),
+        mode: Some(resolve_scoped_memory_save_mode(None).to_string()),
+    }));
+    assert!(
+        s.services.emitted_ws_commands.iter().any(|cmd| matches!(
+            cmd,
+            crate::ws::WsCommand::SendRequest { method, params, .. }
+                if method == "cowork/memory/upsert"
+                    && params["id"] == "hot"
+                    && params["mode"] == "create"
+        )),
+        "expected new remembered fact to dispatch mode=\"create\" over WS"
+    );
+}

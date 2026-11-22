@@ -1010,6 +1010,7 @@ pub fn merge_core_snapshot_into_document(base: Value, snapshot: &PersistedDeskto
                 "defaultPreferredChildModel",
                 ws.default_preferred_child_model.as_deref(),
             );
+            map.remove("defaultSubAgentModel");
             set_or_remove_trimmed_str(
                 &mut map,
                 "defaultChildModelRoutingMode",
@@ -1879,6 +1880,17 @@ fn sanitize_workspaces(raw: Option<&Vec<Value>>, one_off_root: &Path) -> Vec<Val
         } else {
             map.insert("yolo".to_string(), json!(false));
         }
+        if let Some(preferred_child_model) = non_empty_string(map.get("defaultPreferredChildModel"))
+            .or_else(|| non_empty_string(map.get("defaultSubAgentModel")))
+        {
+            map.insert(
+                "defaultPreferredChildModel".to_string(),
+                json!(preferred_child_model),
+            );
+        } else {
+            map.remove("defaultPreferredChildModel");
+        }
+        map.remove("defaultSubAgentModel");
 
         seen_ids.insert(id);
         out.push(Value::Object(map));
@@ -2458,7 +2470,8 @@ pub(crate) fn core_workspace_from_value(value: &Value) -> Option<WorkspaceRecord
     ws.yolo = map.get("yolo").and_then(Value::as_bool).unwrap_or(false);
     ws.default_provider = non_empty_string(map.get("defaultProvider"));
     ws.default_model = non_empty_string(map.get("defaultModel"));
-    ws.default_preferred_child_model = non_empty_string(map.get("defaultPreferredChildModel"));
+    ws.default_preferred_child_model = non_empty_string(map.get("defaultPreferredChildModel"))
+        .or_else(|| non_empty_string(map.get("defaultSubAgentModel")));
     ws.default_child_model_routing_mode = non_empty_string(map.get("defaultChildModelRoutingMode"));
     ws.default_preferred_child_model_ref =
         non_empty_string(map.get("defaultPreferredChildModelRef"));
@@ -3170,6 +3183,107 @@ mod tests {
                 .defaults
                 .get("defaultToolOutputOverflowChars")
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn migrates_legacy_default_sub_agent_model_to_canonical_preferred_child_model() {
+        let tmp = tempdir().unwrap();
+        let ws_legacy_only = tmp.path().join("proj-legacy");
+        let ws_both = tmp.path().join("proj-both");
+        fs::create_dir_all(&ws_legacy_only).unwrap();
+        fs::create_dir_all(&ws_both).unwrap();
+        let data_dir = tmp.path().join("Cowork");
+        fs::create_dir_all(&data_dir).unwrap();
+        let state_path = data_dir.join("state.json");
+        fs::write(
+            &state_path,
+            serde_json::to_string_pretty(&json!({
+                "version": 2,
+                "workspaces": [
+                    {
+                        "id": "ws-legacy",
+                        "name": "Legacy",
+                        "path": ws_legacy_only.to_string_lossy(),
+                        "createdAt": "2026-01-01T00:00:00.000Z",
+                        "lastOpenedAt": "2026-01-01T00:00:00.000Z",
+                        "defaultProvider": "openai",
+                        "defaultModel": "gpt-5.2",
+                        "defaultSubAgentModel": "gpt-5.2-mini",
+                        "defaultEnableMcp": true,
+                        "defaultBackupsEnabled": false,
+                        "yolo": false
+                    },
+                    {
+                        "id": "ws-both",
+                        "name": "Canonical Wins",
+                        "path": ws_both.to_string_lossy(),
+                        "createdAt": "2026-01-01T00:00:00.000Z",
+                        "lastOpenedAt": "2026-01-01T00:00:00.000Z",
+                        "defaultProvider": "anthropic",
+                        "defaultModel": "claude-sonnet-4-6",
+                        "defaultPreferredChildModel": "claude-haiku-4-5",
+                        "defaultSubAgentModel": "legacy-ignored-model",
+                        "defaultEnableMcp": true,
+                        "defaultBackupsEnabled": false,
+                        "yolo": false
+                    }
+                ],
+                "threads": [],
+                "developerMode": false,
+                "showHiddenFiles": false
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let service = PersistenceService::new(data_dir, None, true, None);
+        let raw_loaded = service.load_state_value().unwrap();
+        assert_eq!(
+            raw_loaded["workspaces"][0]["defaultPreferredChildModel"],
+            "gpt-5.2-mini"
+        );
+        assert!(
+            raw_loaded["workspaces"][0]
+                .get("defaultSubAgentModel")
+                .is_none()
+        );
+        assert_eq!(
+            raw_loaded["workspaces"][1]["defaultPreferredChildModel"],
+            "claude-haiku-4-5"
+        );
+        assert!(
+            raw_loaded["workspaces"][1]
+                .get("defaultSubAgentModel")
+                .is_none()
+        );
+
+        let core_loaded = service.load_core_state().unwrap();
+        assert_eq!(
+            core_loaded.workspaces[0]
+                .default_preferred_child_model
+                .as_deref(),
+            Some("gpt-5.2-mini")
+        );
+        assert_eq!(
+            core_loaded.workspaces[1]
+                .default_preferred_child_model
+                .as_deref(),
+            Some("claude-haiku-4-5")
+        );
+
+        let saved = service.merge_and_save_core_snapshot(&core_loaded).unwrap();
+        assert_eq!(
+            saved["workspaces"][0]["defaultPreferredChildModel"],
+            "gpt-5.2-mini"
+        );
+        assert!(saved["workspaces"][0].get("defaultSubAgentModel").is_none());
+        let reloaded = service.load_core_state().unwrap();
+        assert_eq!(
+            reloaded.workspaces[0]
+                .default_preferred_child_model
+                .as_deref(),
+            Some("gpt-5.2-mini")
         );
     }
 

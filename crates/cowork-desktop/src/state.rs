@@ -16759,6 +16759,8 @@ fn apply_defaults_obj_to_workspace(
     if let Some(val) = obj
         .get("defaultPreferredChildModel")
         .or_else(|| obj.get("preferredChildModel"))
+        .or_else(|| obj.get("defaultSubAgentModel"))
+        .or_else(|| obj.get("subAgentModel"))
     {
         ws.default_preferred_child_model = val
             .as_str()

@@ -792,6 +792,7 @@ async fn claude_native_bash_enforces_path_credential_and_command_controls() {
     // Interactive mode prompts with the actual nested command string and classification,
     // never the generic "claude/can_use_tool" method name.
     let interactive = Harness::new(Turn::default());
+    std::fs::create_dir_all(interactive.ws.join("scratch")).unwrap();
     assert!(
         interactive
             .decide_interactively(
@@ -805,7 +806,7 @@ async fn claude_native_bash_enforces_path_credential_and_command_controls() {
         !interactive
             .decide_interactively(
                 CLAUDE_TOOL,
-                claude_tool("Bash", json!({ "command": "git reset --hard" })),
+                claude_tool("Bash", json!({ "command": "rm -rf scratch" })),
                 false
             )
             .await
@@ -813,7 +814,7 @@ async fn claude_native_bash_enforces_path_credential_and_command_controls() {
     let requests = interactive.sink.server_requests.lock().clone();
     assert_eq!(requests[0].2["command"], json!("echo hi"));
     assert_eq!(requests[0].2["reason"], json!("sandbox_denied_escalation"));
-    assert_eq!(requests[1].2["command"], json!("git reset --hard"));
+    assert_eq!(requests[1].2["command"], json!("rm -rf scratch"));
     assert_eq!(requests[1].2["reason"], json!("matches_dangerous_pattern"));
 
     // YOLO with DangerFullAccess accepts benign workspace-safe commands.
@@ -1452,7 +1453,7 @@ EOF"#,
         }
 
         // Benign static commands (including validated `sh -c` with a safe command) remain allowed.
-        for ok_cmd in ["echo hi", "git status", "sh -c 'echo hi'"] {
+        for ok_cmd in ["echo hi", "sh -c 'echo hi'"] {
             let req = claude_tool("Bash", json!({ "command": ok_cmd }));
             if yolo {
                 assert!(
@@ -1563,6 +1564,14 @@ async fn unsandboxed_native_shell_denies_implicit_patch_git_and_archive_writes()
         std::fs::write(h.ws.join("archive.zip"), "fake").unwrap();
 
         let blocked = [
+            // Bare Git commands can execute untrusted `.git/config` helpers (`core.fsmonitor`,
+            // `diff.external`, `filter.*`, `core.pager`, hooks) even without dangerous CLI flags.
+            "git status",
+            "git diff",
+            "git log -n 5",
+            "git --no-pager status",
+            "git show HEAD",
+            "git rev-parse HEAD",
             "git apply --unsafe-paths evil.patch && git commit --allow-empty -m update",
             "git apply evil.patch",
             "git am evil.patch",
@@ -1601,21 +1610,6 @@ async fn unsandboxed_native_shell_denies_implicit_patch_git_and_archive_writes()
                 .await,
                 "yolo={yolo}: unsafe git/patch/archive command must be denied in ACP: {cmd}"
             );
-        }
-
-        for ok_cmd in ["git status", "git diff", "git log -n 5"] {
-            let req = claude_tool("Bash", json!({ "command": ok_cmd }));
-            if yolo {
-                assert!(
-                    h.decide_silently(CLAUDE_TOOL, req).await,
-                    "benign git command must pass under YOLO: {ok_cmd}"
-                );
-            } else {
-                assert!(
-                    h.decide_interactively(CLAUDE_TOOL, req, true).await,
-                    "benign git command must remain approvable interactively: {ok_cmd}"
-                );
-            }
         }
     }
 }
@@ -1755,6 +1749,9 @@ async fn unsandboxed_native_shell_enforces_strict_command_allowlist_and_blocks_c
             "git branch --edit-description",
             "git log --show-signature",
             "git help --web log",
+            "git status",
+            "git diff",
+            "grep --exclude-from=paths.txt main safe",
             "rg --pre=cat main safe",
             "rg --hostname-bin=./payload.sh main safe",
             "rg --files-from=paths.txt main",
@@ -1805,8 +1802,6 @@ async fn unsandboxed_native_shell_enforces_strict_command_allowlist_and_blocks_c
             "grep -r main safe",
             "rg main safe",
             "find safe -name '*.rs'",
-            "git --no-pager status",
-            "git diff",
             "sh -c 'cat safe/ok.rs'",
         ] {
             let req = claude_tool("Bash", json!({ "command": ok_cmd }));

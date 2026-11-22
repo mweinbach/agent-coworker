@@ -1302,12 +1302,14 @@ fn format_artifact_preview_text(preview: &Value) -> Option<String> {
                             .take(12)
                             .filter_map(|cell| {
                                 let addr = cell
-                                    .get("cellRef")
+                                    .get("address")
+                                    .or_else(|| cell.get("cellRef"))
                                     .or_else(|| cell.get("ref"))
                                     .and_then(Value::as_str)?;
                                 let val = cell
                                     .get("displayValue")
                                     .or_else(|| cell.get("value"))
+                                    .or_else(|| cell.get("formula"))
                                     .and_then(|v| {
                                         v.as_str()
                                             .map(str::to_owned)
@@ -2092,5 +2094,26 @@ mod tests {
             pdf.as_deref(),
             Some("PDF preview: report.pdf · 4 pages · 12000 bytes")
         );
+
+        let xlsx = format_artifact_preview_text(&json!({
+            "kind": "xlsx",
+            "filename": "metrics.xlsx",
+            "workbook": {
+                "sheets": [{
+                    "name": "Q4",
+                    "index": 0,
+                    "hidden": false,
+                    "cells": [
+                        { "address": "A1", "value": "Revenue", "formula": null, "style": null },
+                        { "address": "B1", "value": 42, "formula": "=SUM(B2:B5)", "style": null }
+                    ],
+                    "merges": [],
+                    "columnWidths": [],
+                    "tables": [],
+                    "charts": []
+                }]
+            }
+        }));
+        assert_eq!(xlsx.as_deref(), Some("Q4 (2 cells): A1=Revenue, B1=42"));
     }
 }

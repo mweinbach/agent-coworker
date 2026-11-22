@@ -1604,17 +1604,6 @@ fn expand_shell_known_prefix(raw: &str, base_dir: &Path, homedir: &Path) -> Opti
     None
 }
 
-fn is_url_token(token: &str) -> bool {
-    let lower = token.to_ascii_lowercase();
-    lower.starts_with("http://")
-        || lower.starts_with("https://")
-        || lower.starts_with("ws://")
-        || lower.starts_with("wss://")
-        || lower.starts_with("ftp://")
-        || lower.starts_with("ssh://")
-        || lower.starts_with("git://")
-}
-
 fn is_safe_stdio_device(path: &str) -> bool {
     matches!(
         path,
@@ -1657,7 +1646,7 @@ fn has_windows_drive_prefix(s: &str) -> bool {
 }
 
 fn looks_like_filesystem_path(token: &str) -> bool {
-    if token.is_empty() || is_url_token(token) {
+    if token.is_empty() {
         return false;
     }
     if token.starts_with('~')
@@ -1751,7 +1740,7 @@ fn validate_shell_path_token(
     require_write: bool,
     at_command_pos: bool,
 ) -> Result<Option<PathBuf>, String> {
-    if raw.is_empty() || is_url_token(raw) {
+    if raw.is_empty() {
         return Ok(None);
     }
     if is_safe_stdio_device(raw) {
@@ -2172,7 +2161,7 @@ fn validate_shell_operand_candidate(
     is_mut: bool,
     force_write: bool,
 ) -> Result<(), String> {
-    if candidate.is_empty() || is_url_token(candidate) {
+    if candidate.is_empty() {
         return Ok(());
     }
 

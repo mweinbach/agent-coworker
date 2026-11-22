@@ -2115,3 +2115,68 @@ async fn unsandboxed_native_shell_authorizes_non_stdio_dev_fd_paths() {
         }
     }
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn unsandboxed_native_shell_authorizes_url_shaped_filesystem_operands() {
+    for yolo in [true, false] {
+        let h = Harness::new(Turn {
+            yolo,
+            mode: Some(SandboxMode::DangerFullAccess),
+            network: Some(true),
+            ..Turn::default()
+        });
+        let cred_file = h.home.join(".cowork/auth/codex-cli/auth.json");
+        std::fs::create_dir_all(cred_file.parent().unwrap()).unwrap();
+        std::fs::write(&cred_file, "{\"token\":\"secret\"}\n").unwrap();
+        std::fs::create_dir_all(h.ws.join(".git/hooks")).unwrap();
+        std::fs::create_dir_all(h.ws.join("https:")).unwrap();
+        std::fs::create_dir_all(h.ws.join("http:")).unwrap();
+        std::fs::write(h.ws.join("README.md"), "# demo\n").unwrap();
+        std::os::unix::fs::symlink(&cred_file, h.ws.join("https:/credential-link")).unwrap();
+        std::os::unix::fs::symlink(h.ws.join(".git/hooks"), h.ws.join("http:/hook-link")).unwrap();
+
+        let blocked = [
+            "cat https://credential-link",
+            "head -n 5 https://credential-link",
+            "cp README.md http://hook-link",
+            "echo pwned > http://hook-link",
+            "cat https://foo/../../../../../etc/passwd",
+        ];
+        for cmd in blocked {
+            assert!(
+                !h.decide_silently(CLAUDE_TOOL, claude_tool("Bash", json!({ "command": cmd })))
+                    .await,
+                "yolo={yolo}: URL-shaped local path escape must be denied in Bash: {cmd:?}"
+            );
+            assert!(
+                !h.decide_silently(
+                    ACP_PERMISSION,
+                    json!({
+                        "toolCall": {
+                            "title": "run_cmd",
+                            "kind": "execute",
+                            "rawInput": { "command": cmd }
+                        }
+                    }),
+                )
+                .await,
+                "yolo={yolo}: URL-shaped local path escape must be denied in ACP: {cmd:?}"
+            );
+        }
+
+        // Benign non-existent URL text in echo still stays allowed.
+        let benign = claude_tool("Bash", json!({ "command": "echo https://example.com" }));
+        if yolo {
+            assert!(
+                h.decide_silently(CLAUDE_TOOL, benign).await,
+                "benign echo of nonexistent URL string must remain allowed under YOLO"
+            );
+        } else {
+            assert!(
+                h.decide_interactively(CLAUDE_TOOL, benign, true).await,
+                "benign echo of nonexistent URL string must remain approvable interactively"
+            );
+        }
+    }
+}

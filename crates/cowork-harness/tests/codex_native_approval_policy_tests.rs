@@ -1269,3 +1269,110 @@ async fn claude_and_acp_native_bash_blocks_provider_credential_env_exfiltration_
         "benign echo command must remain allowed under YOLO"
     );
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn acp_locations_and_patch_paths_preserve_exact_bytes_including_trailing_spaces() {
+    for yolo in [true, false] {
+        let h = Harness::new(Turn {
+            yolo,
+            ..Turn::default()
+        });
+        std::fs::create_dir_all(h.ws.join(".git")).unwrap();
+        let git_config = h.ws.join(".git/config");
+        std::fs::write(&git_config, "[core]\n").unwrap();
+        let trailing_symlink = h.ws.join("config ");
+        std::os::unix::fs::symlink(&git_config, &trailing_symlink).unwrap();
+        let trailing_uri = url::Url::from_file_path(&trailing_symlink)
+            .unwrap()
+            .to_string();
+
+        // ACP `toolCall.locations` in string, `{ path }`, and `{ uri }` forms must preserve
+        // exact trailing spaces and deny writes through symlinks into `.git/config`.
+        let blocked_acp = [
+            json!({
+                "toolCall": {
+                    "title": "edit_file",
+                    "kind": "edit",
+                    "locations": ["config "]
+                }
+            }),
+            json!({
+                "toolCall": {
+                    "title": "edit_file",
+                    "kind": "edit",
+                    "locations": [{ "path": "config " }]
+                }
+            }),
+            json!({
+                "toolCall": {
+                    "title": "edit_file",
+                    "kind": "edit",
+                    "locations": [{ "uri": trailing_uri }]
+                }
+            }),
+            json!({
+                "toolCall": {
+                    "title": "edit_file",
+                    "kind": "edit",
+                    "rawInput": {
+                        "edits": [{ "path": "config ", "new_text": "pwn" }]
+                    }
+                }
+            }),
+            json!({
+                "toolCall": {
+                    "title": "edit_file",
+                    "kind": "edit",
+                    "rawInput": {
+                        "fileChanges": { "config ": { "content": "pwn" } }
+                    }
+                }
+            }),
+            json!({
+                "toolCall": {
+                    "title": "apply_patch",
+                    "kind": "edit",
+                    "rawInput": {
+                        "patch": "*** Update File: config \n@@\n-[core]\n+[core]\n"
+                    }
+                }
+            }),
+            json!({
+                "toolCall": {
+                    "title": "apply_patch",
+                    "kind": "edit",
+                    "rawInput": {
+                        "diff": "--- a/config \n+++ b/config \n"
+                    }
+                }
+            }),
+        ];
+        for params in blocked_acp {
+            assert!(
+                !h.decide_silently(ACP_PERMISSION, params.clone()).await,
+                "yolo={yolo}: ACP edit targeting trailing-space symlink to .git/config must be denied: {params}"
+            );
+        }
+
+        // Benign workspace file with a trailing space: interactive prompt must visibly quote
+        // the trailing space instead of hiding it via trimming.
+        if !yolo {
+            std::fs::write(h.ws.join("note "), "ok\n").unwrap();
+            let req = json!({
+                "toolCall": {
+                    "title": "edit_file",
+                    "kind": "edit",
+                    "locations": ["note "]
+                }
+            });
+            assert!(h.decide_interactively(ACP_PERMISSION, req, true).await);
+            let (_, _, prompt) = h.sink.server_requests.lock().last().unwrap().clone();
+            let cmd = prompt["command"].as_str().unwrap();
+            assert!(
+                cmd.contains("note \""),
+                "interactive approval prompt must visibly show trailing space in path: {cmd}"
+            );
+        }
+    }
+}

@@ -230,6 +230,21 @@ fn parse_claude_request<'a>(
     })
 }
 
+fn extract_acp_location_path(raw: &str, is_uri: bool) -> Result<String, String> {
+    if raw.is_empty() {
+        return Err("ACP toolCall.locations entry missing path.".to_owned());
+    }
+    if is_uri && raw.starts_with("file://") {
+        if let Ok(parsed) = Url::parse(raw)
+            && let Ok(file_path) = parsed.to_file_path()
+        {
+            return Ok(file_path.to_string_lossy().into_owned());
+        }
+        return Ok(raw.strip_prefix("file://").unwrap_or(raw).to_owned());
+    }
+    Ok(raw.to_owned())
+}
+
 fn parse_acp_request<'a>(
     params: &'a Value,
     empty_obj: &'a Map<String, Value>,
@@ -299,16 +314,22 @@ fn parse_acp_request<'a>(
             .ok_or_else(|| "ACP toolCall.locations must be an array.".to_owned())?;
         for loc in arr {
             match loc {
-                Value::String(s) if !s.trim().is_empty() => extra_paths.push(s.trim().to_owned()),
+                Value::String(s) if !s.is_empty() => {
+                    extra_paths.push(extract_acp_location_path(s, s.starts_with("file://"))?);
+                }
                 Value::Object(obj) => {
                     if let Some(p) = obj
                         .get("path")
-                        .or_else(|| obj.get("uri"))
                         .and_then(Value::as_str)
-                        .map(str::trim)
                         .filter(|s| !s.is_empty())
                     {
-                        extra_paths.push(p.strip_prefix("file://").unwrap_or(p).to_owned());
+                        extra_paths.push(extract_acp_location_path(p, false)?);
+                    } else if let Some(u) = obj
+                        .get("uri")
+                        .and_then(Value::as_str)
+                        .filter(|s| !s.is_empty())
+                    {
+                        extra_paths.push(extract_acp_location_path(u, true)?);
                     } else {
                         return Err("ACP toolCall.locations entry missing path.".to_owned());
                     }
@@ -522,6 +543,15 @@ fn collect_scalar_and_array_paths(
     Ok(out)
 }
 
+fn format_display_path(path: &Path) -> String {
+    let rendered = path.display().to_string();
+    if rendered != rendered.trim() {
+        format!("{rendered:?}")
+    } else {
+        rendered
+    }
+}
+
 fn validate_read_file(
     parsed: &ParsedNativeRequest<'_>,
     ctx: &ToolExecutionContext,
@@ -555,7 +585,7 @@ fn validate_read_file(
     for raw in &raw_paths {
         let candidate = resolve_native_tool_path(raw, &base_dir, &ctx.homedir)?;
         let canonical = assert_read_path_allowed(&candidate, ctx).map_err(|e| e.to_string())?;
-        validated.push(canonical.display().to_string());
+        validated.push(format_display_path(&canonical));
     }
 
     let summary = truncate_summary(&validated.join(", "));
@@ -569,27 +599,26 @@ fn validate_read_file(
 }
 
 fn validate_glob_or_search_pattern(raw: &str) -> Result<(), String> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
+    if raw.is_empty() {
         return Ok(());
     }
-    if trimmed.contains('\0') {
+    if raw.contains('\0') {
         return Err("Search pattern contains a NUL byte.".to_owned());
     }
-    if trimmed.starts_with('/')
-        || trimmed.starts_with('\\')
-        || trimmed.starts_with('~')
-        || has_windows_drive_prefix(trimmed)
+    if raw.starts_with('/')
+        || raw.starts_with('\\')
+        || raw.starts_with('~')
+        || has_windows_drive_prefix(raw)
     {
         return Err(format!(
-            "Absolute or home-relative search pattern is blocked: {trimmed}"
+            "Absolute or home-relative search pattern is blocked: {raw:?}"
         ));
     }
-    let normalized = trimmed.replace('\\', "/");
+    let normalized = raw.replace('\\', "/");
     for seg in normalized.split('/') {
         if seg == ".." {
             return Err(format!(
-                "Parent-traversal search pattern is blocked: {trimmed}"
+                "Parent-traversal search pattern is blocked: {raw:?}"
             ));
         }
         if matches!(
@@ -597,14 +626,14 @@ fn validate_glob_or_search_pattern(raw: &str) -> Result<(), String> {
             ".ssh" | ".aws" | ".gnupg" | ".kube" | ".azure"
         ) {
             return Err(format!(
-                "Protected credential search pattern is blocked: {trimmed}"
+                "Protected credential search pattern is blocked: {raw:?}"
             ));
         }
     }
     let lower = normalized.to_ascii_lowercase();
     if lower.contains(".cowork/auth") || lower.contains(".cowork/mobile-pairing") {
         return Err(format!(
-            "Protected Cowork credential search pattern is blocked: {trimmed}"
+            "Protected Cowork credential search pattern is blocked: {raw:?}"
         ));
     }
     Ok(())
@@ -711,13 +740,13 @@ fn validate_read_dir_or_search(
     if raw_paths.is_empty() {
         let canonical = assert_read_path_allowed(&base_dir, ctx).map_err(|e| e.to_string())?;
         assert_search_root_has_no_protected_descendant(&canonical, ctx)?;
-        validated.push(canonical.display().to_string());
+        validated.push(format_display_path(&canonical));
     } else {
         for raw in &raw_paths {
             let candidate = resolve_native_tool_path(raw, &base_dir, &ctx.homedir)?;
             let canonical = assert_read_path_allowed(&candidate, ctx).map_err(|e| e.to_string())?;
             assert_search_root_has_no_protected_descendant(&canonical, ctx)?;
-            validated.push(canonical.display().to_string());
+            validated.push(format_display_path(&canonical));
         }
     }
 
@@ -764,24 +793,26 @@ fn validate_read_dir_or_search(
 
 fn extract_patch_file_paths(patch_text: &str) -> Vec<String> {
     let mut paths = Vec::new();
-    for line in patch_text.lines() {
-        let trimmed = line.trim();
+    for raw_line in patch_text.lines() {
+        // Strip only CRLF `\r` without trimming leading/trailing spaces that may belong to
+        // an exact Unix filename (e.g. `*** Update File: config ` or `+++ b/config `).
+        let line = raw_line.strip_suffix('\r').unwrap_or(raw_line);
         for prefix in [
             "*** Update File:",
             "*** Add File:",
             "*** Delete File:",
             "*** Move to:",
         ] {
-            if let Some(rest) = trimmed.strip_prefix(prefix) {
-                let p = rest.trim();
+            if let Some(rest) = line.strip_prefix(prefix) {
+                let p = rest.strip_prefix(' ').unwrap_or(rest);
                 if !p.is_empty() {
                     paths.push(p.to_owned());
                 }
             }
         }
         for prefix in ["+++ ", "--- "] {
-            if let Some(rest) = trimmed.strip_prefix(prefix) {
-                let p = rest.split('\t').next().unwrap_or("").trim();
+            if let Some(rest) = line.strip_prefix(prefix) {
+                let p = rest.split('\t').next().unwrap_or("");
                 if !p.is_empty() && p != "/dev/null" {
                     let cleaned = p
                         .strip_prefix("a/")
@@ -836,8 +867,8 @@ fn validate_write_file(
                 for key in ["file_path", "filePath", "path"] {
                     match obj.get(key) {
                         None | Some(Value::Null) => {}
-                        Some(Value::String(s)) if !s.trim().is_empty() => {
-                            raw_paths.push(s.trim().to_owned());
+                        Some(Value::String(s)) if !s.is_empty() => {
+                            raw_paths.push(s.clone());
                         }
                         Some(_) => {
                             return Err(format!("Invalid native edit entry path '{key}'."));
@@ -855,10 +886,10 @@ fn validate_write_file(
             .as_object()
             .ok_or_else(|| "Native edit tool 'fileChanges' must be an object.".to_owned())?;
         for key in map.keys() {
-            if key.trim().is_empty() {
+            if key.is_empty() {
                 return Err("Native edit tool 'fileChanges' contains empty path.".to_owned());
             }
-            raw_paths.push(key.trim().to_owned());
+            raw_paths.push(key.clone());
         }
     }
 
@@ -879,7 +910,7 @@ fn validate_write_file(
     for raw in &raw_paths {
         let candidate = resolve_native_tool_path(raw, &base_dir, &ctx.homedir)?;
         let canonical = assert_write_path_allowed(&candidate, ctx).map_err(|e| e.to_string())?;
-        validated.push(canonical.display().to_string());
+        validated.push(format_display_path(&canonical));
     }
 
     let summary = truncate_summary(&validated.join(", "));

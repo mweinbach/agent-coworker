@@ -801,6 +801,22 @@ pub enum TaskAction {
     },
 }
 
+/// Pre-encoded inline attachment payload produced off the UI thread by `native/`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ComposerInlineAttachmentPayload {
+    pub content_base64: String,
+    pub data_url: Option<String>,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+}
+
+/// Outcome of reading a dropped/picked attachment off the UI thread.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ComposerInlineReadOutcome {
+    Inline(ComposerInlineAttachmentPayload),
+    ExceedsInlineLimit { source_path: PathBuf },
+}
+
 /// Wire/disk shape matching a JSONL line in local thread transcripts (`TranscriptEvent`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -840,6 +856,17 @@ pub enum NativeCommand {
         source_path: PathBuf,
         filename: String,
         mime_type: String,
+    },
+    ReadComposerInlineAttachment {
+        key: String,
+        path: PathBuf,
+        filename: String,
+        mime_type: String,
+    },
+    SetWatchedExplorerScope {
+        workspace_id: String,
+        visible: bool,
+        expanded_dirs: Vec<String>,
     },
     ListWorkspaceFiles {
         request_id: String,
@@ -948,6 +975,12 @@ pub enum StoreEvent {
         filename: String,
         mime_type: String,
         result: Result<PathBuf, String>,
+    },
+    ComposerInlineAttachmentLoaded {
+        key: String,
+        filename: String,
+        mime_type: String,
+        result: Result<ComposerInlineReadOutcome, String>,
     },
     WorkspaceAdded(WorkspaceRecord),
     ImportedWorkspacesLoaded(Vec<WorkspaceRecord>),

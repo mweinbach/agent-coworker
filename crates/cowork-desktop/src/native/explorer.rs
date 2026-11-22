@@ -2,7 +2,6 @@
 //! trash, and authorized attachment upload copying) matching `apps/desktop/electron/ipc/files.ts`
 //! and `apps/desktop/electron/services/explorerVisibility.ts`.
 
-use std::cmp::Ordering;
 use std::fs::{self, OpenOptions};
 use std::io::{self, ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
@@ -78,15 +77,20 @@ pub fn list_workspace_directory(
         });
     }
 
-    entries.sort_by(|left, right| match (left.is_dir, right.is_dir) {
-        (true, false) => Ordering::Less,
-        (false, true) => Ordering::Greater,
-        _ => left
-            .name
-            .to_lowercase()
-            .cmp(&right.name.to_lowercase())
-            .then_with(|| left.name.cmp(&right.name)),
+    let mut keyed: Vec<(bool, String, WorkspaceFileEntry)> = entries
+        .into_iter()
+        .map(|entry| {
+            let lower = entry.name.to_lowercase();
+            (!entry.is_dir, lower, entry)
+        })
+        .collect();
+    keyed.sort_by(|left, right| {
+        left.0
+            .cmp(&right.0)
+            .then_with(|| left.1.cmp(&right.1))
+            .then_with(|| left.2.name.cmp(&right.2.name))
     });
+    let entries: Vec<WorkspaceFileEntry> = keyed.into_iter().map(|(_, _, entry)| entry).collect();
 
     Ok(entries)
 }

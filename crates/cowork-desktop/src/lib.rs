@@ -20,6 +20,8 @@ pub use native::menu::{
 pub use shortcuts::{is_apple_platform, shortcut_label, shortcut_label_for_platform};
 
 use std::cell::RefCell;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use rune::{App, AppHandle, AppSpec, Cx, El, KeyEvent, Titlebar, Tx, Waker, WindowSpec};
 use tokio::sync::mpsc;
@@ -38,6 +40,8 @@ struct SharedWindowHub {
     window_rx: Option<mpsc::UnboundedReceiver<WindowCommand>>,
     wakers: Vec<(WindowMode, Waker)>,
     pending_sync_repaint: [bool; 3],
+    secondary_active: bool,
+    pending_popup_opens: Vec<(WindowMode, AppHandle<AppState>)>,
 }
 
 thread_local! {
@@ -49,6 +53,30 @@ fn mode_index(mode: WindowMode) -> usize {
         WindowMode::Main => 0,
         WindowMode::QuickChat => 1,
         WindowMode::Utility => 2,
+    }
+}
+
+fn any_secondary_visible(hub: &SharedWindowHub) -> bool {
+    hub.quick_chat_handle
+        .as_ref()
+        .is_some_and(|handle| handle.is_visible())
+        || hub
+            .utility_handle
+            .as_ref()
+            .is_some_and(|handle| handle.is_visible())
+}
+
+fn is_mode_visible(hub: &SharedWindowHub, mode: WindowMode) -> bool {
+    match mode {
+        WindowMode::Main => true,
+        WindowMode::QuickChat => hub
+            .quick_chat_handle
+            .as_ref()
+            .is_some_and(|handle| handle.is_visible()),
+        WindowMode::Utility => hub
+            .utility_handle
+            .as_ref()
+            .is_some_and(|handle| handle.is_visible()),
     }
 }
 
@@ -74,14 +102,33 @@ fn leave_shared_turn(state: &mut AppState) {
     let current_mode = state.window_mode;
     let dirty = std::mem::take(&mut state.shared_dirty);
     let mut wake_list: Vec<Waker> = Vec::new();
+    let mut popup_opens: Vec<AppHandle<AppState>> = Vec::new();
     WINDOW_HUB.with(|cell| {
         let mut hub = cell.borrow_mut();
-        if let Some(ref mut shared) = hub.shared {
+        if current_mode == WindowMode::Main {
+            let secondary_needed = hub.secondary_active
+                || !hub.pending_popup_opens.is_empty()
+                || any_secondary_visible(&hub)
+                || hub.pending_sync_repaint[mode_index(WindowMode::QuickChat)]
+                || hub.pending_sync_repaint[mode_index(WindowMode::Utility)];
+            if !secondary_needed {
+                // Keep the shared core resident inside Main while no secondary window is open,
+                // avoiding two full-state swaps and hidden-window wakes on every turn.
+                hub.shared = None;
+                return;
+            }
+            if let Some(ref mut shared) = hub.shared {
+                state.swap_shared_core(shared);
+            } else {
+                let mut shared = AppState::default();
+                state.swap_shared_core(&mut shared);
+                hub.shared = Some(shared);
+            }
+            popup_opens.extend(hub.pending_popup_opens.drain(..).map(|(_, handle)| handle));
+        } else if let Some(ref mut shared) = hub.shared {
             state.swap_shared_core(shared);
-        } else if current_mode == WindowMode::Main {
-            let mut shared = AppState::default();
-            state.swap_shared_core(&mut shared);
-            hub.shared = Some(shared);
+            hub.secondary_active =
+                any_secondary_visible(&hub) || !hub.pending_popup_opens.is_empty();
         } else {
             // Do not seed shared state from a secondary window before Main completes a turn.
             return;
@@ -89,7 +136,7 @@ fn leave_shared_turn(state: &mut AppState) {
         if dirty {
             let mut dirty_modes = Vec::new();
             for (mode, waker) in &hub.wakers {
-                if *mode != current_mode {
+                if *mode != current_mode && is_mode_visible(&hub, *mode) {
                     dirty_modes.push(*mode);
                     wake_list.push(waker.clone());
                 }
@@ -99,6 +146,10 @@ fn leave_shared_turn(state: &mut AppState) {
             }
         }
     });
+    for handle in popup_opens {
+        handle.open();
+        handle.wake();
+    }
     for waker in wake_list {
         (waker)();
     }
@@ -360,6 +411,7 @@ fn scene_chat_demo(state: &mut AppState) {
             timestamp_ms: 1_700_000_025_000,
         },
     ];
+    rt.sync_item_revs();
     rt.pending_interactions
         .push(state::ChatInteraction::CommandApproval {
             request_id: cowork_protocol::JsonRpcLiteId::Number(42),
@@ -583,9 +635,29 @@ fn setup_app(state: &mut AppState, waker: Waker) {
     if mode != WindowMode::Main || state.services.ws_tx.is_some() {
         return;
     }
-    state.services.waker = Some(waker.clone());
-    let ws_tx = ws::spawn_ws_manager(state.services.event_tx.clone(), Some(waker.clone()));
-    let native_tx = native::spawn_native_worker(state.services.event_tx.clone(), Some(waker));
+    let async_render_dirty = Arc::new(AtomicBool::new(false));
+    let dirty_for_waker = Arc::clone(&async_render_dirty);
+    let raw_for_waker = waker.clone();
+    let render_waker: Waker = Arc::new(move || {
+        if !dirty_for_waker.swap(true, Ordering::AcqRel) {
+            raw_for_waker();
+        }
+    });
+    state.services.waker = Some(render_waker);
+    state.services.poll_waker = Some(waker.clone());
+    state.services.async_render_dirty = Some(async_render_dirty);
+    let wake_pending = Arc::new(AtomicBool::new(false));
+    state.services.wake_pending = Some(Arc::clone(&wake_pending));
+    let ws_tx = ws::spawn_ws_manager_with_wake_gate(
+        state.services.event_tx.clone(),
+        Some(waker.clone()),
+        Some(Arc::clone(&wake_pending)),
+    );
+    let native_tx = native::spawn_native_worker_with_wake_gate(
+        state.services.event_tx.clone(),
+        Some(waker),
+        Some(wake_pending),
+    );
     let (window_tx, window_rx) = mpsc::unbounded_channel();
     state.services.ws_tx = Some(ws_tx);
     state.services.native_tx = Some(native_tx);
@@ -597,16 +669,33 @@ fn setup_app(state: &mut AppState, waker: Waker) {
 }
 
 fn apply_popup_window_command(
+    target_mode: WindowMode,
     target: Option<&rune::AppHandle<AppState>>,
+    sibling_mode: WindowMode,
     sibling: Option<&rune::AppHandle<AppState>>,
     toggle: bool,
 ) {
     let Some(target) = target else {
         return;
     };
-    if toggle && target.is_visible() {
-        target.hide();
-        target.wake();
+    let already_queued = WINDOW_HUB.with(|cell| {
+        cell.borrow()
+            .pending_popup_opens
+            .iter()
+            .any(|(mode, _)| *mode == target_mode)
+    });
+    if toggle && (target.is_visible() || already_queued) {
+        if target.is_visible() {
+            target.hide();
+        }
+        WINDOW_HUB.with(|cell| {
+            let mut hub = cell.borrow_mut();
+            hub.pending_popup_opens
+                .retain(|(mode, _)| *mode != target_mode);
+            hub.pending_sync_repaint[mode_index(target_mode)] = false;
+            hub.secondary_active =
+                any_secondary_visible(&hub) || !hub.pending_popup_opens.is_empty();
+        });
         return;
     }
     if let Some(other) = sibling
@@ -614,8 +703,15 @@ fn apply_popup_window_command(
     {
         other.hide();
     }
-    target.open();
-    target.wake();
+    WINDOW_HUB.with(|cell| {
+        let mut hub = cell.borrow_mut();
+        hub.pending_sync_repaint[mode_index(sibling_mode)] = false;
+        hub.pending_popup_opens
+            .retain(|(mode, _)| *mode != sibling_mode && *mode != target_mode);
+        hub.secondary_active = true;
+        hub.pending_sync_repaint[mode_index(target_mode)] = true;
+        hub.pending_popup_opens.push((target_mode, target.clone()));
+    });
 }
 
 fn poll_app(state: &mut AppState, now: f64, tx: &mut Tx) -> bool {
@@ -623,12 +719,21 @@ fn poll_app(state: &mut AppState, now: f64, tx: &mut Tx) -> bool {
     if !state.scene_mode {
         state.now_secs = state::wall_clock_epoch_secs();
     }
-    let mut changed = state.reconcile_rekeyed_thread_ids();
+    let mut changed = false;
     // Only the primary Main window owns background ws/native event draining in live multi-window mode
     // so secondary windows never steal WS responses or persist stale Main nav state.
     if state.scene_mode || state.window_mode == WindowMode::Main {
         changed |= state.drain_events();
         changed |= state.reconcile_rekeyed_thread_ids();
+        if state
+            .services
+            .async_render_dirty
+            .as_ref()
+            .is_some_and(|flag| flag.swap(false, Ordering::AcqRel))
+        {
+            changed = true;
+            state.shared_dirty = true;
+        }
     }
     if let Some(cmd_id) = state.pending_menu_command.take() {
         changed |= native::menu::dispatch_menu_command_with_tx(state, tx, &cmd_id);
@@ -667,28 +772,36 @@ fn poll_app(state: &mut AppState, now: f64, tx: &mut Tx) -> bool {
                 match cmd {
                     WindowCommand::OpenQuickChat => {
                         apply_popup_window_command(
+                            WindowMode::QuickChat,
                             quick_chat_handle.as_ref(),
+                            WindowMode::Utility,
                             utility_handle.as_ref(),
                             false,
                         );
                     }
                     WindowCommand::ToggleQuickChat => {
                         apply_popup_window_command(
+                            WindowMode::QuickChat,
                             quick_chat_handle.as_ref(),
+                            WindowMode::Utility,
                             utility_handle.as_ref(),
                             true,
                         );
                     }
                     WindowCommand::OpenUtility => {
                         apply_popup_window_command(
+                            WindowMode::Utility,
                             utility_handle.as_ref(),
+                            WindowMode::QuickChat,
                             quick_chat_handle.as_ref(),
                             false,
                         );
                     }
                     WindowCommand::ToggleUtility => {
                         apply_popup_window_command(
+                            WindowMode::Utility,
                             utility_handle.as_ref(),
+                            WindowMode::QuickChat,
                             quick_chat_handle.as_ref(),
                             true,
                         );
@@ -724,9 +837,12 @@ fn poll_app(state: &mut AppState, now: f64, tx: &mut Tx) -> bool {
                 }
             }
             native::menu::sync_application_menu(state);
-        }
-        if let Some(delay) = state.next_canvas_wake_delay_secs() {
-            tx.wake_at(state.app_elapsed_secs + delay);
+            if let Some(delay) = state.next_canvas_wake_delay_secs() {
+                tx.wake_at(state.app_elapsed_secs + delay);
+            }
+            if let Some(delay) = state.next_persist_wake_delay_secs() {
+                tx.wake_at(state.app_elapsed_secs + delay);
+            }
         }
     }
     // Fallback for navigations triggered inside `poll_app` (menu commands, deep links, focus
@@ -792,16 +908,18 @@ pub fn handle_global_menu_shortcut(state: &mut AppState, ev: &KeyEvent, tx: &mut
 fn root_view(state: &AppState, cx: &mut Cx<AppState>) -> El {
     cx.zoom(state.ui_scale);
     let dark = state.effective_dark(cx.system_dark());
-    let (kit, tokens) = theme::build_kit_with_accent(
+    theme::with_cached_kit_with_accent(
         dark,
         state.desktop_settings.reduced_transparency,
         state.desktop_settings.high_contrast,
         state.desktop_settings.accent_palette,
-    );
-    cx.foreground(tokens.text_base);
-    cx.focus_ring(2.0, 2.5, tokens.focus_ring);
-    cx.web_focus();
-    views::shell::view(state, cx, &kit, &tokens)
+        |kit, tokens| {
+            cx.foreground(tokens.text_base);
+            cx.focus_ring(2.0, 2.5, tokens.focus_ring);
+            cx.web_focus();
+            views::shell::view(state, cx, kit, tokens)
+        },
+    )
 }
 
 /// Entry points for the headless UI perf harness (`benches/ui_perf.rs`). Not a stable API.

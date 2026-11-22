@@ -2,6 +2,7 @@
 //! (`WorkspaceRootsController`, `LocalLogger` workspace redaction, `AppearancePreferences`, and
 //! `QuickChatTrayController`) without triggering re-entrant persistence writes.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -26,6 +27,33 @@ pub fn apply_desktop_state(
     apply_workspace_roots: bool,
     is_packaged: bool,
 ) {
+    let env = cowork_config::env_map_from_process();
+    apply_desktop_state_with_env(
+        state,
+        roots,
+        logger,
+        appearance_prefs,
+        tray,
+        app_handle,
+        apply_workspace_roots,
+        is_packaged,
+        &env,
+    );
+}
+
+/// Same as [`apply_desktop_state`] but reuses a caller-captured process environment map.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn apply_desktop_state_with_env(
+    state: &PersistedDesktopState,
+    roots: &Arc<Mutex<WorkspaceRootsController>>,
+    logger: &Arc<LocalLogger>,
+    appearance_prefs: &AppearancePreferences,
+    tray: &QuickChatTrayController,
+    app_handle: Option<&AppHandle<AppState>>,
+    apply_workspace_roots: bool,
+    is_packaged: bool,
+    env: &HashMap<String, String>,
+) {
     if apply_workspace_roots {
         let approved = {
             let mut guard = roots.lock().unwrap_or_else(|e| e.into_inner());
@@ -41,8 +69,7 @@ pub fn apply_desktop_state(
     }
 
     let _ = appearance_prefs.save_theme_preference(state.settings.theme);
-    let env = cowork_config::env_map_from_process();
-    let effective_flags = resolve_effective_feature_flags(&state.feature_flags, &env, is_packaged);
+    let effective_flags = resolve_effective_feature_flags(&state.feature_flags, env, is_packaged);
     let menu_bar_enabled = effective_flags.get("menuBar").copied().unwrap_or(true);
     tray.sync_from_settings(&state.settings, menu_bar_enabled, app_handle);
 }

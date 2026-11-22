@@ -5,7 +5,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -87,6 +87,7 @@ pub fn clamp_bounds_to_work_area(saved: WindowBounds, work_area: WorkArea) -> Wi
 struct StoreInner {
     pending: Option<WindowBounds>,
     last_recorded: Option<WindowBounds>,
+    loaded_initial: bool,
     last_written_json: Option<String>,
     deadline: Option<Instant>,
 }
@@ -114,13 +115,16 @@ impl WindowStateStore {
 
     /// Reads saved window bounds from disk, returning `None` if missing or invalid.
     pub fn load_raw(&self) -> Option<WindowBounds> {
-        let raw = fs::read_to_string(&self.path).ok()?;
-        let parsed: WindowBounds = serde_json::from_str(&raw).ok()?;
-        if parsed.width > 0 && parsed.height > 0 {
-            Some(parsed)
-        } else {
-            None
+        let parsed = fs::read_to_string(&self.path)
+            .ok()
+            .and_then(|raw| serde_json::from_str::<WindowBounds>(&raw).ok())
+            .filter(|parsed| parsed.width > 0 && parsed.height > 0);
+        let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        guard.loaded_initial = true;
+        if guard.last_recorded.is_none() {
+            guard.last_recorded = parsed;
         }
+        parsed
     }
 
     /// Loads saved window bounds clamped to `work_area` (or raw bounds if no display rect given).
@@ -132,14 +136,16 @@ impl WindowStateStore {
         })
     }
 
-    /// Returns the most recently recorded bounds if any, or falls back to `load_raw`.
+    /// Returns the most recently recorded bounds if any, or loads once from disk if uninitialized.
     pub fn last_recorded(&self) -> Option<WindowBounds> {
-        let cached = self
-            .inner
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .last_recorded;
-        cached.or_else(|| self.load_raw())
+        let (cached, loaded_initial) = {
+            let guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+            (guard.last_recorded, guard.loaded_initial)
+        };
+        if cached.is_some() || loaded_initial {
+            return cached;
+        }
+        self.load_raw()
     }
 
     /// Records updated window bounds and schedules a 300 ms debounced disk write.
@@ -149,6 +155,7 @@ impl WindowStateStore {
         }
         {
             let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+            guard.loaded_initial = true;
             if guard.last_recorded == Some(bounds) {
                 return;
             }
@@ -281,9 +288,11 @@ where
     })
 }
 
+static HEADLESS_CLI_ARGS: OnceLock<bool> = OnceLock::new();
+
 /// Returns true when running under Rune headless mode or headless CLI flags.
 pub fn is_headless_invocation() -> bool {
-    rune::is_headless() || is_headless_cli_args(std::env::args())
+    rune::is_headless() || *HEADLESS_CLI_ARGS.get_or_init(|| is_headless_cli_args(std::env::args()))
 }
 
 /// Builds initial `rune::WindowOptions` and `maximized` flag from `window-state.json`.

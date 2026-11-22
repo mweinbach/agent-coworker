@@ -4,6 +4,8 @@
 //! `apps/desktop/src/app/store.helpers/jsonRpcSocket.ts`, reusing `cowork-protocol`.
 
 use std::collections::{HashMap, VecDeque};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use cowork_protocol::{
@@ -30,6 +32,7 @@ pub const MAX_RECONNECT_ATTEMPTS: u32 = 10;
 pub const BASE_RECONNECT_DELAY_MS: u64 = 500;
 pub const MAX_RECONNECT_DELAY_MS: u64 = 30_000;
 pub const MAX_QUEUED_REQUESTS: usize = 128;
+const STREAM_DELTA_COALESCE_WINDOW: Duration = Duration::from_millis(8);
 
 /// Required WebSocket subprotocol string for `cowork-server`.
 pub const SUBPROTOCOL: &str = WEBSOCKET_SUBPROTOCOL;
@@ -164,7 +167,21 @@ pub fn spawn_ws_manager(
     event_tx: mpsc::UnboundedSender<StoreEvent>,
     waker: Option<rune::Waker>,
 ) -> mpsc::UnboundedSender<WsCommand> {
+    spawn_ws_manager_with_wake_gate(event_tx, waker, None)
+}
+
+/// Spawns the background Tokio WebSocket manager thread with an optional shared wake-coalescing
+/// gate (`wake_pending` is cleared on the UI thread before draining `event_rx`).
+pub(crate) fn spawn_ws_manager_with_wake_gate(
+    event_tx: mpsc::UnboundedSender<StoreEvent>,
+    waker: Option<rune::Waker>,
+    wake_pending: Option<Arc<AtomicBool>>,
+) -> mpsc::UnboundedSender<WsCommand> {
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
+    let wake = EventWake {
+        waker,
+        pending: wake_pending,
+    };
     std::thread::Builder::new()
         .name("cowork-ws-manager".to_string())
         .spawn(move || {
@@ -176,10 +193,29 @@ pub fn spawn_ws_manager(
                 Ok(rt) => rt,
                 Err(_) => return,
             };
-            rt.block_on(ws_manager_loop(cmd_rx, event_tx, waker));
+            rt.block_on(ws_manager_loop(cmd_rx, event_tx, wake));
         })
         .ok();
     cmd_tx
+}
+
+#[derive(Clone, Default)]
+struct EventWake {
+    waker: Option<rune::Waker>,
+    pending: Option<Arc<AtomicBool>>,
+}
+
+impl EventWake {
+    fn notify(&self) {
+        if let Some(ref w) = self.waker
+            && self
+                .pending
+                .as_ref()
+                .is_none_or(|flag| !flag.swap(true, Ordering::AcqRel))
+        {
+            w();
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -201,6 +237,21 @@ struct InFlightRequest {
     deadline: Instant,
 }
 
+#[derive(Serialize)]
+struct JsonRpcLiteRequestRef<'a> {
+    id: &'a JsonRpcLiteId,
+    method: &'a str,
+    params: &'a Value,
+}
+
+struct PendingStreamDelta {
+    method: String,
+    thread_id: String,
+    item_id: String,
+    params: Value,
+    flush_at: Instant,
+}
+
 enum WorkspaceActorMsg {
     SendRequest(QueuedRequest),
     SendNotification { method: String, params: Value },
@@ -208,21 +259,34 @@ enum WorkspaceActorMsg {
     Disconnect,
 }
 
-fn emit_event(
-    event_tx: &mpsc::UnboundedSender<StoreEvent>,
-    waker: &Option<rune::Waker>,
-    event: StoreEvent,
-) {
+fn emit_event(event_tx: &mpsc::UnboundedSender<StoreEvent>, wake: &EventWake, event: StoreEvent) {
     let _ = event_tx.send(event);
-    if let Some(w) = waker {
-        w();
+    wake.notify();
+}
+
+fn flush_pending_delta(
+    pending_delta: &mut Option<PendingStreamDelta>,
+    event_tx: &mpsc::UnboundedSender<StoreEvent>,
+    wake: &EventWake,
+    workspace_id: &str,
+) {
+    if let Some(delta) = pending_delta.take() {
+        emit_event(
+            event_tx,
+            wake,
+            StoreEvent::WsNotification {
+                workspace_id: workspace_id.to_string(),
+                method: delta.method,
+                params: delta.params,
+            },
+        );
     }
 }
 
 async fn ws_manager_loop(
     mut cmd_rx: mpsc::UnboundedReceiver<WsCommand>,
     event_tx: mpsc::UnboundedSender<StoreEvent>,
-    waker: Option<rune::Waker>,
+    wake: EventWake,
 ) {
     let mut actors: HashMap<String, mpsc::UnboundedSender<WorkspaceActorMsg>> = HashMap::new();
 
@@ -239,7 +303,7 @@ async fn ws_manager_loop(
                 let (actor_tx, actor_rx) = mpsc::unbounded_channel();
                 actors.insert(workspace_id.clone(), actor_tx);
                 let tx = event_tx.clone();
-                let wk = waker.clone();
+                let wk = wake.clone();
                 tokio::spawn(workspace_connection_actor(
                     workspace_id,
                     ws_url,
@@ -255,7 +319,7 @@ async fn ws_manager_loop(
                 } else {
                     emit_event(
                         &event_tx,
-                        &waker,
+                        &wake,
                         StoreEvent::WsStateChanged {
                             workspace_id,
                             state: WsConnectionState::Disconnected,
@@ -282,14 +346,14 @@ async fn ws_manager_loop(
                     if tx.send(WorkspaceActorMsg::SendRequest(req)).is_err() {
                         fail_disconnected_request(
                             &event_tx,
-                            &waker,
+                            &wake,
                             &workspace_id,
                             request_id,
                             method,
                         );
                     }
                 } else {
-                    fail_disconnected_request(&event_tx, &waker, &workspace_id, request_id, method);
+                    fail_disconnected_request(&event_tx, &wake, &workspace_id, request_id, method);
                 }
             }
             WsCommand::SendNotification {
@@ -318,7 +382,7 @@ async fn ws_manager_loop(
                 if send_err {
                     emit_event(
                         &event_tx,
-                        &waker,
+                        &wake,
                         StoreEvent::WsServerResponseResult {
                             workspace_id,
                             request_id: id,
@@ -342,14 +406,14 @@ async fn ws_manager_loop(
 
 fn fail_disconnected_request(
     event_tx: &mpsc::UnboundedSender<StoreEvent>,
-    waker: &Option<rune::Waker>,
+    wake: &EventWake,
     workspace_id: &str,
     request_id: u64,
     method: String,
 ) {
     emit_event(
         event_tx,
-        waker,
+        wake,
         StoreEvent::WsResponse {
             workspace_id: workspace_id.to_string(),
             request_id,
@@ -401,7 +465,7 @@ async fn workspace_connection_actor(
     browser_access_token: Option<String>,
     mut msg_rx: mpsc::UnboundedReceiver<WorkspaceActorMsg>,
     event_tx: mpsc::UnboundedSender<StoreEvent>,
-    waker: Option<rune::Waker>,
+    waker: EventWake,
 ) {
     let mut reconnect_attempt: u32 = 0;
     let mut queued: VecDeque<QueuedRequest> = VecDeque::new();
@@ -618,7 +682,7 @@ async fn perform_handshake<S>(
     msg_rx: &mut mpsc::UnboundedReceiver<WorkspaceActorMsg>,
     queued: &mut VecDeque<QueuedRequest>,
     event_tx: &mpsc::UnboundedSender<StoreEvent>,
-    waker: &Option<rune::Waker>,
+    waker: &EventWake,
     workspace_id: &str,
 ) -> HandshakeOutcome
 where
@@ -763,7 +827,7 @@ async fn run_connected_session<S>(
     msg_rx: &mut mpsc::UnboundedReceiver<WorkspaceActorMsg>,
     queued: &mut VecDeque<QueuedRequest>,
     event_tx: &mpsc::UnboundedSender<StoreEvent>,
-    waker: &Option<rune::Waker>,
+    waker: &EventWake,
     workspace_id: &str,
 ) -> SessionEnd
 where
@@ -772,9 +836,10 @@ where
         + Unpin,
 {
     let mut pending: HashMap<String, InFlightRequest> = HashMap::new();
+    let mut pending_delta: Option<PendingStreamDelta> = None;
 
     while let Some(req) = queued.pop_front() {
-        if let Err(err) = send_request_wire(&mut ws_stream, &mut pending, req.clone()).await {
+        if let Err((req, err)) = send_request_wire(&mut ws_stream, &mut pending, req).await {
             if req.retry_on_disconnect && queued.len() < MAX_QUEUED_REQUESTS {
                 queued.push_front(req);
             } else {
@@ -800,12 +865,14 @@ where
 
     let reason = loop {
         let next_deadline = pending.values().map(|r| r.deadline).min();
+        let delta_flush_deadline = pending_delta.as_ref().map(|d| d.flush_at);
 
         tokio::select! {
             biased;
             msg = msg_rx.recv() => {
                 match msg {
                     Some(WorkspaceActorMsg::Disconnect) | None => {
+                        flush_pending_delta(&mut pending_delta, event_tx, waker, workspace_id);
                         let _ = ws_stream.close().await;
                         requeue_or_fail_pending(
                             &mut pending,
@@ -818,7 +885,7 @@ where
                         return SessionEnd::DisconnectedByClient;
                     }
                     Some(WorkspaceActorMsg::SendRequest(req)) => {
-                        if let Err(err) = send_request_wire(&mut ws_stream, &mut pending, req.clone()).await {
+                        if let Err((req, err)) = send_request_wire(&mut ws_stream, &mut pending, req).await {
                             if req.retry_on_disconnect && queued.len() < MAX_QUEUED_REQUESTS {
                                 queued.push_back(req);
                             } else {
@@ -891,6 +958,14 @@ where
                 }
             }
             _ = async {
+                match delta_flush_deadline {
+                    Some(d) => sleep_until(d).await,
+                    None => std::future::pending::<()>().await,
+                }
+            } => {
+                flush_pending_delta(&mut pending_delta, event_tx, waker, workspace_id);
+            }
+            _ = async {
                 match next_deadline {
                     Some(d) => sleep_until(d).await,
                     None => std::future::pending::<()>().await,
@@ -924,7 +999,14 @@ where
             frame = ws_stream.next() => {
                 match frame {
                     Some(Ok(Message::Text(text))) => {
-                        dispatch_inbound_frame(&text, &mut pending, event_tx, waker, workspace_id);
+                        dispatch_inbound_frame(
+                            &text,
+                            &mut pending,
+                            &mut pending_delta,
+                            event_tx,
+                            waker,
+                            workspace_id,
+                        );
                     }
                     Some(Ok(Message::Ping(_) | Message::Pong(_))) => {}
                     Some(Ok(Message::Close(_))) | None => {
@@ -939,6 +1021,7 @@ where
         }
     };
 
+    flush_pending_delta(&mut pending_delta, event_tx, waker, workspace_id);
     requeue_or_fail_pending(&mut pending, queued, event_tx, waker, workspace_id, &reason);
     SessionEnd::TransportLost(reason)
 }
@@ -947,18 +1030,21 @@ async fn send_request_wire<S>(
     ws_stream: &mut S,
     pending: &mut HashMap<String, InFlightRequest>,
     req: QueuedRequest,
-) -> Result<(), String>
+) -> Result<(), (QueuedRequest, String)>
 where
     S: futures_util::Sink<Message, Error = tokio_tungstenite::tungstenite::Error> + Unpin,
 {
     let rpc_id = JsonRpcLiteId::Number(req.request_id as i64);
     let key = id_key(&rpc_id);
-    let wire = JsonRpcLiteRequest {
-        id: rpc_id,
-        method: req.method.clone(),
-        params: Some(req.params.clone()),
+    let wire = JsonRpcLiteRequestRef {
+        id: &rpc_id,
+        method: &req.method,
+        params: &req.params,
     };
-    let txt = serde_json::to_string(&wire).map_err(|e| format!("Serialize error: {e}"))?;
+    let txt = match serde_json::to_string(&wire) {
+        Ok(txt) => txt,
+        Err(e) => return Err((req, format!("Serialize error: {e}"))),
+    };
     let timeout_dur = req
         .timeout_ms
         .map(Duration::from_millis)
@@ -975,8 +1061,19 @@ where
         },
     );
     if let Err(err) = ws_stream.send(Message::text(txt)).await {
-        pending.remove(&key);
-        return Err(format!("WebSocket send error: {err}"));
+        let failed = pending
+            .remove(&key)
+            .expect("in-flight request was just inserted");
+        return Err((
+            QueuedRequest {
+                request_id: failed.request_id,
+                method: failed.method,
+                params: failed.params,
+                timeout_ms: failed.timeout_ms,
+                retry_on_disconnect: failed.retry_on_disconnect,
+            },
+            format!("WebSocket send error: {err}"),
+        ));
     }
     Ok(())
 }
@@ -984,12 +1081,14 @@ where
 fn dispatch_inbound_frame(
     text: &str,
     pending: &mut HashMap<String, InFlightRequest>,
+    pending_delta: &mut Option<PendingStreamDelta>,
     event_tx: &mpsc::UnboundedSender<StoreEvent>,
-    waker: &Option<rune::Waker>,
+    waker: &EventWake,
     workspace_id: &str,
 ) {
     match serde_json::from_str::<JsonRpcLiteOutbound>(text) {
         Ok(JsonRpcLiteOutbound::Response(JsonRpcLiteResponse::Success { id, result })) => {
+            flush_pending_delta(pending_delta, event_tx, waker, workspace_id);
             if let Some(in_flight) = pending.remove(&id_key(&id)) {
                 emit_event(
                     event_tx,
@@ -1004,6 +1103,7 @@ fn dispatch_inbound_frame(
             }
         }
         Ok(JsonRpcLiteOutbound::Response(JsonRpcLiteResponse::Error { id, error })) => {
+            flush_pending_delta(pending_delta, event_tx, waker, workspace_id);
             if let Some(rpc_id) = id
                 && let Some(in_flight) = pending.remove(&id_key(&rpc_id))
             {
@@ -1024,17 +1124,54 @@ fn dispatch_inbound_frame(
             }
         }
         Ok(JsonRpcLiteOutbound::Notification(notif)) => {
+            let params = notif.params.unwrap_or(Value::Null);
+            if matches!(
+                notif.method.as_str(),
+                "item/agentMessage/delta" | "item/reasoning/delta"
+            ) && let (Some(tid), Some(item_id), Some(chunk)) = (
+                params.get("threadId").and_then(Value::as_str),
+                params.get("itemId").and_then(Value::as_str),
+                params.get("delta").and_then(Value::as_str),
+            ) {
+                if let Some(existing) = pending_delta.as_mut()
+                    && existing.method == notif.method
+                    && existing.thread_id == tid
+                    && existing.item_id == item_id
+                    && let Some(Value::String(buf)) = existing.params.get_mut("delta")
+                {
+                    buf.push_str(chunk);
+                    if let Some(seq) = params.get("seq")
+                        && let Some(obj) = existing.params.as_object_mut()
+                    {
+                        obj.insert("seq".to_string(), seq.clone());
+                    }
+                    return;
+                }
+                let thread_id = tid.to_string();
+                let item_id = item_id.to_string();
+                flush_pending_delta(pending_delta, event_tx, waker, workspace_id);
+                *pending_delta = Some(PendingStreamDelta {
+                    method: notif.method,
+                    thread_id,
+                    item_id,
+                    params,
+                    flush_at: Instant::now() + STREAM_DELTA_COALESCE_WINDOW,
+                });
+                return;
+            }
+            flush_pending_delta(pending_delta, event_tx, waker, workspace_id);
             emit_event(
                 event_tx,
                 waker,
                 StoreEvent::WsNotification {
                     workspace_id: workspace_id.to_string(),
                     method: notif.method,
-                    params: notif.params.unwrap_or(Value::Null),
+                    params,
                 },
             );
         }
         Ok(JsonRpcLiteOutbound::ServerRequest(srv_req)) => {
+            flush_pending_delta(pending_delta, event_tx, waker, workspace_id);
             emit_event(
                 event_tx,
                 waker,
@@ -1047,6 +1184,7 @@ fn dispatch_inbound_frame(
             );
         }
         Err(err) => {
+            flush_pending_delta(pending_delta, event_tx, waker, workspace_id);
             emit_event(
                 event_tx,
                 waker,
@@ -1063,7 +1201,7 @@ fn requeue_or_fail_pending(
     pending: &mut HashMap<String, InFlightRequest>,
     queued: &mut VecDeque<QueuedRequest>,
     event_tx: &mpsc::UnboundedSender<StoreEvent>,
-    waker: &Option<rune::Waker>,
+    waker: &EventWake,
     workspace_id: &str,
     reason: &str,
 ) {
@@ -1101,7 +1239,7 @@ fn handle_offline_msg(
     msg: WorkspaceActorMsg,
     queued: &mut VecDeque<QueuedRequest>,
     event_tx: &mpsc::UnboundedSender<StoreEvent>,
-    waker: &Option<rune::Waker>,
+    waker: &EventWake,
     workspace_id: &str,
 ) {
     match msg {
@@ -1137,7 +1275,7 @@ fn handle_offline_msg(
 fn drain_queued_errors(
     queued: &mut VecDeque<QueuedRequest>,
     event_tx: &mpsc::UnboundedSender<StoreEvent>,
-    waker: &Option<rune::Waker>,
+    waker: &EventWake,
     workspace_id: &str,
     reason: &str,
 ) {
@@ -1165,7 +1303,7 @@ async fn should_stop_on_reconnect(
     queued: &mut VecDeque<QueuedRequest>,
     msg_rx: &mut mpsc::UnboundedReceiver<WorkspaceActorMsg>,
     event_tx: &mpsc::UnboundedSender<StoreEvent>,
-    waker: &Option<rune::Waker>,
+    waker: &EventWake,
     workspace_id: &str,
 ) -> bool {
     *reconnect_attempt = reconnect_attempt.saturating_add(1);

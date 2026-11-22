@@ -36,24 +36,28 @@ pub mod window_chrome;
 pub mod window_lifecycle;
 pub mod window_state;
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
+use base64::Engine as _;
 use cowork_config::canonicalize_sync;
 use rune::{App, AppHandle};
 use serde_json::{Map, Value, json};
 use tokio::sync::mpsc;
 
-use crate::actions::{NativeCommand, StoreEvent, TranscriptLogEntry};
+use crate::actions::{
+    ComposerInlineAttachmentPayload, ComposerInlineReadOutcome, NativeCommand, StoreEvent,
+    TranscriptLogEntry,
+};
 use crate::state::{
     AppState, DiagnosticsBundleState, NotificationTone, PersistedDesktopState,
     PrivacyTelemetrySettings,
 };
 use appearance::{AppearancePreferences, detect_system_dark};
-use apply_desktop_state::apply_desktop_state;
+use apply_desktop_state::apply_desktop_state_with_env;
 use cloud_sync::CloudSyncService;
 use crash_reporting::CrashReportingService;
 use diagnostics::{CreatedDiagnosticsBundle, DiagnosticsService, UploadedDiagnosticsBundle};
@@ -97,13 +101,16 @@ use window_state::{
 };
 
 type ShutdownLatch = Arc<(Mutex<bool>, Condvar)>;
+type WatchedExplorerScopes = Arc<Mutex<HashMap<String, (bool, HashSet<String>)>>>;
 
 const QUIT_SHUTDOWN_WAIT_TIMEOUT: Duration = Duration::from_secs(15);
 const QUIT_UPDATE_INSTALL_WAIT_TIMEOUT: Duration = Duration::from_secs(90);
 const SHUTDOWN_TELEMETRY_FLUSH_TIMEOUT: Duration = Duration::from_millis(600);
-const BOUNDS_SAMPLE_THROTTLE: Duration = Duration::from_millis(250);
+const BOUNDS_SAMPLE_THROTTLE: Duration = Duration::from_millis(1000);
+const MAX_COMPOSER_INLINE_BYTES: u64 = 10 * 1024 * 1024;
 
 static PENDING_UPDATE_INSTALL_QUIT: AtomicBool = AtomicBool::new(false);
+static APP_HANDLE_READY: AtomicBool = AtomicBool::new(false);
 
 static APP_HANDLE: OnceLock<Mutex<Option<AppHandle<AppState>>>> = OnceLock::new();
 static APP_HANDLE_NOTIFY: OnceLock<tokio::sync::Notify> = OnceLock::new();
@@ -207,8 +214,13 @@ fn app_handle_notify() -> &'static tokio::sync::Notify {
 fn store_app_handle(handle: AppHandle<AppState>) {
     let mut guard = app_handle_slot().lock().unwrap_or_else(|e| e.into_inner());
     *guard = Some(handle);
+    APP_HANDLE_READY.store(true, Ordering::Release);
     drop(guard);
     app_handle_notify().notify_one();
+}
+
+pub(crate) fn has_app_handle() -> bool {
+    APP_HANDLE_READY.load(Ordering::Acquire)
 }
 
 fn current_app_handle() -> Option<AppHandle<AppState>> {
@@ -388,6 +400,14 @@ pub fn spawn_native_worker(
     event_tx: mpsc::UnboundedSender<StoreEvent>,
     waker: Option<rune::Waker>,
 ) -> mpsc::UnboundedSender<NativeCommand> {
+    spawn_native_worker_with_wake_gate(event_tx, waker, None)
+}
+
+pub(crate) fn spawn_native_worker_with_wake_gate(
+    event_tx: mpsc::UnboundedSender<StoreEvent>,
+    waker: Option<rune::Waker>,
+    wake_pending: Option<Arc<AtomicBool>>,
+) -> mpsc::UnboundedSender<NativeCommand> {
     let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<NativeCommand>();
     store_worker_cmd_tx(cmd_tx.clone());
     let latch = Arc::new((Mutex::new(false), Condvar::new()));
@@ -412,7 +432,7 @@ pub fn spawn_native_worker(
             };
 
             rt.block_on(async move {
-                let emit = make_emitter(event_tx, waker);
+                let emit = make_emitter(event_tx, waker, wake_pending);
                 let mut runtime_ctx = NativeWorkerContext::initialize(emit.clone());
                 runtime_ctx.notifications.initialize(current_app_handle());
 
@@ -424,9 +444,9 @@ pub fn spawn_native_worker(
                     is_packaged,
                     system_dark,
                 });
-                emit(StoreEvent::TelemetryStatusChanged(
-                    runtime_ctx.compute_telemetry_status(),
-                ));
+                let initial_telemetry = runtime_ctx.compute_telemetry_status();
+                runtime_ctx.last_emitted_telemetry_status = Some(initial_telemetry.clone());
+                emit(StoreEvent::TelemetryStatusChanged(initial_telemetry));
                 emit(StoreEvent::RemoteAccessChanged(
                     runtime_ctx.remote_access.current_state(),
                 ));
@@ -531,7 +551,10 @@ async fn run_native_shutdown(runtime_ctx: &NativeWorkerContext, coordinator: &Sh
 pub fn on_shutdown(state: &mut AppState) {
     #[cfg(target_os = "macos")]
     tray::destroy_macos_tray_on_main_thread();
-    if !state.scene_mode && state.window_mode == crate::state::WindowMode::Main {
+    if !state.scene_mode
+        && state.native_ready
+        && state.window_mode == crate::state::WindowMode::Main
+    {
         state.persist_state_for_shutdown();
     }
     state.send_native(NativeCommand::Shutdown);
@@ -568,6 +591,9 @@ struct NativeWorkerContext {
     tray: QuickChatTrayController,
     last_feature_flags: HashMap<String, bool>,
     last_privacy: Option<PrivacyTelemetrySettings>,
+    last_emitted_telemetry_status: Option<Value>,
+    last_applied_workspace_roots: Vec<(String, String)>,
+    watched_explorer_scopes: WatchedExplorerScopes,
     show_hidden_files: Arc<AtomicBool>,
     last_diagnostics_bundle: Arc<Mutex<Option<DiagnosticsBundleState>>>,
     emit: Arc<dyn Fn(StoreEvent) + Send + Sync>,
@@ -750,6 +776,9 @@ impl NativeWorkerContext {
             tray,
             last_feature_flags: HashMap::new(),
             last_privacy: None,
+            last_emitted_telemetry_status: None,
+            last_applied_workspace_roots: Vec::new(),
+            watched_explorer_scopes: Arc::new(Mutex::new(HashMap::new())),
             show_hidden_files: Arc::new(AtomicBool::new(false)),
             last_diagnostics_bundle: Arc::new(Mutex::new(None)),
             emit,
@@ -770,8 +799,13 @@ impl NativeWorkerContext {
                 core.feature_flags =
                     resolve_effective_feature_flags(&core.feature_flags, &env, self.is_packaged);
                 core.product_analytics = self.product_analytics_value().or(core.product_analytics);
-                self.sync_runtime_caches(&core);
-                apply_desktop_state(
+                self.last_applied_workspace_roots = core
+                    .workspaces
+                    .iter()
+                    .map(|w| (w.id.clone(), w.path.clone()))
+                    .collect();
+                let _ = self.sync_runtime_caches_with_env(&core, &env, Some(&doc));
+                apply_desktop_state_with_env(
                     &core,
                     &self.roots,
                     &self.logger,
@@ -780,6 +814,7 @@ impl NativeWorkerContext {
                     current_app_handle().as_ref(),
                     false,
                     self.is_packaged,
+                    &env,
                 );
                 core
             }
@@ -802,8 +837,9 @@ impl NativeWorkerContext {
                 };
                 core.settings.theme = self.appearance.load_theme_preference();
                 core.product_analytics = self.product_analytics_value();
-                self.sync_runtime_caches(&core);
-                apply_desktop_state(
+                self.last_applied_workspace_roots.clear();
+                let _ = self.sync_runtime_caches_with_env(&core, &env, None);
+                apply_desktop_state_with_env(
                     &core,
                     &self.roots,
                     &self.logger,
@@ -812,22 +848,19 @@ impl NativeWorkerContext {
                     current_app_handle().as_ref(),
                     false,
                     self.is_packaged,
+                    &env,
                 );
                 core
             }
         }
     }
 
-    fn sync_runtime_caches(&mut self, state: &PersistedDesktopState) {
-        let env = cowork_config::env_map_from_process();
-        self.sync_runtime_caches_with_env(state, &env);
-    }
-
     fn sync_runtime_caches_with_env(
         &mut self,
         state: &PersistedDesktopState,
         env: &HashMap<String, String>,
-    ) {
+        cached_doc: Option<&Value>,
+    ) -> bool {
         self.last_feature_flags = state.feature_flags.clone();
         self.last_privacy = Some(state.settings.privacy_telemetry.clone());
         self.show_hidden_files
@@ -849,11 +882,17 @@ impl NativeWorkerContext {
             state.active_workspace_id.as_deref(),
             &ws_targets,
         );
-        self.sync_telemetry_services_with_env(&state.settings.privacy_telemetry, env);
-        let raw_doc = self.persistence.load_state_value().ok();
-        let _ = self
-            .cloud_sync
-            .sync_persisted_state(state, raw_doc.as_ref(), env);
+        let analytics_changed =
+            self.sync_telemetry_services_with_env(&state.settings.privacy_telemetry, env);
+        let loaded_doc;
+        let doc_ref = if !analytics_changed && let Some(doc) = cached_doc {
+            Some(doc)
+        } else {
+            loaded_doc = self.persistence.load_state_value().ok();
+            loaded_doc.as_ref()
+        };
+        let _ = self.cloud_sync.sync_persisted_state(state, doc_ref, env);
+        analytics_changed
     }
 
     fn product_analytics_value(&self) -> Option<Value> {
@@ -868,7 +907,7 @@ impl NativeWorkerContext {
         &self,
         privacy: &PrivacyTelemetrySettings,
         env: &HashMap<String, String>,
-    ) {
+    ) -> bool {
         let approved = self.approved_roots_snapshot();
         self.crash_reporting.reconfigure(privacy, approved, env);
         let before = self.product_analytics.persisted_state();
@@ -877,18 +916,29 @@ impl NativeWorkerContext {
         let after = self.product_analytics.persisted_state();
         self.server_manager
             .set_product_analytics_state(after.clone());
-        if after != before {
+        let changed = after != before;
+        if changed {
             (self.emit)(StoreEvent::ProductAnalyticsStateUpdated(
                 self.product_analytics_value(),
             ));
         }
+        changed
     }
 
+    #[cfg(test)]
     fn save_persisted_state_with_env(
         &mut self,
         snapshot: &PersistedDesktopState,
         env: &HashMap<String, String>,
     ) -> PersistedDesktopState {
+        self.save_persisted_state_with_env_and_doc(snapshot, env).0
+    }
+
+    fn save_persisted_state_with_env_and_doc(
+        &mut self,
+        snapshot: &PersistedDesktopState,
+        env: &HashMap<String, String>,
+    ) -> (PersistedDesktopState, Option<Value>) {
         // Persist user/core state first (keeping the live analytics IDs if the UI snapshot is older),
         // then reconfigure telemetry services so newly generated `anonymousInstallationId` values
         // written by `reconfigure` are never clobbered by the pre-reconfigure snapshot.
@@ -897,14 +947,15 @@ impl NativeWorkerContext {
             snapshot_to_save.product_analytics = Some(current_analytics);
         }
         let mut runtime_snapshot = snapshot.clone();
-        match self
+        let saved_doc = match self
             .persistence
             .merge_and_save_core_snapshot(&snapshot_to_save)
         {
-            Ok(saved_doc) => {
-                let saved_core = persistence::core_state_from_document(&saved_doc);
+            Ok(doc) => {
+                let saved_core = persistence::core_state_from_document(&doc);
                 runtime_snapshot.workspaces = saved_core.workspaces;
                 runtime_snapshot.workspace_order = saved_core.workspace_order;
+                Some(doc)
             }
             Err(err) => {
                 let meta = json!({ "error": err.to_string() });
@@ -915,13 +966,16 @@ impl NativeWorkerContext {
                     "failed to persist desktop snapshot",
                     Some(&meta),
                 );
+                None
             }
-        }
+        };
 
         runtime_snapshot.feature_flags =
             resolve_effective_feature_flags(&snapshot.feature_flags, env, self.is_packaged);
-        self.sync_runtime_caches_with_env(&runtime_snapshot, env);
-        runtime_snapshot
+        let analytics_changed =
+            self.sync_runtime_caches_with_env(&runtime_snapshot, env, saved_doc.as_ref());
+        let reusable_doc = (!analytics_changed).then_some(saved_doc).flatten();
+        (runtime_snapshot, reusable_doc)
     }
 
     fn server_feature_flags(&self) -> WorkspaceServerFeatureFlags {
@@ -930,23 +984,31 @@ impl NativeWorkerContext {
 
     fn compute_telemetry_status(&self) -> Value {
         let env = cowork_config::env_map_from_process();
-        self.compute_telemetry_status_with_env(&env)
+        self.compute_telemetry_status_with_env_and_doc(&env, None)
     }
 
-    fn compute_telemetry_status_with_env(&self, env: &HashMap<String, String>) -> Value {
+    fn compute_telemetry_status_with_env_and_doc(
+        &self,
+        env: &HashMap<String, String>,
+        cached_doc: Option<&Value>,
+    ) -> Value {
         let mut snapshot = PersistedDesktopState::default();
         if let Some(ref privacy) = self.last_privacy {
             snapshot.settings.privacy_telemetry = privacy.clone();
         }
-        let raw_doc = self.persistence.load_state_value().ok();
-        let cloud_status = self.cloud_sync.status_for_env(
-            &snapshot.settings.privacy_telemetry,
-            raw_doc.as_ref(),
-            env,
-        );
+        let loaded_doc;
+        let doc_ref = if let Some(doc) = cached_doc {
+            Some(doc)
+        } else {
+            loaded_doc = self.persistence.load_state_value().ok();
+            loaded_doc.as_ref()
+        };
+        let cloud_status =
+            self.cloud_sync
+                .status_for_env(&snapshot.settings.privacy_telemetry, doc_ref, env);
         resolve_desktop_telemetry_status_with_runtime(
             &snapshot,
-            raw_doc.as_ref(),
+            doc_ref,
             env,
             self.is_packaged,
             Some(&cloud_status),
@@ -1084,8 +1146,11 @@ impl NativeWorkerContext {
                 // Watch workspace files to keep explorer listings synchronized on external edits.
                 let emit_watch = self.emit.clone();
                 let watch_roots = vec![authorized_path.clone()];
+                let watch_root_raw = authorized_path.clone();
                 let watch_root_canonical = canonicalize_sync(&authorized_path);
                 let show_hidden = self.show_hidden_files.clone();
+                let watch_scopes = Arc::clone(&self.watched_explorer_scopes);
+                let tokio_rt = tokio::runtime::Handle::current();
                 let watch_ws_id = workspace_id.clone();
                 let _ = self
                     .watcher
@@ -1096,24 +1161,66 @@ impl NativeWorkerContext {
                             if batch.kind == WatchChangeKind::Error {
                                 return;
                             }
-                            let include_hidden = show_hidden.load(Ordering::Acquire);
-                            for dir in batch.affected_dirs {
-                                if let Ok(entries) =
-                                    list_workspace_directory(&watch_roots, &dir, include_hidden)
-                                {
-                                    let dir_key = if canonicalize_sync(&dir) == watch_root_canonical
-                                    {
-                                        ".".to_string()
-                                    } else {
-                                        dir.to_string_lossy().into_owned()
-                                    };
-                                    emit_watch(StoreEvent::WorkspaceFilesListed {
-                                        workspace_id: batch.workspace_id.clone(),
-                                        dir: dir_key,
-                                        entries,
-                                    });
+                            let dirs_to_list: Vec<(PathBuf, String)> = {
+                                let scopes = watch_scopes.lock().unwrap_or_else(|e| e.into_inner());
+                                match scopes.get(&batch.workspace_id) {
+                                    Some((false, _)) => return,
+                                    Some((true, expanded)) => batch
+                                        .affected_dirs
+                                        .into_iter()
+                                        .filter_map(|dir| {
+                                            let key = normalize_relative_watch_path(
+                                                &watch_root_canonical,
+                                                &watch_root_raw,
+                                                &dir,
+                                            );
+                                            (key == "." || expanded.contains(&key))
+                                                .then_some((dir, key))
+                                        })
+                                        .collect(),
+                                    None => batch
+                                        .affected_dirs
+                                        .into_iter()
+                                        .filter_map(|dir| {
+                                            let key = normalize_relative_watch_path(
+                                                &watch_root_canonical,
+                                                &watch_root_raw,
+                                                &dir,
+                                            );
+                                            (key == ".").then_some((dir, key))
+                                        })
+                                        .collect(),
                                 }
+                            };
+                            if dirs_to_list.is_empty() {
+                                return;
                             }
+                            let include_hidden = show_hidden.load(Ordering::Acquire);
+                            let watch_roots = watch_roots.clone();
+                            let watch_root_canonical = watch_root_canonical.clone();
+                            let watch_root_raw = watch_root_raw.clone();
+                            let emit_watch = emit_watch.clone();
+                            let ws_id = batch.workspace_id;
+                            tokio_rt.spawn_blocking(move || {
+                                for (dir, dir_key) in dirs_to_list {
+                                    if let Ok(mut entries) =
+                                        list_workspace_directory(&watch_roots, &dir, include_hidden)
+                                    {
+                                        for entry in &mut entries {
+                                            entry.path = normalize_relative_watch_path(
+                                                &watch_root_canonical,
+                                                &watch_root_raw,
+                                                Path::new(&entry.path),
+                                            );
+                                        }
+                                        emit_watch(StoreEvent::WorkspaceFilesListed {
+                                            workspace_id: ws_id.clone(),
+                                            dir: dir_key,
+                                            entries,
+                                        });
+                                    }
+                                }
+                            });
                         }),
                     )
                     .await;
@@ -1200,6 +1307,10 @@ impl NativeWorkerContext {
                 });
             }
             NativeCommand::StopWorkspaceServer { workspace_id } => {
+                self.watched_explorer_scopes
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .remove(&workspace_id);
                 let root = {
                     let guard = self.roots.lock().unwrap_or_else(|e| e.into_inner());
                     guard
@@ -1230,20 +1341,34 @@ impl NativeWorkerContext {
             }
             NativeCommand::SavePersistedState(snapshot) => {
                 let env = cowork_config::env_map_from_process();
-                let runtime_snapshot = self.save_persisted_state_with_env(&snapshot, &env);
-                apply_desktop_state(
+                let (runtime_snapshot, saved_doc) =
+                    self.save_persisted_state_with_env_and_doc(&snapshot, &env);
+                let next_roots: Vec<(String, String)> = runtime_snapshot
+                    .workspaces
+                    .iter()
+                    .map(|w| (w.id.clone(), w.path.clone()))
+                    .collect();
+                let roots_changed = next_roots != self.last_applied_workspace_roots;
+                if roots_changed {
+                    self.last_applied_workspace_roots = next_roots;
+                }
+                apply_desktop_state_with_env(
                     &runtime_snapshot,
                     &self.roots,
                     &self.logger,
                     &self.appearance,
                     &self.tray,
                     current_app_handle().as_ref(),
-                    true,
+                    roots_changed,
                     self.is_packaged,
+                    &env,
                 );
-                (self.emit)(StoreEvent::TelemetryStatusChanged(
-                    self.compute_telemetry_status_with_env(&env),
-                ));
+                let telemetry =
+                    self.compute_telemetry_status_with_env_and_doc(&env, saved_doc.as_ref());
+                if self.last_emitted_telemetry_status.as_ref() != Some(&telemetry) {
+                    self.last_emitted_telemetry_status = Some(telemetry.clone());
+                    (self.emit)(StoreEvent::TelemetryStatusChanged(telemetry));
+                }
             }
             NativeCommand::PickFolder { request_id } => {
                 self.dispatch_pick_folder(request_id);
@@ -1325,6 +1450,81 @@ impl NativeWorkerContext {
                         result: staged,
                     });
                 });
+            }
+            NativeCommand::ReadComposerInlineAttachment {
+                key,
+                path,
+                filename,
+                mime_type,
+            } => {
+                let emit = self.emit.clone();
+                tokio::spawn(async move {
+                    let filename_for_task = filename.clone();
+                    let mime_for_task = mime_type.clone();
+                    let outcome = tokio::task::spawn_blocking(
+                        move || -> Result<ComposerInlineReadOutcome, String> {
+                            let meta = std::fs::symlink_metadata(&path).map_err(|err| {
+                                format!("Unable to read \"{filename_for_task}\": {err}")
+                            })?;
+                            if meta.file_type().is_symlink() || !meta.is_file() {
+                                return Err(format!(
+                                    "\"{filename_for_task}\" must be a regular file (not a folder or symlink)."
+                                ));
+                            }
+                            if meta.len() > MAX_COMPOSER_INLINE_BYTES {
+                                return Ok(ComposerInlineReadOutcome::ExceedsInlineLimit {
+                                    source_path: path,
+                                });
+                            }
+                            let bytes = std::fs::read(&path).map_err(|err| {
+                                format!("Unable to read \"{filename_for_task}\": {err}")
+                            })?;
+                            let content_base64 =
+                                base64::engine::general_purpose::STANDARD.encode(&bytes);
+                            let (data_url, width, height) = if mime_for_task.starts_with("image/") {
+                                let (w, h) = crate::state::probe_image_dimensions(&bytes)
+                                    .map(|(w, h)| (Some(w), Some(h)))
+                                    .unwrap_or((None, None));
+                                (
+                                    Some(format!("data:{mime_for_task};base64,{content_base64}")),
+                                    w,
+                                    h,
+                                )
+                            } else {
+                                (None, None, None)
+                            };
+                            Ok(ComposerInlineReadOutcome::Inline(
+                                ComposerInlineAttachmentPayload {
+                                    content_base64,
+                                    data_url,
+                                    width,
+                                    height,
+                                },
+                            ))
+                        },
+                    )
+                    .await
+                    .unwrap_or_else(|err| {
+                        Err(format!("Attachment reader worker panicked: {err}"))
+                    });
+                    emit(StoreEvent::ComposerInlineAttachmentLoaded {
+                        key,
+                        filename,
+                        mime_type,
+                        result: outcome,
+                    });
+                });
+            }
+            NativeCommand::SetWatchedExplorerScope {
+                workspace_id,
+                visible,
+                expanded_dirs,
+            } => {
+                let mut scopes = self
+                    .watched_explorer_scopes
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                scopes.insert(workspace_id, (visible, expanded_dirs.into_iter().collect()));
             }
             NativeCommand::ListWorkspaceFiles {
                 request_id: _,
@@ -1629,9 +1829,9 @@ impl NativeWorkerContext {
                 }
             }
             NativeCommand::RefreshTelemetryStatus => {
-                (self.emit)(StoreEvent::TelemetryStatusChanged(
-                    self.compute_telemetry_status(),
-                ));
+                let telemetry = self.compute_telemetry_status();
+                self.last_emitted_telemetry_status = Some(telemetry.clone());
+                (self.emit)(StoreEvent::TelemetryStatusChanged(telemetry));
             }
             NativeCommand::SetRemoteAccessEnabled(enabled) => {
                 let remote = self.remote_access.clone();
@@ -2030,13 +2230,47 @@ fn authorize_picked_files(
 fn make_emitter(
     event_tx: mpsc::UnboundedSender<StoreEvent>,
     waker: Option<rune::Waker>,
+    wake_pending: Option<Arc<AtomicBool>>,
 ) -> Arc<dyn Fn(StoreEvent) + Send + Sync> {
     Arc::new(move |event| {
         let _ = event_tx.send(event);
-        if let Some(ref w) = waker {
+        if let Some(ref w) = waker
+            && wake_pending
+                .as_ref()
+                .is_none_or(|flag| !flag.swap(true, Ordering::AcqRel))
+        {
             (w)();
         }
     })
+}
+
+fn normalize_relative_watch_path(root_canonical: &Path, root_raw: &Path, path: &Path) -> String {
+    let stripped = path
+        .strip_prefix(root_canonical)
+        .or_else(|_| path.strip_prefix(root_raw))
+        .ok()
+        .map(Path::to_path_buf)
+        .or_else(|| {
+            let canon = canonicalize_sync(path);
+            canon
+                .strip_prefix(root_canonical)
+                .ok()
+                .map(Path::to_path_buf)
+        });
+    let Some(rel) = stripped else {
+        return path.to_string_lossy().into_owned();
+    };
+    let cleaned = rel.to_string_lossy().replace('\\', "/");
+    let mut trimmed = cleaned.trim();
+    while let Some(rest) = trimmed.strip_prefix("./") {
+        trimmed = rest;
+    }
+    trimmed = trimmed.trim_end_matches('/');
+    if trimmed.is_empty() || trimmed == "." {
+        ".".to_string()
+    } else {
+        trimmed.to_string()
+    }
 }
 
 /// Resolves the compile-time desktop app version, preferring `COWORK_APP_VERSION` over the

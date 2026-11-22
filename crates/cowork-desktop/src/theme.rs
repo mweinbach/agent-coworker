@@ -4,6 +4,8 @@
 //! `apps/desktop/src/styles/tokens/platform.css`, and
 //! `apps/desktop/src/styles/tokens/theme-bridge.css`.
 
+use std::cell::RefCell;
+
 use rune::{Color, TextStyle};
 use rune_kit::{Kit, PaletteSeed};
 use serde::{Deserialize, Serialize};
@@ -312,8 +314,63 @@ fn build_accent_set(seed: AccentSeed) -> AccentTokenSet {
     }
 }
 
+const fn accent_palette_index(palette: AccentPalette) -> usize {
+    match palette {
+        AccentPalette::KhakiSand => 0,
+        AccentPalette::OchreAmber => 1,
+        AccentPalette::BurntOrange => 2,
+    }
+}
+
+const fn accent_cache_index(palette: AccentPalette, dark: bool, high_contrast: bool) -> usize {
+    accent_palette_index(palette) * 4 + (dark as usize) * 2 + (high_contrast as usize)
+}
+
+const fn base_tokens_cache_index(dark: bool, palette: AccentPalette) -> usize {
+    accent_palette_index(palette) * 2 + (dark as usize)
+}
+
+const fn resolved_cache_index(
+    dark: bool,
+    reduced_transparency: bool,
+    high_contrast: bool,
+    palette: AccentPalette,
+) -> usize {
+    accent_palette_index(palette) * 8
+        + (dark as usize) * 4
+        + (reduced_transparency as usize) * 2
+        + (high_contrast as usize)
+}
+
+thread_local! {
+    static ACCENT_TOKENS_CACHE: RefCell<[Option<AccentTokenSet>; 12]> =
+        const { RefCell::new([None; 12]) };
+    static BASE_TOKENS_CACHE: RefCell<[Option<ThemeTokens>; 6]> =
+        const { RefCell::new([None; 6]) };
+    static RESOLVED_TOKENS_CACHE: RefCell<[Option<ThemeTokens>; 24]> =
+        const { RefCell::new([None; 24]) };
+    static KIT_CACHE: RefCell<[Option<(Kit, ThemeTokens)>; 24]> =
+        const { RefCell::new([const { None }; 24]) };
+}
+
 /// Resolves the named [`AccentTokenSet`] for a palette, appearance mode, and high-contrast setting.
 pub fn accent_tokens(palette: AccentPalette, dark: bool, high_contrast: bool) -> AccentTokenSet {
+    let idx = accent_cache_index(palette, dark, high_contrast);
+    ACCENT_TOKENS_CACHE.with(|cell| {
+        if let Some(cached) = cell.borrow()[idx] {
+            return cached;
+        }
+        let computed = accent_tokens_uncached(palette, dark, high_contrast);
+        cell.borrow_mut()[idx] = Some(computed);
+        computed
+    })
+}
+
+fn accent_tokens_uncached(
+    palette: AccentPalette,
+    dark: bool,
+    high_contrast: bool,
+) -> AccentTokenSet {
     let h = if high_contrast { 0.14 } else { 0.12 };
     let p = if high_contrast { 0.24 } else { 0.22 };
     // Filled CTA/Send surfaces always pair with white ink so dark-mode disabled Contrast buttons
@@ -517,6 +574,18 @@ pub fn tokens(dark: bool) -> ThemeTokens {
 
 /// Returns Cowork's semantic tokens for light or dark appearance with the chosen accent palette.
 pub fn tokens_with_accent(dark: bool, accent_palette: AccentPalette) -> ThemeTokens {
+    let idx = base_tokens_cache_index(dark, accent_palette);
+    BASE_TOKENS_CACHE.with(|cell| {
+        if let Some(cached) = cell.borrow()[idx] {
+            return cached;
+        }
+        let computed = tokens_with_accent_uncached(dark, accent_palette);
+        cell.borrow_mut()[idx] = Some(computed);
+        computed
+    })
+}
+
+fn tokens_with_accent_uncached(dark: bool, accent_palette: AccentPalette) -> ThemeTokens {
     let search_badges = [
         srgb(0xa8, 0x38, 0xff), // purple
         srgb(0x00, 0x7a, 0xff), // blue
@@ -668,6 +737,28 @@ pub fn resolve_tokens_with_accent(
     high_contrast: bool,
     accent_palette: AccentPalette,
 ) -> ThemeTokens {
+    let idx = resolved_cache_index(dark, reduced_transparency, high_contrast, accent_palette);
+    RESOLVED_TOKENS_CACHE.with(|cell| {
+        if let Some(cached) = cell.borrow()[idx] {
+            return cached;
+        }
+        let computed = resolve_tokens_with_accent_uncached(
+            dark,
+            reduced_transparency,
+            high_contrast,
+            accent_palette,
+        );
+        cell.borrow_mut()[idx] = Some(computed);
+        computed
+    })
+}
+
+fn resolve_tokens_with_accent_uncached(
+    dark: bool,
+    reduced_transparency: bool,
+    high_contrast: bool,
+    accent_palette: AccentPalette,
+) -> ThemeTokens {
     let mut tok = tokens_with_accent(dark, accent_palette);
     if high_contrast {
         apply_accent_set(&mut tok, accent_tokens(accent_palette, dark, true));
@@ -714,6 +805,47 @@ pub fn build_kit(
         high_contrast,
         AccentPalette::default(),
     )
+}
+
+/// Borrows a cached `(Kit, ThemeTokens)` pair for the active theme combination, avoiding
+/// per-commit `Kit::from_palette` and shadow `Vec` allocations on the UI thread.
+pub(crate) fn with_cached_kit_with_accent<R>(
+    dark: bool,
+    reduced_transparency: bool,
+    high_contrast: bool,
+    accent_palette: AccentPalette,
+    f: impl FnOnce(&Kit, &ThemeTokens) -> R,
+) -> R {
+    let idx = resolved_cache_index(dark, reduced_transparency, high_contrast, accent_palette);
+    KIT_CACHE.with(|cell| {
+        let needs_init = cell
+            .try_borrow()
+            .map(|cache| cache[idx].is_none())
+            .unwrap_or(true);
+        if needs_init {
+            if let Ok(mut cache) = cell.try_borrow_mut() {
+                if cache[idx].is_none() {
+                    cache[idx] = Some(build_kit_with_accent(
+                        dark,
+                        reduced_transparency,
+                        high_contrast,
+                        accent_palette,
+                    ));
+                }
+            } else {
+                let (kit, tok) = build_kit_with_accent(
+                    dark,
+                    reduced_transparency,
+                    high_contrast,
+                    accent_palette,
+                );
+                return f(&kit, &tok);
+            }
+        }
+        let cache = cell.borrow();
+        let (kit, tok) = cache[idx].as_ref().expect("kit cache slot populated");
+        f(kit, tok)
+    })
 }
 
 /// Builds a `rune_kit::Kit` configured with Cowork's semantic palette, typography, radii, and

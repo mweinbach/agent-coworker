@@ -1035,7 +1035,11 @@ pub fn install_application_menus(app: App<AppState>) -> App<AppState> {
 /// relevant `AppState` fields change. No-op on non-macOS, headless `--scene` runs, secondary
 /// windows (`window_mode != WindowMode::Main`), or unchanged snapshots.
 pub fn sync_application_menu(state: &AppState) {
-    if !cfg!(target_os = "macos") || state.scene_mode || state.window_mode != WindowMode::Main {
+    if !cfg!(target_os = "macos")
+        || state.scene_mode
+        || state.window_mode != WindowMode::Main
+        || !super::has_app_handle()
+    {
         return;
     }
 

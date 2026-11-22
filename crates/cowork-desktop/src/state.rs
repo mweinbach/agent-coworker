@@ -6,8 +6,11 @@
 //! `ws/` and `native/` tasks push `StoreEvent` values and wake Rune's event loop so
 //! `AppState::drain_events` reduces them on the UI thread.
 
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use base64::Engine as _;
 use cowork_protocol::{
@@ -37,8 +40,8 @@ use serde_json::{Map, Value, json};
 use tokio::sync::mpsc;
 
 use crate::actions::{
-    Action, ChatAction, NativeAction, NativeCommand, NavAction, SettingsAction, ShellAction,
-    SidebarSectionKey, StoreEvent, TaskAction, TranscriptLogEntry,
+    Action, ChatAction, ComposerInlineReadOutcome, NativeAction, NativeCommand, NavAction,
+    SettingsAction, ShellAction, SidebarSectionKey, StoreEvent, TaskAction, TranscriptLogEntry,
 };
 use crate::router::{
     NavigationHistory, NavigationPatch, NavigationSnapshot, SettingsPageId, ViewId,
@@ -142,6 +145,8 @@ pub const MAX_UI_SCALE: f32 = 2.5;
 pub const UI_SCALE_STEP: f32 = 0.1;
 pub const CANVAS_AUTOSAVE_DEBOUNCE_SECS: f64 = 0.6;
 pub const CANVAS_REVISION_POLL_SECS: f64 = 1.5;
+const CANVAS_LIVE_REVISION_POLL_SECS: f64 = 15.0;
+const PERSIST_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(350);
 
 /// Pending OS window command executed on the Rune UI thread via `WINDOW_HUB`.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -711,7 +716,7 @@ pub struct ChatViewReadOnlyNotice {
 }
 
 /// Live runtime state per thread.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadRuntime {
     pub hydrated: bool,
@@ -726,6 +731,10 @@ pub struct ThreadRuntime {
     pub composer_submission: Option<ComposerSubmissionState>,
     pub attachment_ingesting: bool,
     pub feed: Vec<FeedItem>,
+    #[serde(skip)]
+    pub feed_rev: u64,
+    #[serde(skip)]
+    pub item_revs: Vec<u64>,
     pub pending_interactions: Vec<ChatInteraction>,
     #[serde(default)]
     pub interaction_errors: HashMap<String, String>,
@@ -748,12 +757,132 @@ pub struct ThreadRuntime {
     pub last_event_seq: u64,
 }
 
+impl PartialEq for ThreadRuntime {
+    fn eq(&self, other: &Self) -> bool {
+        self.hydrated == other.hydrated
+            && self.hydrating == other.hydrating
+            && self.transcript_only == other.transcript_only
+            && self.streaming == other.streaming
+            && self.active_turn_id == other.active_turn_id
+            && self.pending_turn_count == other.pending_turn_count
+            && self.pending_steer == other.pending_steer
+            && self.composer_submission == other.composer_submission
+            && self.attachment_ingesting == other.attachment_ingesting
+            && self.feed == other.feed
+            && self.pending_interactions == other.pending_interactions
+            && self.interaction_errors == other.interaction_errors
+            && self.agents == other.agents
+            && self.agent_run_feeds == other.agent_run_feeds
+            && self.todos == other.todos
+            && self.workflow_runs == other.workflow_runs
+            && self.unread == other.unread
+            && self.usage == other.usage
+            && self.last_turn_usage == other.last_turn_usage
+            && self.usage_hard_cap == other.usage_hard_cap
+            && self.usage_hard_cap_reached == other.usage_hard_cap_reached
+            && self.transcript_delivery_failure == other.transcript_delivery_failure
+            && self.source_task == other.source_task
+            && self.read_only_notice == other.read_only_notice
+            && self.last_error == other.last_error
+            && self.last_event_seq == other.last_event_seq
+    }
+}
+
 impl ThreadRuntime {
     pub fn sending_composer_message(&self) -> bool {
         matches!(
             self.composer_submission.as_ref().map(|s| &s.status),
             Some(ComposerSubmissionStatus::Sending(_))
         )
+    }
+
+    fn next_feed_rev(&mut self) -> u64 {
+        self.feed_rev = self.feed_rev.wrapping_add(1).max(1);
+        self.feed_rev
+    }
+
+    fn align_item_revs(&mut self) {
+        if self.item_revs.len() != self.feed.len() {
+            let rev = if self.feed_rev == 0 {
+                self.next_feed_rev()
+            } else {
+                self.feed_rev
+            };
+            self.item_revs.resize(self.feed.len(), rev);
+        }
+    }
+
+    pub(crate) fn push_feed_item(&mut self, item: FeedItem) {
+        self.align_item_revs();
+        let rev = self.next_feed_rev();
+        self.feed.push(item);
+        self.item_revs.push(rev);
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn insert_feed_item(&mut self, index: usize, item: FeedItem) {
+        self.align_item_revs();
+        let rev = self.next_feed_rev();
+        self.feed.insert(index, item);
+        self.item_revs.insert(index, rev);
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn remove_feed_item(&mut self, index: usize) -> FeedItem {
+        self.align_item_revs();
+        let _ = self.next_feed_rev();
+        self.item_revs.remove(index);
+        self.feed.remove(index)
+    }
+
+    pub(crate) fn retain_feed<F: FnMut(&FeedItem) -> bool>(&mut self, mut keep: F) {
+        self.align_item_revs();
+        let before = self.feed.len();
+        let mut idx = 0usize;
+        let mut kept_revs = Vec::with_capacity(self.item_revs.len());
+        self.feed.retain(|item| {
+            let k = keep(item);
+            if k {
+                kept_revs.push(self.item_revs[idx]);
+            }
+            idx += 1;
+            k
+        });
+        self.item_revs = kept_revs;
+        if self.feed.len() != before {
+            let _ = self.next_feed_rev();
+        }
+    }
+
+    pub(crate) fn clear_feed(&mut self) {
+        if !self.feed.is_empty() || !self.item_revs.is_empty() {
+            self.feed.clear();
+            self.item_revs.clear();
+            let _ = self.next_feed_rev();
+        }
+    }
+
+    pub(crate) fn replace_feed(&mut self, next: Vec<FeedItem>) {
+        let rev = self.next_feed_rev();
+        let len = next.len();
+        self.feed = next;
+        self.item_revs.clear();
+        self.item_revs.resize(len, rev);
+    }
+
+    pub(crate) fn bump_feed_item(&mut self, index: usize) {
+        self.align_item_revs();
+        let rev = self.next_feed_rev();
+        if let Some(slot) = self.item_revs.get_mut(index) {
+            *slot = rev;
+        }
+    }
+
+    pub(crate) fn sync_item_revs(&mut self) {
+        let rev = self.next_feed_rev();
+        let len = self.feed.len();
+        self.item_revs.clear();
+        self.item_revs.resize(len, rev);
     }
 }
 
@@ -1705,6 +1834,9 @@ pub fn resolve_feature_flags(
 /// Non-serialized service handles for background workers and test capture.
 pub struct AppServices {
     pub waker: Option<rune::Waker>,
+    pub(crate) poll_waker: Option<rune::Waker>,
+    pub(crate) wake_pending: Option<Arc<AtomicBool>>,
+    pub(crate) async_render_dirty: Option<Arc<AtomicBool>>,
     pub event_tx: mpsc::UnboundedSender<StoreEvent>,
     pub event_rx: mpsc::UnboundedReceiver<StoreEvent>,
     pub ws_tx: Option<mpsc::UnboundedSender<WsCommand>>,
@@ -1723,6 +1855,9 @@ impl Default for AppServices {
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         Self {
             waker: None,
+            poll_waker: None,
+            wake_pending: None,
+            async_render_dirty: None,
             event_tx,
             event_rx,
             ws_tx: None,
@@ -1886,9 +2021,19 @@ pub struct AppState {
     pub(crate) pending_upload_stages_by_key: HashMap<String, usize>,
     pub(crate) persisted_active_thread_id: Option<String>,
     pub(crate) rekeyed_thread_ids: HashMap<String, String>,
+    pub rekeyed_gen: u64,
+    pub last_reconciled_rekeyed_gen: u64,
     pub(crate) latest_creation_preflight_rpc_id: Option<u64>,
     pub(crate) notified_task_input_ids: HashSet<String>,
     pub(crate) shared_dirty: bool,
+    pub threads_rev: u64,
+    pub workspaces_rev: u64,
+    pub explorer_rev: u64,
+    pub settings_rev: u64,
+    pub skills_rev: u64,
+    pub provider_catalog_rev: u64,
+    pub workspace_canonical_root_by_id: HashMap<String, (String, String)>,
+    pub persist_dirty_since: Option<std::time::Instant>,
 }
 
 impl Default for AppState {
@@ -2042,9 +2187,19 @@ impl Default for AppState {
             pending_upload_stages_by_key: HashMap::new(),
             persisted_active_thread_id: None,
             rekeyed_thread_ids: HashMap::new(),
+            rekeyed_gen: 0,
+            last_reconciled_rekeyed_gen: 0,
             latest_creation_preflight_rpc_id: None,
             notified_task_input_ids: HashSet::new(),
             shared_dirty: false,
+            threads_rev: 0,
+            workspaces_rev: 0,
+            explorer_rev: 0,
+            settings_rev: 0,
+            skills_rev: 0,
+            provider_catalog_rev: 0,
+            workspace_canonical_root_by_id: HashMap::new(),
+            persist_dirty_since: None,
         }
     }
 }
@@ -2073,17 +2228,104 @@ impl AppState {
             .map(Vec::as_slice)
     }
 
-    fn normalize_explorer_path(&self, workspace_id: &str, raw: &str) -> String {
-        fn clean_slashes(s: &str) -> String {
-            let replaced = s.trim().replace('\\', "/");
-            if replaced.len() > 1 {
-                replaced.trim_end_matches('/').to_string()
-            } else {
-                replaced
+    fn clean_explorer_slashes(s: &str) -> String {
+        let replaced = s.trim().replace('\\', "/");
+        if replaced.len() > 1 {
+            replaced.trim_end_matches('/').to_string()
+        } else {
+            replaced
+        }
+    }
+
+    fn bump_threads_rev(&mut self) {
+        self.threads_rev = self.threads_rev.wrapping_add(1);
+    }
+
+    fn bump_workspaces_rev(&mut self) {
+        self.workspaces_rev = self.workspaces_rev.wrapping_add(1);
+        self.refresh_workspace_canonical_roots();
+    }
+
+    fn bump_explorer_rev(&mut self) {
+        self.explorer_rev = self.explorer_rev.wrapping_add(1);
+    }
+
+    fn bump_settings_rev(&mut self) {
+        self.settings_rev = self.settings_rev.wrapping_add(1);
+    }
+
+    fn bump_skills_rev(&mut self) {
+        self.skills_rev = self.skills_rev.wrapping_add(1);
+    }
+
+    fn bump_provider_catalog_rev(&mut self) {
+        self.provider_catalog_rev = self.provider_catalog_rev.wrapping_add(1);
+    }
+
+    fn refresh_workspace_canonical_roots(&mut self) {
+        let active_ids: HashSet<&str> = self.workspaces.iter().map(|w| w.id.as_str()).collect();
+        self.workspace_canonical_root_by_id
+            .retain(|id, _| active_ids.contains(id.as_str()));
+        for ws in &self.workspaces {
+            let needs_update = self
+                .workspace_canonical_root_by_id
+                .get(&ws.id)
+                .is_none_or(|(raw, _)| raw != &ws.path);
+            if needs_update {
+                let canon_clean = std::fs::canonicalize(&ws.path)
+                    .ok()
+                    .map(|canon| {
+                        let lossy = canon.to_string_lossy();
+                        let no_unc = lossy.strip_prefix(r"\\?\").unwrap_or(&lossy);
+                        Self::clean_explorer_slashes(no_unc)
+                    })
+                    .unwrap_or_else(|| Self::clean_explorer_slashes(&ws.path));
+                self.workspace_canonical_root_by_id
+                    .insert(ws.id.clone(), (ws.path.clone(), canon_clean));
             }
         }
+    }
 
-        let clean = clean_slashes(raw);
+    fn sync_watched_explorer_scope(&mut self) {
+        if self.services.native_tx.is_none() {
+            return;
+        }
+        let Some(ws_id) = self.active_workspace_id.clone() else {
+            return;
+        };
+        let visible = self.context_sidebar.is_open() || self.shell_ui.right_overlay_open;
+        let prefix = format!("{ws_id}::");
+        let expanded_dirs: Vec<String> = self
+            .explorer_expanded_dirs
+            .iter()
+            .filter_map(|key| key.strip_prefix(&prefix))
+            .map(|dir| self.normalize_explorer_path(&ws_id, dir))
+            .collect();
+        self.send_native(NativeCommand::SetWatchedExplorerScope {
+            workspace_id: ws_id,
+            visible,
+            expanded_dirs,
+        });
+    }
+
+    fn normalize_explorer_path(&self, workspace_id: &str, raw: &str) -> String {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() || trimmed == "." || trimmed == "./" {
+            return ".".to_string();
+        }
+        // Fast path for already-normalized relative paths (avoids slash-replace & root lookups).
+        let looks_absolute = trimmed.starts_with('/')
+            || trimmed.starts_with('\\')
+            || trimmed.as_bytes().get(1) == Some(&b':');
+        if !looks_absolute
+            && !trimmed.contains('\\')
+            && !trimmed.starts_with("./")
+            && !trimmed.ends_with('/')
+        {
+            return trimmed.to_string();
+        }
+
+        let clean = Self::clean_explorer_slashes(trimmed);
         if clean.is_empty() || clean == "." || clean == "./" {
             return ".".to_string();
         }
@@ -2091,16 +2333,25 @@ impl AppState {
         let mut stripped: &str = &clean;
         let mut owned_relative: Option<String> = None;
         if let Some(root) = self.workspace_path(workspace_id) {
-            let mut candidates = vec![clean_slashes(&root)];
-            if let Ok(canon) = std::fs::canonicalize(&root) {
-                let lossy = canon.to_string_lossy();
-                let no_unc = lossy.strip_prefix(r"\\?\").unwrap_or(&lossy);
-                let canon_clean = clean_slashes(no_unc);
-                if !candidates.contains(&canon_clean) {
-                    candidates.push(canon_clean);
-                }
-            }
-            for prefix in candidates {
+            let raw_clean = Self::clean_explorer_slashes(&root);
+            let cached_canon = self
+                .workspace_canonical_root_by_id
+                .get(workspace_id)
+                .filter(|(cached_raw, _)| cached_raw == &root)
+                .map(|(_, canon)| canon.as_str());
+            let fallback_canon;
+            let canon_str = if let Some(c) = cached_canon {
+                Some(c)
+            } else {
+                fallback_canon = std::fs::canonicalize(&root).ok().map(|canon| {
+                    let lossy = canon.to_string_lossy();
+                    let no_unc = lossy.strip_prefix(r"\\?\").unwrap_or(&lossy);
+                    Self::clean_explorer_slashes(no_unc)
+                });
+                fallback_canon.as_deref()
+            };
+            let candidates = [Some(raw_clean.as_str()), canon_str];
+            for prefix in candidates.into_iter().flatten() {
                 if clean == prefix {
                     return ".".to_string();
                 }
@@ -2109,7 +2360,7 @@ impl AppState {
                         owned_relative = Some(rest.to_string());
                         break;
                     }
-                } else if clean.starts_with(&prefix)
+                } else if clean.starts_with(prefix)
                     && clean.as_bytes().get(prefix.len()) == Some(&b'/')
                 {
                     owned_relative = Some(clean[prefix.len() + 1..].to_string());
@@ -2170,6 +2421,7 @@ impl AppState {
 
     fn sync_active_explorer_dir(&mut self) {
         self.explorer_entries_by_dir.clear();
+        self.bump_explorer_rev();
         let Some(active_ws) = self.active_workspace_id.as_deref() else {
             return;
         };
@@ -2179,6 +2431,7 @@ impl AppState {
                     .insert(dir.clone(), entries.clone());
             }
         }
+        self.sync_watched_explorer_scope();
     }
 
     fn resolve_workspace_defaults_source(&self) -> Option<&WorkspaceRecord> {
@@ -2263,6 +2516,7 @@ impl AppState {
             .flatten();
         self.workspaces.push(ws);
         self.workspace_order.push(id.clone());
+        self.bump_workspaces_rev();
         if let Some(params) = inherited_defaults {
             self.enqueue_pending_workspace_defaults(&id, params);
         }
@@ -2315,6 +2569,7 @@ impl AppState {
             && let Some(ws) = self.workspaces.iter_mut().find(|w| w.id == workspace_id)
         {
             apply_defaults_obj_to_workspace(ws, obj, true);
+            self.bump_workspaces_rev();
         }
         if let Some(tid) = evt
             .get("sessionId")
@@ -2333,8 +2588,10 @@ impl AppState {
             if let Some(effort) =
                 extract_reasoning_effort_from_config(cfg, effective_provider.as_deref())
                 && let Some(t) = self.threads.iter_mut().find(|t| t.id == tid)
+                && t.reasoning_effort.as_deref() != Some(effort.as_str())
             {
                 t.reasoning_effort = Some(effort);
+                self.bump_threads_rev();
             }
         }
         self.refresh_creation_preflight();
@@ -2412,6 +2669,9 @@ impl AppState {
                     draft.reasoning_effort = None;
                 }
             }
+        }
+        if model_changed {
+            self.bump_threads_rev();
         }
 
         changed
@@ -2585,11 +2845,22 @@ impl AppState {
     }
 
     pub fn composer_key(&self) -> String {
-        self.nav
-            .current()
-            .active_thread_id
-            .clone()
-            .unwrap_or_else(|| self.landing_composer_key())
+        self.composer_key_cow().into_owned()
+    }
+
+    /// Zero-allocation composer key accessor for hot view/reducer paths.
+    pub(crate) fn composer_key_cow(&self) -> Cow<'_, str> {
+        if let Some(id) = self.nav.current().active_thread_id.as_deref() {
+            return Cow::Borrowed(id);
+        }
+        if self.landing_workspace_id.as_deref() == Some(ONE_OFF_LANDING_SENTINEL) {
+            return Cow::Borrowed("new:oneOff");
+        }
+        match self.resolve_landing_target_workspace() {
+            Some(ws) if ws.one_off_chat => Cow::Borrowed("new:oneOff"),
+            Some(ws) => Cow::Owned(format!("new:project:{}", ws.id)),
+            None => Cow::Borrowed("new:oneOff"),
+        }
     }
 
     /// Emits a `NativeCommand` to the attached native worker (or test buffer).
@@ -2605,7 +2876,12 @@ impl AppState {
     pub fn send_window(&mut self, cmd: WindowCommand) {
         if let Some(ref tx) = self.services.window_tx {
             let _ = tx.send(cmd);
-            if let Some(ref waker) = self.services.waker {
+            if let Some(waker) = self
+                .services
+                .poll_waker
+                .as_ref()
+                .or(self.services.waker.as_ref())
+            {
                 (waker)();
             }
         } else {
@@ -2695,6 +2971,48 @@ impl AppState {
             return self.workflow_runs_for_thread(tid);
         }
         Vec::new()
+    }
+
+    /// Zero-allocation check for whether the active thread/task has any workflow runs.
+    #[allow(dead_code)]
+    pub(crate) fn has_workflow_runs_for_active_context(&self) -> bool {
+        if self.route().view == ViewId::Task {
+            let Some(task) = self.active_task.as_ref() else {
+                return false;
+            };
+            if !task.runs.is_empty() {
+                return true;
+            }
+            return task.threads.iter().any(|t| {
+                let sid = t.session_id.as_str();
+                self.thread_runtime_by_id.get(sid).is_some_and(|rt| {
+                    rt.workflow_runs.iter().any(|r| {
+                        r.workspace_id
+                            .as_deref()
+                            .is_none_or(|ws| ws == task.summary.workspace_id)
+                    })
+                }) || self.workflow_runs.iter().any(|r| {
+                    r.session_id.as_deref() == Some(sid)
+                        && r.workspace_id
+                            .as_deref()
+                            .is_none_or(|ws| ws == task.summary.workspace_id)
+                })
+            });
+        }
+        if let Some(tid) = self.nav.current().active_thread_id.as_deref() {
+            if self
+                .thread_runtime_by_id
+                .get(tid)
+                .is_some_and(|rt| !rt.workflow_runs.is_empty())
+            {
+                return true;
+            }
+            return self
+                .workflow_runs
+                .iter()
+                .any(|run| run.session_id.as_deref() == Some(tid));
+        }
+        false
     }
 
     /// Window-scoped dirty/busy work check for close guards.
@@ -3022,6 +3340,14 @@ impl AppState {
         }
     }
 
+    fn effective_canvas_revision_poll_secs(&self) -> f64 {
+        if self.services.ws_tx.is_some() {
+            CANVAS_LIVE_REVISION_POLL_SECS
+        } else {
+            CANVAS_REVISION_POLL_SECS
+        }
+    }
+
     /// Relative delay in seconds until the next Canvas autosave or revision poll (`tx.wake_at`).
     pub fn next_canvas_wake_delay_secs(&self) -> Option<f64> {
         self.next_canvas_wake_at()
@@ -3047,7 +3373,7 @@ impl AppState {
             next = Some(autosave_at);
         }
         if self.is_workspace_ws_connected(&doc.workspace_id) {
-            let poll_at = doc.last_poll_secs + CANVAS_REVISION_POLL_SECS;
+            let poll_at = doc.last_poll_secs + self.effective_canvas_revision_poll_secs();
             next = Some(match next {
                 Some(existing) => existing.min(poll_at),
                 None => poll_at,
@@ -3056,7 +3382,8 @@ impl AppState {
         next
     }
 
-    /// Runs debounced Canvas autosave (`0.6s`) and revision polling (`1.5s`).
+    /// Runs debounced Canvas autosave (`0.6s`) and revision polling (`1.5s` in tests, `15s` fallback
+    /// when live WebSocket push notifications are connected).
     pub fn tick_canvas_timers(&mut self) -> bool {
         let Some(doc) = self.canvas_document.as_ref() else {
             return false;
@@ -3081,8 +3408,8 @@ impl AppState {
         }
         let poll_ws_ready =
             self.is_workspace_ws_connected(&doc.workspace_id) || self.services.ws_tx.is_none();
-        let should_poll =
-            poll_ws_ready && (self.now_secs >= doc.last_poll_secs + CANVAS_REVISION_POLL_SECS);
+        let poll_interval = self.effective_canvas_revision_poll_secs();
+        let should_poll = poll_ws_ready && (self.now_secs >= doc.last_poll_secs + poll_interval);
         if should_poll {
             // Only touches poll bookkeeping (`last_poll_secs`, `pending_canvas_rpcs`) that no view
             // reads; the response arrives as a store event and repaints then if anything changed.
@@ -3109,10 +3436,21 @@ impl AppState {
         if lhs == rhs {
             return true;
         }
+        let norm_lhs = self.normalize_explorer_path(workspace_id, lhs);
+        let norm_rhs = self.normalize_explorer_path(workspace_id, rhs);
+        if norm_lhs == norm_rhs {
+            return true;
+        }
         let resolved_lhs = self.resolve_workspace_fs_path(workspace_id, lhs);
         let resolved_rhs = self.resolve_workspace_fs_path(workspace_id, rhs);
         if resolved_lhs == resolved_rhs {
             return true;
+        }
+        if self
+            .workspace_canonical_root_by_id
+            .contains_key(workspace_id)
+        {
+            return false;
         }
         match (
             std::fs::canonicalize(&resolved_lhs),
@@ -3134,6 +3472,7 @@ impl AppState {
         }
         self.shell_ui.right_overlay_open = false;
         self.context_sidebar.set_open(false);
+        self.sync_watched_explorer_scope();
         let title = resolved_path
             .rsplit(['/', '\\'])
             .next()
@@ -3252,6 +3591,7 @@ impl AppState {
         self.active_file_preview = None;
         self.sync_preview_ui();
         self.context_sidebar.set_open(true);
+        self.sync_watched_explorer_scope();
         self.canvas_generation_seq += 1;
         let generation = self.canvas_generation_seq;
         let document_id = self.next_tag("canvas");
@@ -3638,7 +3978,12 @@ impl AppState {
         );
     }
 
-    fn apply_canvas_rpc_response(&mut self, request_id: u64, method: &str, payload: &Value) {
+    fn apply_canvas_rpc_response(
+        &mut self,
+        request_id: u64,
+        method: &str,
+        payload: &Value,
+    ) -> bool {
         let pending = self.pending_canvas_rpcs.remove(&request_id);
         let ok = payload.get("ok").and_then(Value::as_bool).unwrap_or(false);
         let resp_doc = payload.get("document");
@@ -3657,20 +4002,20 @@ impl AppState {
             .or_else(|| pending.as_ref().map(|p| p.document_id.clone()));
 
         let Some(active_doc) = self.canvas_document.as_ref() else {
-            return;
+            return false;
         };
         if expected_gen != Some(active_doc.generation)
             || expected_doc_id
                 .as_deref()
                 .is_some_and(|id| id != active_doc.document_id)
         {
-            return;
+            return false;
         }
 
         match method {
             "cowork/workspace/document/open" => {
                 let Some(doc) = self.canvas_document.as_mut() else {
-                    return;
+                    return false;
                 };
                 if ok && let Some(snap) = resp_doc {
                     let path = snap
@@ -3739,6 +4084,7 @@ impl AppState {
                         }
                     }
                 }
+                true
             }
             "cowork/workspace/document/revision" => {
                 let (dirty, in_flight) = self
@@ -3759,17 +4105,17 @@ impl AppState {
                         serde_json::from_value::<CanvasDocumentRevision>(r.clone()).ok()
                     });
                     let Some(new_rev) = new_rev else {
-                        return;
+                        return false;
                     };
                     if in_flight {
-                        return;
+                        return false;
                     }
                     let changed = self
                         .canvas_document
                         .as_ref()
                         .is_some_and(|d| d.revision.as_ref() != Some(&new_rev));
                     if !changed {
-                        return;
+                        return false;
                     }
                     if !dirty {
                         self.reload_canvas_document();
@@ -3781,6 +4127,7 @@ impl AppState {
                         };
                         doc.dirty_since_secs = None;
                     }
+                    true
                 } else {
                     let kind = payload
                         .get("error")
@@ -3799,7 +4146,9 @@ impl AppState {
                                 .to_string();
                             doc.status = CanvasDocumentStatus::SaveError { kind, message };
                         }
+                        return true;
                     }
+                    false
                 }
             }
             "cowork/workspace/document/save" | "cowork/workspace/document/saveAs" => {
@@ -3823,7 +4172,7 @@ impl AppState {
                         serde_json::from_value::<CanvasDocumentRevision>(r.clone()).ok()
                     });
                     let Some(doc) = self.canvas_document.as_mut() else {
-                        return;
+                        return false;
                     };
                     if status_str == "saved" {
                         if let Some(p) = saved_path {
@@ -3918,8 +4267,9 @@ impl AppState {
                         self.canvas_discard_confirm = Some(transition);
                     }
                 }
+                true
             }
-            _ => {}
+            _ => false,
         }
     }
 
@@ -4132,7 +4482,7 @@ impl AppState {
                 .thread_runtime_by_id
                 .entry(thread_id.to_string())
                 .or_default();
-            rt.feed.clear();
+            rt.clear_feed();
             rt.agents.clear();
             rt.agent_run_feeds.clear();
             rt.todos.clear();
@@ -4339,6 +4689,7 @@ impl AppState {
                     _ => {}
                 }
             }
+            rt.sync_item_revs();
         }
     }
 
@@ -4499,6 +4850,7 @@ impl AppState {
         if old_id != new_id {
             self.rekeyed_thread_ids
                 .insert(old_id.to_string(), new_id.to_string());
+            self.rekeyed_gen = self.rekeyed_gen.wrapping_add(1).max(1);
         }
         self.nav.rekey_thread_id(old_id, new_id);
         if self.persisted_active_thread_id.as_deref() == Some(old_id) {
@@ -4509,9 +4861,12 @@ impl AppState {
     /// Rewrites any stale draft thread IDs held in this window's navigation history
     /// after another window (or earlier response) rekeyed them to server thread IDs.
     pub fn reconcile_rekeyed_thread_ids(&mut self) -> bool {
-        if self.rekeyed_thread_ids.is_empty() {
+        if self.rekeyed_thread_ids.is_empty()
+            || (self.rekeyed_gen > 0 && self.last_reconciled_rekeyed_gen == self.rekeyed_gen)
+        {
             return false;
         }
+        self.last_reconciled_rekeyed_gen = self.rekeyed_gen;
         let pairs: Vec<(String, String)> = self
             .rekeyed_thread_ids
             .keys()
@@ -4557,9 +4912,10 @@ impl AppState {
     }
 
     /// Persists the current `composer_edit` text under `old_key` and loads `new_key`'s draft text.
-    fn sync_composer_edit_across_switch(&mut self, old_key: &str, new_key: &str) {
+    /// Returns `true` if `persist_state()` was triggered.
+    fn sync_composer_edit_across_switch(&mut self, old_key: &str, new_key: &str) -> bool {
         if old_key == new_key {
-            return;
+            return false;
         }
         let current_text = self.composer_edit.text.clone();
         let prev_text = self
@@ -4582,7 +4938,9 @@ impl AppState {
         self.composer_edit = TextEdit::new(next_text);
         if changed && !self.scene_mode && self.native_ready {
             self.persist_state();
+            return true;
         }
+        false
     }
 
     fn attach_bytes_to_composer(
@@ -4692,6 +5050,7 @@ impl AppState {
         const MAX_INLINE_BYTES: u64 = 10 * 1024 * 1024;
         let resolved_key = self.resolve_composer_draft_key(key);
         let key = resolved_key.as_str();
+        let use_async_reader = self.services.native_tx.is_some();
         for path in paths {
             let filename = path
                 .file_name()
@@ -4699,6 +5058,19 @@ impl AppState {
                 .unwrap_or("attachment")
                 .to_string();
             let mime_type = mime_type_for_path(&path).to_string();
+            if use_async_reader {
+                *self
+                    .pending_upload_stages_by_key
+                    .entry(key.to_string())
+                    .or_insert(0) += 1;
+                self.send_native(NativeCommand::ReadComposerInlineAttachment {
+                    key: key.to_string(),
+                    path,
+                    filename,
+                    mime_type,
+                });
+                continue;
+            }
             let meta = match std::fs::symlink_metadata(&path) {
                 Ok(m) => m,
                 Err(err) => {
@@ -4767,20 +5139,18 @@ impl AppState {
     }
 
     /// Drains all queued `StoreEvent` values pushed by background workers.
-    /// Returns `true` if any state changed.
+    /// Returns `true` if any UI-visible state changed.
     pub fn drain_events(&mut self) -> bool {
+        if let Some(ref flag) = self.services.wake_pending {
+            flag.swap(false, Ordering::AcqRel);
+        }
         let mut changed = false;
         while let Ok(event) = self.services.event_rx.try_recv() {
-            // The native worker re-emits the telemetry snapshot after every persisted-state save;
-            // an identical snapshot changes nothing a view reads, so it must not force a rebuild.
-            if let StoreEvent::TelemetryStatusChanged(status) = &event
-                && self.telemetry_status.as_ref() == Some(status)
-            {
-                continue;
+            if self.apply_store_event_tracked(event) {
+                changed = true;
             }
-            self.apply_store_event(event);
-            changed = true;
         }
+        self.tick_persist_timer();
         if self.tick_canvas_timers() {
             changed = true;
         }
@@ -4792,7 +5162,12 @@ impl AppState {
 
     /// Applies an asynchronous `StoreEvent` onto `AppState`.
     pub fn apply_store_event(&mut self, event: StoreEvent) {
-        self.shared_dirty = true;
+        if self.apply_store_event_tracked(event) {
+            self.shared_dirty = true;
+        }
+    }
+
+    fn apply_store_event_tracked(&mut self, event: StoreEvent) -> bool {
         match event {
             StoreEvent::NativeReady {
                 persisted,
@@ -4803,7 +5178,7 @@ impl AppState {
                 self.is_packaged = is_packaged;
                 self.updater.packaged = is_packaged;
                 if self.scene_mode {
-                    return;
+                    return true;
                 }
                 if let Some(dark) = system_dark {
                     self.system_dark_override = Some(dark);
@@ -4816,6 +5191,8 @@ impl AppState {
                     resolve_feature_flags(is_packaged, &self.feature_flag_overrides);
                 self.workspaces = persisted.workspaces;
                 self.workspace_order = persisted.workspace_order;
+                self.bump_settings_rev();
+                self.bump_workspaces_rev();
                 let ws_ids: HashSet<&str> = self.workspaces.iter().map(|w| w.id.as_str()).collect();
                 self.threads = persisted
                     .threads
@@ -4826,6 +5203,7 @@ impl AppState {
                             && ws_ids.contains(t.workspace_id.as_str())
                     })
                     .collect();
+                self.bump_threads_rev();
                 if !self.onboarding.completed
                     && !self.onboarding.dismissed
                     && (!self.workspaces.is_empty() || !self.threads.is_empty())
@@ -4985,6 +5363,72 @@ impl AppState {
                     }
                 }
             }
+            StoreEvent::ComposerInlineAttachmentLoaded {
+                key,
+                filename,
+                mime_type,
+                result,
+            } => {
+                let key = self.resolve_composer_draft_key(&key);
+                if let Some(count) = self.pending_upload_stages_by_key.get_mut(&key) {
+                    *count = count.saturating_sub(1);
+                    if *count == 0 {
+                        self.pending_upload_stages_by_key.remove(&key);
+                    }
+                }
+                match result {
+                    Ok(ComposerInlineReadOutcome::Inline(payload)) => {
+                        if let Some(data_url) = payload.data_url {
+                            self.attachment_previews_by_key
+                                .entry(key.clone())
+                                .or_default()
+                                .push(AttachmentPreviewMeta {
+                                    filename: filename.clone(),
+                                    mime_type: mime_type.clone(),
+                                    data_url: Some(data_url),
+                                    width: payload.width,
+                                    height: payload.height,
+                                });
+                        }
+                        let draft = self.composer_drafts.entry(key).or_default();
+                        draft.submission_error = None;
+                        draft.attachments.push(TurnAttachmentInputPart::InlineFile {
+                            filename,
+                            content_base64: payload.content_base64,
+                            mime_type,
+                        });
+                    }
+                    Ok(ComposerInlineReadOutcome::ExceedsInlineLimit { source_path }) => {
+                        let Some((workspace_id, workspace_root, uploads_directory)) =
+                            self.resolve_composer_upload_target(&key)
+                        else {
+                            self.report_composer_attachment_error(
+                                &key,
+                                format!(
+                                    "Select a workspace before attaching \"{filename}\" (files over 10 MB must be staged in workspace uploads)."
+                                ),
+                            );
+                            return true;
+                        };
+                        *self
+                            .pending_upload_stages_by_key
+                            .entry(key.clone())
+                            .or_insert(0) += 1;
+                        self.send_native(NativeCommand::StageComposerUpload {
+                            key,
+                            workspace_id,
+                            workspace_root,
+                            uploads_directory,
+                            source_path,
+                            filename,
+                            mime_type,
+                        });
+                    }
+                    Err(err) => {
+                        self.report_composer_attachment_error(&key, err);
+                    }
+                }
+            }
             StoreEvent::ImportedWorkspacesLoaded(workspaces) => {
                 let ids: Vec<_> = workspaces.iter().map(|ws| ws.id.clone()).collect();
                 for workspace in workspaces {
@@ -4992,6 +5436,9 @@ impl AppState {
                         self.workspace_order.push(workspace.id.clone());
                         self.workspaces.push(workspace);
                     }
+                }
+                if !ids.is_empty() {
+                    self.bump_workspaces_rev();
                 }
                 // Apply the merged, persisted registry to the host before starting its sidecars.
                 if !ids.is_empty() && !self.scene_mode {
@@ -5014,6 +5461,7 @@ impl AppState {
                     self.workspace_order.push(workspace_id.clone());
                     added_new = true;
                 }
+                self.bump_workspaces_rev();
                 self.active_workspace_id = Some(workspace_id.clone());
                 self.sync_active_explorer_dir();
                 if !self.scene_mode {
@@ -5046,11 +5494,16 @@ impl AppState {
                 for entry in &mut entries {
                     entry.path = self.normalize_explorer_path(&workspace_id, &entry.path);
                 }
-                self.explorer_entries_by_workspace
-                    .insert((workspace_id.clone(), norm_dir), entries);
-                if self.active_workspace_id.as_deref() == Some(workspace_id.as_str()) {
-                    self.sync_active_explorer_dir();
+                let is_active = self.active_workspace_id.as_deref() == Some(workspace_id.as_str());
+                if is_active {
+                    self.explorer_entries_by_dir
+                        .insert(norm_dir.clone(), entries.clone());
                 }
+                self.explorer_entries_by_workspace
+                    .insert((workspace_id, norm_dir), entries);
+                self.bump_explorer_rev();
+                return is_active
+                    && (self.context_sidebar.is_open() || self.shell_ui.right_overlay_open);
             }
             StoreEvent::FilePreviewLoaded {
                 request_id,
@@ -5059,7 +5512,7 @@ impl AppState {
                 ..
             } => {
                 if self.active_file_preview_request_id.as_deref() != Some(request_id.as_str()) {
-                    return;
+                    return false;
                 }
                 self.active_file_preview_request_id = None;
                 match result {
@@ -5220,7 +5673,22 @@ impl AppState {
                 method,
                 params,
             } => {
+                let suppress_bg_repaint = matches!(
+                    method.as_str(),
+                    "item/agentMessage/delta" | "item/reasoning/delta"
+                ) && params
+                    .get("threadId")
+                    .and_then(Value::as_str)
+                    .is_some_and(|tid| {
+                        self.nav.current().active_thread_id.as_deref() != Some(tid)
+                            && self.agent_viewer.as_ref().is_none_or(|v| v.agent_id != tid)
+                            && self
+                                .thread_runtime_by_id
+                                .get(tid)
+                                .is_some_and(|rt| rt.streaming)
+                    });
                 self.apply_ws_notification(&workspace_id, &method, params);
+                return !suppress_bg_repaint;
             }
             StoreEvent::WsServerRequest {
                 workspace_id,
@@ -5244,10 +5712,10 @@ impl AppState {
                     .get(&request_id)
                     .is_some_and(|meta| meta.workspace_id == workspace_id && meta.method == method)
                 {
-                    return;
+                    return false;
                 }
                 self.pending_rpc_meta.remove(&request_id);
-                self.apply_ws_response(&workspace_id, request_id, &method, result);
+                return self.apply_ws_response(&workspace_id, request_id, &method, result);
             }
             StoreEvent::WsServerResponseResult {
                 workspace_id: _,
@@ -5297,12 +5765,21 @@ impl AppState {
                 self.diagnostics_bundle = bundle;
             }
             StoreEvent::UpdaterChanged(updater) => {
+                if self.updater == updater {
+                    return false;
+                }
                 self.updater = updater;
             }
             StoreEvent::RemoteAccessChanged(remote) => {
+                if self.remote_access == remote {
+                    return false;
+                }
                 self.remote_access = remote;
             }
             StoreEvent::TelemetryStatusChanged(status) => {
+                if self.telemetry_status.as_ref() == Some(&status) {
+                    return false;
+                }
                 self.telemetry_status = Some(status);
             }
             StoreEvent::QuickChatShortcutStatus { error } => {
@@ -5523,9 +6000,13 @@ impl AppState {
                 }
             },
             StoreEvent::ProductAnalyticsStateUpdated(val) => {
+                if self.product_analytics == val {
+                    return false;
+                }
                 self.product_analytics = val;
             }
         }
+        true
     }
 
     /// Applies any pending navigation settle to `tx` so view, thread, task, and settings page
@@ -5721,8 +6202,13 @@ impl AppState {
                     });
                 }
                 let new_key = self.composer_key();
-                self.sync_composer_edit_across_switch(&old_key, &new_key);
-                if !self.scene_mode && self.window_mode == WindowMode::Main {
+                let draft_persisted = self.sync_composer_edit_across_switch(&old_key, &new_key);
+                let target_changed = self.nav.current().active_thread_id != prev_tid
+                    || self.active_workspace_id != prev_ws;
+                if draft_persisted {
+                    already_persisted = true;
+                } else if !self.scene_mode && self.window_mode == WindowMode::Main && target_changed
+                {
                     self.persist_state();
                     already_persisted = true;
                 }
@@ -6025,13 +6511,20 @@ impl AppState {
             ShellAction::SetWindowMode(mode) => self.window_mode = mode,
             ShellAction::ToggleSidebar => self.sidebar.toggle(),
             ShellAction::SetSidebarOpen(open) => self.sidebar.set_open(open),
-            ShellAction::ToggleContextSidebar => self.context_sidebar.toggle(),
-            ShellAction::SetContextSidebarOpen(open) => self.context_sidebar.set_open(open),
+            ShellAction::ToggleContextSidebar => {
+                self.context_sidebar.toggle();
+                self.sync_watched_explorer_scope();
+            }
+            ShellAction::SetContextSidebarOpen(open) => {
+                self.context_sidebar.set_open(open);
+                self.sync_watched_explorer_scope();
+            }
             ShellAction::SetSidebarSearch(query) => {
                 self.sidebar_search = query;
             }
             ShellAction::SetSidebarSectionOrder(order) => {
                 self.desktop_settings.sidebar_section_order = order;
+                self.bump_settings_rev();
                 self.persist_state();
             }
             ShellAction::ToggleSidebarSectionCollapsed(section) => {
@@ -6048,6 +6541,7 @@ impl AppState {
             }
             ShellAction::ReorderWorkspaces(order) => {
                 self.workspace_order = order;
+                self.bump_workspaces_rev();
                 self.persist_state();
             }
             ShellAction::ToggleCommandPalette => {
@@ -6075,6 +6569,7 @@ impl AppState {
             }
             ShellAction::SetTheme(theme) => {
                 self.desktop_settings.theme = theme;
+                self.bump_settings_rev();
                 self.persist_state();
             }
             ShellAction::PushToast {
@@ -6097,18 +6592,21 @@ impl AppState {
             }
             ShellAction::CompleteOnboardingStep(step) => {
                 self.onboarding.completed_steps.insert(step);
+                self.bump_settings_rev();
                 self.persist_state();
             }
             ShellAction::CompleteOnboarding => {
                 self.onboarding.completed = true;
                 self.onboarding.dismissed = false;
                 self.shell_ui.reset_onboarding_transient();
+                self.bump_settings_rev();
                 self.persist_state();
             }
             ShellAction::SkipOnboarding => {
                 self.onboarding.dismissed = true;
                 self.onboarding.completed = false;
                 self.shell_ui.reset_onboarding_transient();
+                self.bump_settings_rev();
                 self.persist_state();
             }
             ShellAction::OpenFilePreview(preview) => {
@@ -6272,10 +6770,12 @@ impl AppState {
             }
             ShellAction::SetShowMenuBar(show) => {
                 self.desktop_settings.show_menu_bar = show;
+                self.bump_settings_rev();
                 self.persist_state();
             }
             ShellAction::ToggleShowMenuBar => {
                 self.desktop_settings.show_menu_bar = !self.desktop_settings.show_menu_bar;
+                self.bump_settings_rev();
                 self.persist_state();
             }
             ShellAction::OpenAbout => {
@@ -6355,6 +6855,10 @@ impl AppState {
         );
         std::mem::swap(&mut self.now_secs, &mut other.now_secs);
         std::mem::swap(&mut self.app_elapsed_secs, &mut other.app_elapsed_secs);
+        std::mem::swap(
+            &mut self.last_reconciled_rekeyed_gen,
+            &mut other.last_reconciled_rekeyed_gen,
+        );
     }
 
     pub fn apply_main_focus_nav(
@@ -6919,6 +7423,7 @@ impl AppState {
                 if let Some(t) = self.threads.iter_mut().find(|t| t.id == thread_id) {
                     t.title = title.clone();
                     changed = !t.draft;
+                    self.bump_threads_rev();
                 }
                 if let Some(ws_id) = self.workspace_for_thread(&thread_id) {
                     let params = SessionTitleSetParams { thread_id, title };
@@ -6933,6 +7438,7 @@ impl AppState {
                 if let Some(t) = self.threads.iter_mut().find(|t| t.id == thread_id) {
                     t.pinned = pinned;
                     changed = !t.draft;
+                    self.bump_threads_rev();
                 }
                 if let Some(ws_id) = self.workspace_for_thread(&thread_id) {
                     let params = ThreadPinnedSetParams { thread_id, pinned };
@@ -6958,6 +7464,7 @@ impl AppState {
                             archived_at: now,
                         });
                     }
+                    self.bump_threads_rev();
                 }
                 if let Some(entry) = archived_entry {
                     self.archived_threads.retain(|t| t.id != entry.id);
@@ -6980,6 +7487,7 @@ impl AppState {
                     t.archived = false;
                     t.archived_at = None;
                     changed = !t.draft;
+                    self.bump_threads_rev();
                 }
                 self.archived_threads.retain(|t| t.id != thread_id);
                 if let Some(ws_id) = self.workspace_for_thread(&thread_id) {
@@ -7058,6 +7566,7 @@ impl AppState {
                 if let Some(t) = self.threads.iter_mut().find(|t| t.id == thread_id) {
                     t.reasoning_effort = Some(effort.as_str().to_string());
                     changed = !t.draft;
+                    self.bump_threads_rev();
                 }
                 if let Some(ws_id) = self.workspace_for_thread(&thread_id) {
                     let config = build_reasoning_effort_config_patch(&provider, effort.as_str());
@@ -7472,7 +7981,7 @@ impl AppState {
                     if creation_in_flight {
                         let rt = self.thread_runtime_by_id.entry(tid.clone()).or_default();
                         rt.pending_turn_count += 1;
-                        rt.feed.push(FeedItem::Message {
+                        rt.push_feed_item(FeedItem::Message {
                             id: format!("optimistic-{client_message_id}"),
                             role: FeedMessageRole::User,
                             content: trimmed,
@@ -7665,6 +8174,7 @@ impl AppState {
                     ..ThreadRecord::default()
                 };
                 self.threads.insert(0, draft_thread);
+                self.bump_threads_rev();
                 self.queue_pending_thread_message(
                     &draft_thread_id,
                     PendingThreadMessage {
@@ -8117,7 +8627,7 @@ impl AppState {
                         .any(|item| feed_item_id(item) == optimistic_id)
                     {
                         rt.pending_turn_count += 1;
-                        rt.feed.push(FeedItem::Message {
+                        rt.push_feed_item(FeedItem::Message {
                             id: optimistic_id,
                             role: FeedMessageRole::User,
                             content: msg.text.clone(),
@@ -8146,7 +8656,7 @@ impl AppState {
             for msg in &queued {
                 if let Some(cid) = msg.client_message_id.as_deref() {
                     let optimistic_id = format!("optimistic-{cid}");
-                    rt.feed.retain(|item| feed_item_id(item) != optimistic_id);
+                    rt.retain_feed(|item| feed_item_id(item) != optimistic_id);
                 }
             }
             rt.pending_turn_count = 0;
@@ -8229,7 +8739,7 @@ impl AppState {
             .any(|item| feed_item_id(item) == optimistic_id)
         {
             rt.pending_turn_count += 1;
-            rt.feed.push(FeedItem::Message {
+            rt.push_feed_item(FeedItem::Message {
                 id: optimistic_id,
                 role: FeedMessageRole::User,
                 content: pending.text.clone(),
@@ -8263,10 +8773,10 @@ impl AppState {
         let optimistic_index = rt
             .feed
             .iter()
-            .position(|item| feed_item_id(item) == optimistic_id);
+            .rposition(|item| feed_item_id(item) == optimistic_id);
         if let Err(error) = result {
             if let Some(index) = optimistic_index {
-                rt.feed.remove(index);
+                rt.remove_feed_item(index);
             }
             rt.pending_turn_count = rt.pending_turn_count.saturating_sub(1);
             submission.status = ComposerSubmissionStatus::Failed(error.message.clone());
@@ -8360,6 +8870,7 @@ impl AppState {
             SettingsAction::UpdateDesktopSettings(settings) => {
                 let prev_days = self.desktop_settings.archived_chats_auto_delete_days;
                 self.desktop_settings = settings;
+                self.bump_settings_rev();
                 if self.desktop_settings.archived_chats_auto_delete_days > 0
                     && self.desktop_settings.archived_chats_auto_delete_days != prev_days
                 {
@@ -8370,6 +8881,7 @@ impl AppState {
             SettingsAction::SetAccentPalette(palette) => {
                 if self.desktop_settings.accent_palette != palette {
                     self.desktop_settings.accent_palette = palette;
+                    self.bump_settings_rev();
                     self.persist_state();
                 }
             }
@@ -8809,6 +9321,7 @@ impl AppState {
                 let mut restarts_for_yolo: Vec<(String, String, bool)> = Vec::new();
                 let mut rpcs_to_send: Vec<(String, SessionDefaultsApplyParams)> = Vec::new();
                 let active_tid = self.nav.current().active_thread_id.clone();
+                let mut workspaces_updated = false;
 
                 for target_ws_id in target_ids {
                     let cwd = self.workspace_path(&target_ws_id);
@@ -8822,6 +9335,7 @@ impl AppState {
                     {
                         let prev_yolo = ws.yolo;
                         apply_defaults_obj_to_workspace(ws, obj, false);
+                        workspaces_updated = true;
                         if ws.yolo != prev_yolo {
                             restarts_for_yolo.push((
                                 target_ws_id.clone(),
@@ -8870,6 +9384,7 @@ impl AppState {
                             .is_none_or(str::is_empty)
                         {
                             ws.default_provider = Some(pid.clone());
+                            workspaces_updated = true;
                         }
                         if ws
                             .default_model
@@ -8878,6 +9393,7 @@ impl AppState {
                             .is_none_or(str::is_empty)
                         {
                             ws.default_model = Some(mid.clone());
+                            workspaces_updated = true;
                         }
                     }
                     let scoped_thread_id = active_tid.clone().filter(|tid| {
@@ -8898,6 +9414,9 @@ impl AppState {
                     ));
                 }
 
+                if workspaces_updated {
+                    self.bump_workspaces_rev();
+                }
                 self.persist_state();
                 let restarting_ids: HashSet<String> = restarts_for_yolo
                     .iter()
@@ -9720,6 +10239,7 @@ impl AppState {
                 }
                 self.feature_flag_overrides.insert(flag_id, enabled);
                 self.feature_flags = resolve_feature_flags(false, &self.feature_flag_overrides);
+                self.bump_settings_rev();
                 self.persist_state();
             }
             SettingsAction::RefreshDiagnostics { workspace_id } => {
@@ -9893,6 +10413,7 @@ impl AppState {
             }
             SettingsAction::UpdatePrivacyTelemetry(privacy) => {
                 self.desktop_settings.privacy_telemetry = privacy;
+                self.bump_settings_rev();
                 self.persist_state();
             }
             SettingsAction::RefreshTelemetryStatus => {
@@ -9920,6 +10441,7 @@ impl AppState {
             SettingsAction::RestartOnboarding => {
                 self.onboarding = OnboardingState::default();
                 self.shell_ui.reset_onboarding_transient();
+                self.bump_settings_rev();
                 if self.route().view == ViewId::Settings {
                     if self.nav.can_go_back() {
                         self.nav.go_back();
@@ -10004,6 +10526,7 @@ impl AppState {
                 self.workspace_mutation_seq = self.workspace_mutation_seq.wrapping_add(1);
                 self.workspaces.push(ws);
                 self.workspace_order.push(id.clone());
+                self.bump_workspaces_rev();
                 self.active_workspace_id = Some(id.clone());
                 if let Some(params) = inherited_defaults {
                     self.enqueue_pending_workspace_defaults(&id, params);
@@ -10068,6 +10591,8 @@ impl AppState {
                 self.workspace_order.retain(|id| id != &workspace_id);
                 self.collapsed_workspace_ids.remove(&workspace_id);
                 self.threads.retain(|t| t.workspace_id != workspace_id);
+                self.bump_workspaces_rev();
+                self.bump_threads_rev();
                 self.archived_threads
                     .retain(|t| t.workspace_id != workspace_id);
                 self.tasks.retain(|t| t.workspace_id != workspace_id);
@@ -10278,6 +10803,9 @@ impl AppState {
                     let request_id = self.next_tag("ls");
                     let show_hidden = self.desktop_settings.show_hidden_files;
                     let resolved_dir = self.resolve_workspace_fs_path(&workspace_id, &dir);
+                    if self.active_workspace_id.as_deref() == Some(workspace_id.as_str()) {
+                        self.sync_watched_explorer_scope();
+                    }
                     self.send_native(NativeCommand::ListWorkspaceFiles {
                         request_id,
                         workspace_id,
@@ -10301,6 +10829,7 @@ impl AppState {
                         }
                         self.shell_ui.right_overlay_open = false;
                         self.context_sidebar.set_open(false);
+                        self.sync_watched_explorer_scope();
                         let request_id = self.next_tag("preview");
                         self.active_file_preview_request_id = Some(request_id.clone());
                         self.send_native(NativeCommand::ReadFilePreview {
@@ -10618,7 +11147,9 @@ impl AppState {
                 ) && let Some(t) = self.threads.iter_mut().find(|t| t.id == tid)
                 {
                     t.title = title.to_string();
-                    if !t.draft && !self.scene_mode {
+                    let is_draft = t.draft;
+                    self.bump_threads_rev();
+                    if !is_draft && !self.scene_mode {
                         self.persist_state();
                     }
                 }
@@ -10867,19 +11398,26 @@ impl AppState {
                     .unwrap_or_else(|| "Steer was not applied before the turn ended.".to_string()),
             );
         }
-        for item in &mut rt.feed {
-            match item {
-                FeedItem::Message { streaming, .. } | FeedItem::Reasoning { streaming, .. } => {
+        for idx in 0..rt.feed.len() {
+            let flipped = match &mut rt.feed[idx] {
+                FeedItem::Message { streaming, .. }
+                | FeedItem::Reasoning { streaming, .. }
+                | FeedItem::Tool { streaming, .. }
+                    if *streaming =>
+                {
                     *streaming = false;
+                    true
                 }
-                FeedItem::Tool { streaming, .. } => *streaming = false,
-                _ => {}
+                _ => false,
+            };
+            if flipped {
+                rt.bump_feed_item(idx);
             }
         }
         if status == "failed" {
             let msg = err_msg.unwrap_or_else(|| "Turn failed".to_string());
             rt.last_error = Some(msg.clone());
-            rt.feed.push(FeedItem::Error {
+            rt.push_feed_item(FeedItem::Error {
                 id: format!("turn-err-{now_ms}"),
                 message: msg,
                 code: None,
@@ -10947,8 +11485,8 @@ impl AppState {
                                 Some((sub.message.text, sub.message.client_message_id));
                         }
                     }
-                    let matched_existing = if let Some(ref cid) = client_message_id {
-                        rt.feed.iter_mut().find(|f| {
+                    let matched_existing_idx = if let Some(ref cid) = client_message_id {
+                        rt.feed.iter().rposition(|f| {
                             matches!(
                                 f,
                                 FeedItem::Message {
@@ -10959,7 +11497,7 @@ impl AppState {
                         })
                     } else {
                         let trimmed_incoming = text.trim();
-                        rt.feed.iter_mut().find(|f| {
+                        rt.feed.iter().rposition(|f| {
                             matches!(
                                 f,
                                 FeedItem::Message {
@@ -10972,14 +11510,15 @@ impl AppState {
                             )
                         })
                     };
-                    if let Some(existing) = matched_existing {
+                    if let Some(idx) = matched_existing_idx {
+                        let mut clear_submission = false;
                         if let FeedItem::Message {
                             id,
                             content,
                             client_message_id: existing_cid,
                             streaming,
                             ..
-                        } = existing
+                        } = &mut rt.feed[idx]
                         {
                             *id = item_id;
                             if !text.is_empty() {
@@ -10990,13 +11529,17 @@ impl AppState {
                                 && submission.message.client_message_id.as_ref()
                                     == existing_cid.as_ref()
                             {
-                                rt.composer_submission = None;
+                                clear_submission = true;
                             }
                             *existing_cid = None;
                             *streaming = false;
                         }
-                    } else if !rt.feed.iter().any(|f| feed_item_id(f) == item_id) {
-                        rt.feed.push(FeedItem::Message {
+                        if clear_submission {
+                            rt.composer_submission = None;
+                        }
+                        rt.bump_feed_item(idx);
+                    } else if !rt.feed.iter().rev().any(|f| feed_item_id(f) == item_id) {
+                        rt.push_feed_item(FeedItem::Message {
                             id: item_id,
                             role: FeedMessageRole::User,
                             content: text,
@@ -11020,8 +11563,8 @@ impl AppState {
                     let client_message_id = item.get("clientMessageId").and_then(Value::as_str);
                     reconcile_steer_error(rt, &message, steer_request_id, client_message_id);
                     rt.last_error = Some(message.clone());
-                    if !rt.feed.iter().any(|f| feed_item_id(f) == item_id) {
-                        rt.feed.push(FeedItem::Error {
+                    if !rt.feed.iter().rev().any(|f| feed_item_id(f) == item_id) {
+                        rt.push_feed_item(FeedItem::Error {
                             id: item_id,
                             message,
                             code,
@@ -11031,8 +11574,8 @@ impl AppState {
                 }
                 "agentMessage" => {
                     let text = extract_item_text(item);
-                    if !rt.feed.iter().any(|f| feed_item_id(f) == item_id) {
-                        rt.feed.push(FeedItem::Message {
+                    if !rt.feed.iter().rev().any(|f| feed_item_id(f) == item_id) {
+                        rt.push_feed_item(FeedItem::Message {
                             id: item_id,
                             role: FeedMessageRole::Assistant,
                             content: text,
@@ -11052,8 +11595,8 @@ impl AppState {
                         .and_then(Value::as_str)
                         .unwrap_or("reasoning")
                         .to_string();
-                    if !rt.feed.iter().any(|f| feed_item_id(f) == item_id) {
-                        rt.feed.push(FeedItem::Reasoning {
+                    if !rt.feed.iter().rev().any(|f| feed_item_id(f) == item_id) {
+                        rt.push_feed_item(FeedItem::Reasoning {
                             id: item_id,
                             content: text,
                             mode,
@@ -11085,8 +11628,7 @@ impl AppState {
                         .get("outputTruncated")
                         .and_then(Value::as_bool)
                         .unwrap_or(false);
-                    if let Some(existing) = rt.feed.iter_mut().find(|f| feed_item_id(f) == item_id)
-                    {
+                    if let Some(idx) = rt.feed.iter().rposition(|f| feed_item_id(f) == item_id) {
                         if let FeedItem::Tool {
                             tool_name,
                             title: existing_title,
@@ -11097,7 +11639,7 @@ impl AppState {
                             completed_at_ms,
                             output_truncated,
                             ..
-                        } = existing
+                        } = &mut rt.feed[idx]
                         {
                             if let Some(name) = parsed_tool_name {
                                 *tool_name = name.to_string();
@@ -11122,9 +11664,10 @@ impl AppState {
                             }
                             *streaming = !status.is_terminal();
                         }
+                        rt.bump_feed_item(idx);
                     } else {
                         let status = parsed_status.unwrap_or(ToolRunStatus::Running);
-                        rt.feed.push(FeedItem::Tool {
+                        rt.push_feed_item(FeedItem::Tool {
                             id: item_id,
                             tool_name: parsed_tool_name.unwrap_or(item_type).to_string(),
                             title,
@@ -11169,18 +11712,21 @@ impl AppState {
         }
         let rt = self.thread_runtime_by_id.entry(tid).or_default();
         rt.streaming = true;
-        if let Some(FeedItem::Message {
-            content, streaming, ..
-        }) = rt
+        if let Some(idx) = rt
             .feed
-            .iter_mut()
-            .rev()
-            .find(|f| matches!(f, FeedItem::Message { id, .. } if id == item_id))
+            .iter()
+            .rposition(|f| matches!(f, FeedItem::Message { id, .. } if id == item_id))
         {
-            content.push_str(delta);
-            *streaming = true;
+            if let FeedItem::Message {
+                content, streaming, ..
+            } = &mut rt.feed[idx]
+            {
+                content.push_str(delta);
+                *streaming = true;
+            }
+            rt.bump_feed_item(idx);
         } else {
-            rt.feed.push(FeedItem::Message {
+            rt.push_feed_item(FeedItem::Message {
                 id: item_id.to_string(),
                 role: FeedMessageRole::Assistant,
                 content: delta.to_string(),
@@ -11214,18 +11760,21 @@ impl AppState {
         }
         let rt = self.thread_runtime_by_id.entry(tid).or_default();
         rt.streaming = true;
-        if let Some(FeedItem::Reasoning {
-            content, streaming, ..
-        }) = rt
+        if let Some(idx) = rt
             .feed
-            .iter_mut()
-            .rev()
-            .find(|f| matches!(f, FeedItem::Reasoning { id, .. } if id == item_id))
+            .iter()
+            .rposition(|f| matches!(f, FeedItem::Reasoning { id, .. } if id == item_id))
         {
-            content.push_str(delta);
-            *streaming = true;
+            if let FeedItem::Reasoning {
+                content, streaming, ..
+            } = &mut rt.feed[idx]
+            {
+                content.push_str(delta);
+                *streaming = true;
+            }
+            rt.bump_feed_item(idx);
         } else {
-            rt.feed.push(FeedItem::Reasoning {
+            rt.push_feed_item(FeedItem::Reasoning {
                 id: item_id.to_string(),
                 content: delta.to_string(),
                 mode: "reasoning".to_string(),
@@ -11281,8 +11830,8 @@ impl AppState {
                 rt.last_error = Some(message.to_string());
             }
 
-            if let Some(existing) = rt.feed.iter_mut().find(|f| feed_item_id(f) == item_id) {
-                match existing {
+            if let Some(idx) = rt.feed.iter().rposition(|f| feed_item_id(f) == item_id) {
+                match &mut rt.feed[idx] {
                     FeedItem::Message {
                         content,
                         citations,
@@ -11420,11 +11969,12 @@ impl AppState {
                     }
                     _ => {}
                 }
+                rt.bump_feed_item(idx);
             } else {
                 // Fallback creation if completion arrived without prior `item/started`.
                 match item_type {
                     "userMessage" => {
-                        rt.feed.push(FeedItem::Message {
+                        rt.push_feed_item(FeedItem::Message {
                             id: item_id.to_string(),
                             role: FeedMessageRole::User,
                             content: extract_item_text(item),
@@ -11440,7 +11990,7 @@ impl AppState {
                         });
                     }
                     "error" => {
-                        rt.feed.push(FeedItem::Error {
+                        rt.push_feed_item(FeedItem::Error {
                             id: item_id.to_string(),
                             message: item
                                 .get("message")
@@ -11452,7 +12002,7 @@ impl AppState {
                         });
                     }
                     "agentMessage" => {
-                        rt.feed.push(FeedItem::Message {
+                        rt.push_feed_item(FeedItem::Message {
                             id: item_id.to_string(),
                             role: FeedMessageRole::Assistant,
                             content: extract_item_text(item),
@@ -11465,7 +12015,7 @@ impl AppState {
                         });
                     }
                     "reasoning" => {
-                        rt.feed.push(FeedItem::Reasoning {
+                        rt.push_feed_item(FeedItem::Reasoning {
                             id: item_id.to_string(),
                             content: extract_item_text(item),
                             mode: item
@@ -11526,7 +12076,7 @@ impl AppState {
                         } else {
                             item.get("completedAt").map(|v| parse_timestamp_ms(Some(v)))
                         };
-                        rt.feed.push(FeedItem::Tool {
+                        rt.push_feed_item(FeedItem::Tool {
                             id: item_id.to_string(),
                             tool_name: item
                                 .get("tool")
@@ -11635,7 +12185,7 @@ impl AppState {
                     let todos = parse_todo_items(items_val);
                     let rt = self.thread_runtime_by_id.entry(id).or_default();
                     rt.todos = todos.clone();
-                    rt.feed.push(FeedItem::Todos {
+                    rt.push_feed_item(FeedItem::Todos {
                         id: format!("todos-{now_ms}"),
                         items: todos,
                         timestamp_ms: now_ms,
@@ -11657,8 +12207,7 @@ impl AppState {
                     self.thread_runtime_by_id
                         .entry(id)
                         .or_default()
-                        .feed
-                        .push(FeedItem::Log {
+                        .push_feed_item(FeedItem::Log {
                             id: format!("log-{now_ms}"),
                             level,
                             message,
@@ -11679,7 +12228,7 @@ impl AppState {
                     let rt = self.thread_runtime_by_id.entry(id).or_default();
                     reconcile_steer_error(rt, &message, steer_request_id, client_message_id);
                     rt.last_error = Some(message.clone());
-                    rt.feed.push(FeedItem::Error {
+                    rt.push_feed_item(FeedItem::Error {
                         id: format!("err-{now_ms}"),
                         message,
                         code,
@@ -11981,13 +12530,13 @@ impl AppState {
         request_id: u64,
         method: &str,
         result: Result<Value, WsRpcError>,
-    ) {
+    ) -> bool {
         if matches!(
             method,
             conversation_import::PREVIEW | conversation_import::IMPORT
         ) {
             conversation_import::receive(self, workspace_id, request_id, method, result);
-            return;
+            return true;
         }
         if matches!(method, "turn/start" | "command/execute") {
             self.finish_composer_turn(request_id, &result);
@@ -11998,7 +12547,7 @@ impl AppState {
             Ok(v) => v,
             Err(err) => {
                 self.apply_ws_error(workspace_id, request_id, method, err);
-                return;
+                return true;
             }
         };
 
@@ -12337,6 +12886,7 @@ impl AppState {
                     if let Some(t) = self.threads.iter_mut().find(|t| t.id == tid) {
                         t.archived = archived;
                         t.archived_at = archived.then_some(archived_at);
+                        self.bump_threads_rev();
                     }
                     self.archived_threads.retain(|t| t.id != tid);
                     if archived {
@@ -12683,7 +13233,7 @@ impl AppState {
             }
             "task/artifact/version/preview" => {
                 let Some(pending) = self.pending_task_artifact_rpcs.remove(&request_id) else {
-                    return;
+                    return false;
                 };
                 let response_version_id = payload
                     .get("versionId")
@@ -12692,15 +13242,15 @@ impl AppState {
                     .map(str::to_string)
                     .or_else(|| pending.version_id.clone());
                 let Some(version_id) = response_version_id else {
-                    return;
+                    return false;
                 };
                 if let Some(expected_vid) = pending.version_id.as_deref()
                     && expected_vid != version_id
                 {
-                    return;
+                    return false;
                 }
                 let Some(preview) = payload.get("preview").filter(|v| v.is_object()) else {
-                    return;
+                    return false;
                 };
                 if let Some(active) = self.active_task.as_mut() {
                     let nav_matches = self
@@ -12723,16 +13273,18 @@ impl AppState {
             | "cowork/workspace/document/revision"
             | "cowork/workspace/document/save"
             | "cowork/workspace/document/saveAs" => {
-                self.apply_canvas_rpc_response(request_id, method, &payload);
+                return self.apply_canvas_rpc_response(request_id, method, &payload);
             }
             "cowork/workspace/document/close" => {
                 self.pending_canvas_rpcs.remove(&request_id);
+                return false;
             }
             "cowork/workspace/presentation/preview" => {
                 self.apply_presentation_preview_response(request_id, &payload);
             }
             _ => {}
         }
+        true
     }
 
     fn apply_ws_error(
@@ -12764,7 +13316,7 @@ impl AppState {
             let rt = self.thread_runtime_by_id.entry(draft_id).or_default();
             for cid in &queued_cids {
                 let optimistic_id = format!("optimistic-{cid}");
-                rt.feed.retain(|item| feed_item_id(item) != optimistic_id);
+                rt.retain_feed(|item| feed_item_id(item) != optimistic_id);
             }
             rt.pending_turn_count = 0;
             rt.last_error = Some(err.message.clone());
@@ -13086,6 +13638,7 @@ impl AppState {
         self.archived_threads
             .retain(|a| a.workspace_id != workspace_id);
         self.archived_threads.extend(archived);
+        self.bump_threads_rev();
         self.enforce_archived_chat_retention(Some(workspace_id));
 
         if let Some(active_tid) = self.nav.current().active_thread_id.clone() {
@@ -13197,6 +13750,7 @@ impl AppState {
         } else {
             self.threads.insert(0, record);
         }
+        self.bump_threads_rev();
 
         self.subscribed_threads_by_workspace
             .entry(workspace_id.to_string())
@@ -13316,6 +13870,7 @@ impl AppState {
         } else {
             self.threads.insert(0, record);
         }
+        self.bump_threads_rev();
 
         self.subscribed_threads_by_workspace
             .entry(workspace_id.to_string())
@@ -13370,21 +13925,41 @@ impl AppState {
             .get("config")
             .and_then(|c| extract_reasoning_effort_from_config(c, snapshot_provider))
             .or_else(|| extract_reasoning_effort_from_config(snapshot, snapshot_provider));
+        let mut metadata_changed = false;
         if let Some(t) = self.threads.iter_mut().find(|t| t.id == session_id) {
-            if let Some(title) = snapshot.get("title").and_then(Value::as_str) {
+            if let Some(title) = snapshot.get("title").and_then(Value::as_str)
+                && t.title != title
+            {
                 t.title = title.to_string();
+                metadata_changed = true;
             }
-            if let Some(p) = snapshot_provider {
+            if let Some(p) = snapshot_provider
+                && t.provider.as_deref() != Some(p)
+            {
                 t.provider = Some(p.to_string());
+                metadata_changed = true;
             }
-            if let Some(m) = snapshot.get("model").and_then(Value::as_str) {
+            if let Some(m) = snapshot.get("model").and_then(Value::as_str)
+                && t.model.as_deref() != Some(m)
+            {
                 t.model = Some(m.to_string());
+                metadata_changed = true;
             }
-            if let Some(eff) = snapshot_reasoning_effort.clone() {
+            if let Some(eff) = snapshot_reasoning_effort.clone()
+                && t.reasoning_effort.as_deref() != Some(eff.as_str())
+            {
                 t.reasoning_effort = Some(eff);
+                metadata_changed = true;
             }
-            t.last_event_seq = t.last_event_seq.max(snap_seq);
-            t.draft = false;
+            let next_seq = t.last_event_seq.max(snap_seq);
+            if next_seq != t.last_event_seq {
+                t.last_event_seq = next_seq;
+                metadata_changed = true;
+            }
+            if t.draft {
+                t.draft = false;
+                metadata_changed = true;
+            }
         } else if !is_agent_session {
             self.threads.push(ThreadRecord {
                 id: session_id.clone(),
@@ -13403,9 +13978,13 @@ impl AppState {
                 last_event_seq: snap_seq,
                 ..ThreadRecord::default()
             });
+            metadata_changed = true;
         }
 
-        if !self.scene_mode && !is_agent_session {
+        if metadata_changed {
+            self.bump_threads_rev();
+        }
+        if metadata_changed && !self.scene_mode && !is_agent_session {
             self.persist_state();
         }
 
@@ -13483,7 +14062,7 @@ impl AppState {
                     }
                 }
             }
-            rt.feed = next_feed;
+            rt.replace_feed(next_feed);
         }
         if !stale_snapshot && let Some(todos_arr) = snapshot.get("todos").and_then(Value::as_array)
         {
@@ -13931,6 +14510,7 @@ impl AppState {
             self.available_plugins = available_plugins;
             self.plugin_catalog_warnings = warnings;
         }
+        self.bump_skills_rev();
     }
 
     fn apply_skills_catalog_event(&mut self, workspace_id: &str, evt: &Value) {
@@ -14005,6 +14585,7 @@ impl AppState {
             self.effective_skills = effective;
             self.skills = skills;
         }
+        self.bump_skills_rev();
     }
 
     fn bootstrap_active_workspace_tool_access(&mut self) {
@@ -14151,6 +14732,7 @@ impl AppState {
             self.available_plugins.clear();
             self.plugin_catalog_warnings.clear();
         }
+        self.bump_skills_rev();
     }
 
     pub fn skills_for_workspace(&self, workspace_id: &str) -> &[SkillSummary] {
@@ -14233,6 +14815,7 @@ impl AppState {
             self.effective_skills.clear();
             self.skill_scopes.clear();
         }
+        self.bump_skills_rev();
     }
 
     fn effective_subagent_workspace_id(&self) -> Option<&str> {
@@ -14609,6 +15192,7 @@ impl AppState {
         if sync_active {
             self.skills = updated;
         }
+        self.bump_skills_rev();
     }
 
     fn update_mcp_servers_from_event(&mut self, workspace_id: &str, evt: &Value) {
@@ -14664,6 +15248,7 @@ impl AppState {
                 self.provider_auth_method_specs.insert(prov.clone(), specs);
             }
         }
+        self.bump_provider_catalog_rev();
     }
 
     fn apply_provider_catalog_event(&mut self, evt: &Value) {
@@ -14704,6 +15289,7 @@ impl AppState {
                 .filter_map(|v| parse_provider_summary(v, &connected))
                 .collect();
         }
+        self.bump_provider_catalog_rev();
         self.refresh_creation_preflight();
     }
 
@@ -14723,6 +15309,7 @@ impl AppState {
                 .or_default()
                 .provider_statuses = statuses;
         }
+        self.bump_provider_catalog_rev();
         self.refresh_creation_preflight();
     }
 
@@ -14789,6 +15376,7 @@ impl AppState {
                 ..ProviderStatusSummary::default()
             });
         }
+        self.bump_provider_catalog_rev();
         self.refresh_creation_preflight();
     }
 
@@ -14949,6 +15537,7 @@ impl AppState {
 
         self.threads
             .retain(|t| !removed_ids.iter().any(|id| id == &t.id));
+        self.bump_threads_rev();
         self.workflow_runs.retain(|run| {
             run.session_id
                 .as_deref()
@@ -15313,10 +15902,67 @@ impl AppState {
     }
 
     pub(crate) fn persist_state_for_shutdown(&mut self) {
-        self.persist_state();
+        if self.services.native_tx.is_some() && !self.native_ready {
+            return;
+        }
+        self.flush_persist_state_now();
+    }
+
+    /// Relative delay in seconds until a debounced `persist_state()` flush is due (`tx.wake_at`).
+    pub(crate) fn next_persist_wake_delay_secs(&self) -> Option<f64> {
+        if self.services.native_tx.is_some() && !self.native_ready {
+            return None;
+        }
+        self.persist_dirty_since.map(|since| {
+            PERSIST_DEBOUNCE
+                .saturating_sub(since.elapsed())
+                .as_secs_f64()
+        })
+    }
+
+    /// Flushes a coalesced `persist_state()` snapshot once the debounce window has elapsed.
+    pub(crate) fn tick_persist_timer(&mut self) {
+        if self
+            .persist_dirty_since
+            .is_some_and(|since| since.elapsed() >= PERSIST_DEBOUNCE)
+        {
+            if self.services.native_tx.is_some() && !self.native_ready {
+                return;
+            }
+            self.flush_persist_state_now();
+        }
     }
 
     fn persist_state(&mut self) {
+        if self.services.native_tx.is_some() {
+            if !self.native_ready {
+                return;
+            }
+            if self.pending_removed_workspace_ids.is_empty() {
+                if self.persist_dirty_since.is_none() {
+                    self.persist_dirty_since = Some(std::time::Instant::now());
+                    if let Some(waker) = self
+                        .services
+                        .poll_waker
+                        .as_ref()
+                        .or(self.services.waker.as_ref())
+                        && self
+                            .services
+                            .wake_pending
+                            .as_ref()
+                            .is_none_or(|flag| !flag.swap(true, Ordering::AcqRel))
+                    {
+                        (waker)();
+                    }
+                }
+                return;
+            }
+        }
+        self.flush_persist_state_now();
+    }
+
+    fn flush_persist_state_now(&mut self) {
+        self.persist_dirty_since = None;
         let raw_active_tid = if self.window_mode == WindowMode::Main {
             self.nav.current().active_thread_id.clone()
         } else {
@@ -15398,6 +16044,7 @@ impl AppState {
         }
 
         if !added_ids.is_empty() {
+            self.bump_workspaces_rev();
             if self.active_workspace_id.is_none() {
                 self.active_workspace_id = added_ids.first().cloned();
             }
@@ -15589,14 +16236,21 @@ impl AppState {
         self.upsert_task_summary(task.summary.clone());
         self.reconcile_source_task_locks_for_workspace(workspace_id);
         // The server deliberately leaves these sessions out of ordinary thread/list responses.
+        let mut linked_threads_changed = false;
         for linked in &task.threads {
             if let Some(thread) = self
                 .threads
                 .iter_mut()
                 .find(|thread| thread.id == linked.session_id)
             {
-                thread.source_task_id = Some(task.summary.id.clone());
-                thread.title.clone_from(&linked.title);
+                if thread.source_task_id.as_deref() != Some(task.summary.id.as_str()) {
+                    thread.source_task_id = Some(task.summary.id.clone());
+                    linked_threads_changed = true;
+                }
+                if thread.title != linked.title {
+                    thread.title.clone_from(&linked.title);
+                    linked_threads_changed = true;
+                }
             } else {
                 self.threads.push(ThreadRecord {
                     id: linked.session_id.clone(),
@@ -15606,7 +16260,11 @@ impl AppState {
                     title: linked.title.clone(),
                     ..Default::default()
                 });
+                linked_threads_changed = true;
             }
+        }
+        if linked_threads_changed {
+            self.bump_threads_rev();
         }
         let viewing_this_task = match self.nav.current().active_task_id.as_deref() {
             Some(nav_tid) => nav_tid == task.summary.id,
@@ -18763,7 +19421,7 @@ fn mime_type_for_path(path: &Path) -> &'static str {
     }
 }
 
-fn probe_image_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+pub(crate) fn probe_image_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
     // PNG IHDR width/height at offsets 16..24.
     if bytes.len() >= 24 && &bytes[0..8] == b"\x89PNG\r\n\x1a\n" {
         let w = u32::from_be_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]);

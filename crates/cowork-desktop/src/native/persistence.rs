@@ -195,10 +195,18 @@ impl TranscriptWriteBuffer {
     }
 
     /// Queues `event` and schedules a debounced 200ms flush on the active Tokio runtime, if any.
+    /// Contiguous streaming delta events for the same `(thread_id, method, itemId)` are coalesced
+    /// in place so high-rate token streams do not flood disk with one JSONL line per token.
     pub fn enqueue(&self, event: TranscriptEvent) {
         let should_schedule = {
             let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-            guard.pending.push(event);
+            let coalesced = guard
+                .pending
+                .last_mut()
+                .is_some_and(|prev| try_coalesce_transcript_delta(prev, &event));
+            if !coalesced {
+                guard.pending.push(event);
+            }
             if guard.flush_scheduled {
                 false
             } else if tokio::runtime::Handle::try_current().is_ok() {
@@ -270,6 +278,54 @@ impl TranscriptWriteBuffer {
         }
         Ok(count)
     }
+}
+
+fn try_coalesce_transcript_delta(prev: &mut TranscriptEvent, next: &TranscriptEvent) -> bool {
+    if prev.thread_id != next.thread_id
+        || prev.direction != TranscriptDirection::Server
+        || next.direction != TranscriptDirection::Server
+        || !prev.extra.is_empty()
+        || !next.extra.is_empty()
+    {
+        return false;
+    }
+    let Some(method) = next.payload.get("method").and_then(Value::as_str) else {
+        return false;
+    };
+    if !matches!(method, "item/agentMessage/delta" | "item/reasoning/delta") {
+        return false;
+    }
+    if prev.payload.get("method").and_then(Value::as_str) != Some(method) {
+        return false;
+    }
+    let Some(next_params) = next.payload.get("params").and_then(Value::as_object) else {
+        return false;
+    };
+    let Some(next_item_id) = next_params.get("itemId").and_then(Value::as_str) else {
+        return false;
+    };
+    let Some(next_delta) = next_params.get("delta").and_then(Value::as_str) else {
+        return false;
+    };
+    let Some(prev_params) = prev
+        .payload
+        .get_mut("params")
+        .and_then(Value::as_object_mut)
+    else {
+        return false;
+    };
+    if prev_params.get("itemId").and_then(Value::as_str) != Some(next_item_id) {
+        return false;
+    }
+    let Some(Value::String(prev_delta)) = prev_params.get_mut("delta") else {
+        return false;
+    };
+    prev_delta.push_str(next_delta);
+    if let Some(seq) = next_params.get("seq") {
+        prev_params.insert("seq".to_string(), seq.clone());
+    }
+    prev.ts = next.ts.clone();
+    true
 }
 
 impl PersistenceService {

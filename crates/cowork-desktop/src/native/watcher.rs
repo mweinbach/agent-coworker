@@ -12,7 +12,7 @@ use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio::task::JoinHandle;
 
-const DEFAULT_WATCH_DEBOUNCE: Duration = Duration::from_millis(40);
+const DEFAULT_WATCH_DEBOUNCE: Duration = Duration::from_millis(200);
 const WATCH_RESTART_DELAYS: [Duration; 3] = [
     Duration::from_secs(2),
     Duration::from_secs(10),
@@ -200,6 +200,34 @@ fn build_notify_watcher(
     Ok(watcher)
 }
 
+fn is_ignored_watch_path(root: &Path, path: &Path) -> bool {
+    let Ok(rel) = path.strip_prefix(root) else {
+        return false;
+    };
+    rel.components().any(|comp| {
+        matches!(
+            comp,
+            std::path::Component::Normal(name)
+                if matches!(
+                    name.to_str(),
+                    Some(
+                        ".git"
+                            | "target"
+                            | "node_modules"
+                            | ".cowork"
+                            | "dist"
+                            | ".next"
+                            | ".turbo"
+                            | "__pycache__"
+                            | ".venv"
+                            | "venv"
+                            | ".cache"
+                    )
+                )
+        )
+    })
+}
+
 async fn create_watch_handle_off_thread(
     factory: WatchBackendFactory,
     root: PathBuf,
@@ -249,11 +277,15 @@ async fn spawn_scope_watcher(
                                 restart_attempt = 0;
                                 last_restart_at = None;
                             }
-                            if matches!(event.kind, EventKind::Remove(_)) {
-                                saw_remove = true;
-                            }
+                            let mut inserted_any = false;
                             for p in event.paths {
-                                pending_paths.insert(p);
+                                if !is_ignored_watch_path(&scope.root_path, &p) {
+                                    pending_paths.insert(p);
+                                    inserted_any = true;
+                                }
+                            }
+                            if inserted_any && matches!(event.kind, EventKind::Remove(_)) {
+                                saw_remove = true;
                             }
                             if debounce_sleep.is_none() && !pending_paths.is_empty() {
                                 debounce_sleep = Some(Box::pin(tokio::time::sleep(config.debounce)));

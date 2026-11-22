@@ -18,11 +18,16 @@ members = [
 ]
 
 # `cargo run` (and `bun run desktop:rune`) builds the dev profile. Rune's layout, text shaping and
-# paint run every frame and are roughly 3x slower unoptimized (see `crates/cowork-desktop/benches/
-# ui_perf.rs`), so optimize dependencies only: workspace crates stay at opt-level 0 for fast
-# incremental rebuilds, and binaries keep their `target/debug` paths.
+# paint run every frame and are dramatically slower unoptimized (see `crates/cowork-desktop/benches/
+# ui_perf.rs`). Optimize dependencies at level 3 and `cowork-desktop` at level 1 (because generic
+# `rune::Runtime<AppState>` frame/diff/layout code monomorphizes into `cowork-desktop`), keeping
+# debug assertions, debuginfo, `target/debug` paths, and `opt-level = 0` on all other workspace
+# crates and on `[profile.test]`.
 [profile.dev.package."*"]
 opt-level = 3
+
+[profile.dev.package.cowork-desktop]
+opt-level = 1
 
 [workspace.package]
 version = "0.1.0"

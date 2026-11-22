@@ -6,6 +6,7 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use std::process::Command;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use anyhow::Result;
 use cowork_config::{ensure_private_dir_sync, host_platform, write_text_file_atomic};
@@ -126,31 +127,37 @@ pub fn detect_system_dark() -> Option<bool> {
     }
 }
 
+static REDUCED_TRANSPARENCY: OnceLock<bool> = OnceLock::new();
+
 pub fn detect_reduced_transparency() -> bool {
-    #[cfg(target_os = "macos")]
-    {
-        if let Ok(output) = Command::new("defaults")
-            .args(["read", "com.apple.universalaccess", "reduceTransparency"])
-            .output()
-            && output.status.success()
+    *REDUCED_TRANSPARENCY.get_or_init(|| {
+        #[cfg(target_os = "macos")]
         {
-            let out = String::from_utf8_lossy(&output.stdout);
-            return matches!(out.trim(), "1" | "true" | "YES");
+            if let Ok(output) = Command::new("defaults")
+                .args(["read", "com.apple.universalaccess", "reduceTransparency"])
+                .output()
+                && output.status.success()
+            {
+                let out = String::from_utf8_lossy(&output.stdout);
+                return matches!(out.trim(), "1" | "true" | "YES");
+            }
         }
-    }
-    false
+        false
+    })
 }
 
 /// Persists `appearance.json` atomically inside `user_data_dir`.
 #[derive(Clone, Debug)]
 pub struct AppearancePreferences {
     file_path: PathBuf,
+    last_saved_theme: Arc<Mutex<Option<ThemePreference>>>,
 }
 
 impl AppearancePreferences {
     pub fn new(user_data_dir: &Path) -> Self {
         Self {
             file_path: user_data_dir.join(APPEARANCE_FILE_NAME),
+            last_saved_theme: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -165,13 +172,27 @@ impl AppearancePreferences {
                 .and_then(|v| v.get("themeSource").cloned())
                 .and_then(|v| serde_json::from_value::<PersistedThemeSource>(v).ok())
                 .map(ThemePreference::from)
-                .unwrap_or(ThemePreference::System),
+                .unwrap_or_else(|| {
+                    *self
+                        .last_saved_theme
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner()) = None;
+                    ThemePreference::System
+                }),
             Err(err) if err.kind() == ErrorKind::NotFound => ThemePreference::System,
             Err(_) => ThemePreference::System,
         }
     }
 
     pub fn save_theme_preference(&self, pref: ThemePreference) -> Result<()> {
+        if *self
+            .last_saved_theme
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            == Some(pref)
+        {
+            return Ok(());
+        }
         if let Some(parent) = self.file_path.parent() {
             ensure_private_dir_sync(parent)
                 .map_err(|err| anyhow::anyhow!("Unable to create appearance directory: {err}"))?;
@@ -183,6 +204,10 @@ impl AppearancePreferences {
         );
         write_text_file_atomic(&self.file_path, &payload, Some(PRIVATE_FILE_MODE))
             .map_err(|err| anyhow::anyhow!("Unable to write appearance preferences: {err}"))?;
+        *self
+            .last_saved_theme
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(pref);
         Ok(())
     }
 }

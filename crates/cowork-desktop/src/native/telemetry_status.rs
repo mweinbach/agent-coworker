@@ -148,8 +148,9 @@ pub fn resolve_telemetry_consent(
     let ai_trace_payloads_enabled = ai_trace_telemetry_enabled
         && (settings.ai_trace_payloads_enabled
             || (allow_env_opt_in && resolve_trace_payload_env(env) == Some(true)));
-    let cloud_sync_enabled = settings.cloud_sync_enabled
-        || (allow_env_opt_in && parse_env_bool(env.get("COWORK_CLOUD_SYNC_ENABLED")) == Some(true));
+    let cloud_sync_env = parse_env_bool(env.get("COWORK_CLOUD_SYNC_ENABLED"));
+    let cloud_sync_enabled = cloud_sync_env != Some(false)
+        && (settings.cloud_sync_enabled || (allow_env_opt_in && cloud_sync_env == Some(true)));
 
     ResolvedTelemetryConsent {
         crash_reports_enabled,

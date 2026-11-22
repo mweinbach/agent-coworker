@@ -170,8 +170,9 @@ pub fn resolve_cloud_sync_config(
         .and_then(|o| o.get("enabled"))
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    let enabled =
-        !kill_switch && (env_enabled.unwrap_or(persisted_enabled) || consent.cloud_sync_enabled);
+    let enabled = !kill_switch
+        && env_enabled != Some(false)
+        && (persisted_enabled || consent.cloud_sync_enabled);
     let provider_custom = endpoint.is_some()
         || cloud_obj
             .and_then(|o| o.get("provider"))
@@ -967,5 +968,40 @@ mod tests {
 
         svc.shutdown();
         server.abort();
+    }
+
+    #[test]
+    fn explicit_env_opt_out_disables_cloud_sync_and_packaged_blocks_env_opt_in() {
+        let mut privacy = PrivacyTelemetrySettings {
+            cloud_sync_enabled: true,
+            ..PrivacyTelemetrySettings::default()
+        };
+        let raw_doc = json!({
+            "cloudSync": {
+                "enabled": true,
+                "provider": "custom",
+                "endpoint": "https://sync.example.com"
+            }
+        });
+        let mut env = HashMap::new();
+        env.insert("COWORK_CLOUD_SYNC_ENABLED".into(), "false".into());
+        env.insert(
+            "COWORK_CLOUD_SYNC_ENDPOINT".into(),
+            "https://sync.example.com".into(),
+        );
+
+        let opted_out = resolve_cloud_sync_config(&privacy, Some(&raw_doc), &env, false);
+        assert!(!opted_out.enabled);
+        assert!(!opted_out.is_active());
+
+        // In packaged builds, env opt-in must not override missing user consent.
+        privacy.cloud_sync_enabled = false;
+        env.insert("COWORK_CLOUD_SYNC_ENABLED".into(), "true".into());
+        let dev_opt_in = resolve_cloud_sync_config(&privacy, None, &env, false);
+        assert!(dev_opt_in.enabled);
+        assert!(dev_opt_in.is_active());
+        let packaged_opt_in = resolve_cloud_sync_config(&privacy, None, &env, true);
+        assert!(!packaged_opt_in.enabled);
+        assert!(!packaged_opt_in.is_active());
     }
 }

@@ -2307,3 +2307,116 @@ async fn codex_app_server_update_runs_managed_installer_and_fails_closed_on_chec
     .await;
     assert_eq!(after["result"]["status"]["available"], json!(false));
 }
+
+#[tokio::test]
+async fn lmstudio_local_status_and_start_suppress_saved_key_for_client_override_urls() {
+    let configured_auth = Arc::new(Mutex::new(Vec::<Option<String>>::new()));
+    let configured_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let configured_port = configured_listener.local_addr().unwrap().port();
+    let configured_url = format!("http://127.0.0.1:{configured_port}");
+    {
+        let auth_log = Arc::clone(&configured_auth);
+        let app = axum::Router::new().fallback(axum::routing::get(
+            move |headers: axum::http::HeaderMap| {
+                let auth_log = Arc::clone(&auth_log);
+                async move {
+                    let auth = headers
+                        .get(axum::http::header::AUTHORIZATION)
+                        .and_then(|v| v.to_str().ok())
+                        .map(str::to_string);
+                    auth_log.lock().unwrap().push(auth);
+                    axum::Json(json!({ "models": [] }))
+                }
+            },
+        ));
+        tokio::spawn(async move {
+            axum::serve(configured_listener, app).await.unwrap();
+        });
+    }
+
+    let attacker_auth = Arc::new(Mutex::new(Vec::<Option<String>>::new()));
+    let attacker_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let attacker_port = attacker_listener.local_addr().unwrap().port();
+    let attacker_url = format!("http://127.0.0.1:{attacker_port}");
+    {
+        let auth_log = Arc::clone(&attacker_auth);
+        let app = axum::Router::new().fallback(axum::routing::get(
+            move |headers: axum::http::HeaderMap| {
+                let auth_log = Arc::clone(&auth_log);
+                async move {
+                    let auth = headers
+                        .get(axum::http::header::AUTHORIZATION)
+                        .and_then(|v| v.to_str().ok())
+                        .map(str::to_string);
+                    auth_log.lock().unwrap().push(auth);
+                    axum::Json(json!({ "models": [] }))
+                }
+            },
+        ));
+        tokio::spawn(async move {
+            axum::serve(attacker_listener, app).await.unwrap();
+        });
+    }
+
+    let mut iso = IsolatedEnv::new();
+    iso.env
+        .insert("LM_STUDIO_BASE_URL".into(), configured_url.clone());
+    // Also place a fake `lms` binary in `~/.lmstudio/bin/lms` so `local/start` probes the URL.
+    let lms_bin = iso.home_dir.join(".lmstudio/bin/lms");
+    std::fs::create_dir_all(lms_bin.parent().unwrap()).unwrap();
+    std::fs::write(&lms_bin, "#!/bin/sh\nexit 0\n").unwrap();
+
+    let server = start_server(iso.server_options()).await.unwrap();
+    let mut ws = connect_initialized_ws(server.ws_url()).await;
+    let cwd = iso.workspace_dir.to_string_lossy().into_owned();
+
+    // Save a secret LM Studio API key in the connection store.
+    let save_key = ws_rpc(
+        &mut ws,
+        "lms-key",
+        "cowork/provider/auth/setApiKey",
+        json!({ "cwd": cwd, "provider": "lmstudio", "apiKey": "lms-secret-token" }),
+    )
+    .await;
+    assert!(save_key.get("error").is_none(), "{save_key}");
+
+    // 1. Checking the configured endpoint (implicit or exact match) authenticates with the saved key.
+    let configured_resp = ws_rpc(
+        &mut ws,
+        "lms-st-cfg",
+        "cowork/provider/lmstudio/local/status",
+        json!({ "cwd": cwd }),
+    )
+    .await;
+    assert_eq!(configured_resp["result"]["status"]["running"], json!(true));
+    assert_eq!(
+        configured_auth.lock().unwrap().as_slice(),
+        &[Some("Bearer lms-secret-token".to_string())]
+    );
+
+    // 2. Client-overridden `baseUrl` MUST NOT receive the saved LM Studio key on status or start.
+    let override_status = ws_rpc(
+        &mut ws,
+        "lms-st-override",
+        "cowork/provider/lmstudio/local/status",
+        json!({ "cwd": cwd, "baseUrl": attacker_url }),
+    )
+    .await;
+    assert_eq!(override_status["result"]["status"]["running"], json!(true));
+
+    let override_start = ws_rpc(
+        &mut ws,
+        "lms-start-override",
+        "cowork/provider/lmstudio/local/start",
+        json!({ "cwd": cwd, "baseUrl": attacker_url, "timeoutMs": 600 }),
+    )
+    .await;
+    assert_eq!(override_start["result"]["status"]["running"], json!(true));
+
+    let attacker_seen = attacker_auth.lock().unwrap().clone();
+    assert_eq!(
+        attacker_seen,
+        vec![None, None],
+        "saved LM Studio API key must never be sent to client-selected baseUrl overrides"
+    );
+}

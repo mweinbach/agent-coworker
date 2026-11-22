@@ -994,3 +994,174 @@ for line in sys.stdin:
         .unwrap();
     assert_eq!(text, "exec=opt-deny;read=opt-allow;images=ACP_IMG_TURN_1");
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn antigravity_acp_returns_error_on_subprocess_exit_without_spinning() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let script_path = tmp.path().join("mock-acp-crash.py");
+    let script = r#"#!/usr/bin/env python3
+import json, sys
+
+def send(obj):
+    sys.stdout.write(json.dumps(obj) + "\n")
+    sys.stdout.flush()
+
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    msg = json.loads(line)
+    method = msg.get("method")
+    req_id = msg.get("id")
+    if method == "initialize":
+        send({"jsonrpc": "2.0", "id": req_id, "result": {"protocolVersion": 1}})
+    elif method == "session/new":
+        send({"jsonrpc": "2.0", "id": req_id, "result": {"sessionId": "acp-crash-1"}})
+    elif method == "session/set_model":
+        send({"jsonrpc": "2.0", "id": req_id, "result": {}})
+    elif method == "session/prompt":
+        # Exit immediately mid-prompt so the reader drops the notification channel.
+        sys.exit(42)
+"#;
+    std::fs::write(&script_path, script).unwrap();
+    std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let mut env = HashMap::new();
+    env.insert("HOME".into(), tmp.path().to_string_lossy().into_owned());
+    env.insert("PATH".into(), std::env::var("PATH").unwrap_or_default());
+    let mut transport = AntigravityAcpTransport::with_env(env);
+    transport.command_override = Some((script_path.to_string_lossy().into_owned(), Vec::new()));
+
+    let mut provider_options = Map::new();
+    provider_options.insert("cwd".into(), json!(tmp.path().to_string_lossy()));
+
+    let req = ProviderStepRequest {
+        model_id: "gemini-4-neon".to_owned(),
+        base_url: None,
+        api_key: Some("gem-key".to_owned()),
+        extra_headers: HashMap::new(),
+        system_prompt: String::new(),
+        messages: vec![user_msg("Trigger exit")],
+        tools: Vec::new(),
+        authorized_tool_names: None,
+        provider_options,
+        continuation: None,
+        policy: RequestPolicy::default(),
+        turn_id: "turn-acp-crash".to_owned(),
+    };
+
+    let budget = StepBudget::unbounded(Some(CancellationToken::new()));
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        transport.stream_step(req, &budget, &mut |_| {}),
+    )
+    .await
+    .expect("ACP stream_step must not hang/spin when subprocess exits");
+    assert!(
+        result.is_err(),
+        "expected transport error when ACP subprocess exits mid-prompt"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn antigravity_acp_completes_text_segments_separately_across_tool_calls() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let script_path = tmp.path().join("mock-acp-segments.py");
+    let script = r#"#!/usr/bin/env python3
+import json, sys
+
+def send(obj):
+    sys.stdout.write(json.dumps(obj) + "\n")
+    sys.stdout.flush()
+
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    msg = json.loads(line)
+    method = msg.get("method")
+    req_id = msg.get("id")
+    if method == "initialize":
+        send({"jsonrpc": "2.0", "id": req_id, "result": {"protocolVersion": 1}})
+    elif method == "session/new":
+        send({"jsonrpc": "2.0", "id": req_id, "result": {"sessionId": "acp-seg-1"}})
+    elif method == "session/set_model":
+        send({"jsonrpc": "2.0", "id": req_id, "result": {}})
+    elif method == "session/prompt":
+        sid = msg["params"]["sessionId"]
+        send({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": sid, "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Checking files..."}}}})
+        send({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": sid, "update": {"sessionUpdate": "tool_call", "toolCallId": "tc-1", "title": "read_file", "rawInput": {"path": "README.md"}}}})
+        send({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": sid, "update": {"sessionUpdate": "tool_call_update", "toolCallId": "tc-1", "title": "read_file", "status": "completed", "rawOutput": {"ok": True}}}})
+        send({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": sid, "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Final answer."}}}})
+        send({"jsonrpc": "2.0", "id": req_id, "result": {"stopReason": "end_turn"}})
+        break
+"#;
+    std::fs::write(&script_path, script).unwrap();
+    std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let mut env = HashMap::new();
+    env.insert("HOME".into(), tmp.path().to_string_lossy().into_owned());
+    env.insert("PATH".into(), std::env::var("PATH").unwrap_or_default());
+    let mut transport = AntigravityAcpTransport::with_env(env);
+    transport.command_override = Some((script_path.to_string_lossy().into_owned(), Vec::new()));
+
+    let mut provider_options = Map::new();
+    provider_options.insert("cwd".into(), json!(tmp.path().to_string_lossy()));
+
+    let req = ProviderStepRequest {
+        model_id: "gemini-4-neon".to_owned(),
+        base_url: None,
+        api_key: Some("gem-key".to_owned()),
+        extra_headers: HashMap::new(),
+        system_prompt: String::new(),
+        messages: vec![user_msg("Inspect and answer")],
+        tools: Vec::new(),
+        authorized_tool_names: None,
+        provider_options,
+        continuation: None,
+        policy: RequestPolicy::default(),
+        turn_id: "turn-acp-segments".to_owned(),
+    };
+
+    let budget = StepBudget::unbounded(Some(CancellationToken::new()));
+    let mut events = Vec::new();
+    let res = transport
+        .stream_step(req, &budget, &mut |ev| events.push(ev))
+        .await
+        .expect("ACP turn succeeds");
+
+    let text_ends: Vec<(usize, String)> = events
+        .iter()
+        .filter_map(|e| match e {
+            StreamEvent::TextEnd {
+                block_index, text, ..
+            } => Some((*block_index, text.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        text_ends,
+        vec![
+            (0, "Checking files...".to_owned()),
+            (1, "Final answer.".to_owned()),
+        ],
+        "each ACP text segment must complete with segment-specific text without duplicating prior narration"
+    );
+
+    let full_text = res
+        .assistant
+        .content
+        .iter()
+        .find_map(|b| match b {
+            ContentBlock::Text { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(full_text, "Checking files...Final answer.");
+}

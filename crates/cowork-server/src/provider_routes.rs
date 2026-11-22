@@ -590,18 +590,34 @@ impl ServerRuntimeState {
             )
             .map_err(|m| JsonRpcLiteError::new(error_codes::INVALID_PARAMS, m))?;
         let opts = self.catalog_build_options(&cwd, false);
-        let paths = get_ai_coworker_paths(Some(&self.homedir), &self.env);
-        let saved_key = read_connection_store(&paths)
-            .await
-            .ok()
-            .and_then(|store| store.provider_api_key(ProviderName::Lmstudio));
+        let configured_lms =
+            resolve_lmstudio_options(&self.env, opts.provider_options.as_ref(), None);
+        let requested_base_url = params
+            .base_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        let client_overrode_base_url = requested_base_url.is_some_and(|raw| {
+            cowork_config::normalize_lmstudio_base_url(Some(raw)) != configured_lms.base_url
+        });
+        // SECURITY BOUNDARY: never send saved LM Studio credentials to an unconfigured
+        // client-chosen `baseUrl`.
+        let saved_key = if client_overrode_base_url {
+            None
+        } else {
+            let paths = get_ai_coworker_paths(Some(&self.homedir), &self.env);
+            read_connection_store(&paths)
+                .await
+                .ok()
+                .and_then(|store| store.provider_api_key(ProviderName::Lmstudio))
+        };
         let svc = LmStudioLocalService::new();
         let status = svc
             .get_status_with_key(
                 &self.homedir,
                 &self.env,
                 opts.provider_options.as_ref(),
-                params.base_url.as_deref(),
+                requested_base_url,
                 saved_key.as_deref(),
             )
             .await;
@@ -628,22 +644,14 @@ impl ServerRuntimeState {
         }
 
         let opts = self.catalog_build_options(&cwd, false);
-        let paths = get_ai_coworker_paths(Some(&self.homedir), &self.env);
-        let saved_key = read_connection_store(&paths)
-            .await
-            .ok()
-            .and_then(|store| store.provider_api_key(ProviderName::Lmstudio));
-        let resolved_lms = resolve_lmstudio_options(
-            &self.env,
-            opts.provider_options.as_ref(),
-            saved_key.as_deref(),
-        );
-        let target_base_url = params
+        let configured_lms =
+            resolve_lmstudio_options(&self.env, opts.provider_options.as_ref(), None);
+        let requested_base_url = params
             .base_url
             .as_deref()
             .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .unwrap_or(&resolved_lms.base_url);
+            .filter(|s| !s.is_empty());
+        let target_base_url = requested_base_url.unwrap_or(&configured_lms.base_url);
 
         if !is_loopback_lmstudio_url(target_base_url) {
             return Err(JsonRpcLiteError::new(
@@ -652,11 +660,27 @@ impl ServerRuntimeState {
             ));
         }
 
+        let client_overrode_base_url = requested_base_url.is_some_and(|raw| {
+            cowork_config::normalize_lmstudio_base_url(Some(raw)) != configured_lms.base_url
+        });
+        // SECURITY BOUNDARY: never send saved LM Studio credentials to an unconfigured
+        // client-chosen `baseUrl`.
+        let saved_key = if client_overrode_base_url {
+            None
+        } else {
+            let paths = get_ai_coworker_paths(Some(&self.homedir), &self.env);
+            read_connection_store(&paths)
+                .await
+                .ok()
+                .and_then(|store| store.provider_api_key(ProviderName::Lmstudio))
+        };
+
         let svc = LmStudioLocalService::new();
         let status = svc
             .start_local_with_key(
                 &self.homedir,
                 &self.env,
+                opts.provider_options.as_ref(),
                 Some(target_base_url),
                 params.timeout_ms,
                 saved_key.as_deref(),

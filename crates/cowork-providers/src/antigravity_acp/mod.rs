@@ -993,6 +993,8 @@ impl ProviderTransport for AntigravityAcpTransport {
         let mut thinking_text = String::new();
         let mut thinking_segment_text = String::new();
         let mut text_started = false;
+        let mut text_block_index: usize = 0;
+        let mut text_segment_text = String::new();
         let mut final_text = String::new();
         let mut announced_tools: HashSet<String> = HashSet::new();
         let mut usage = TurnUsage::default();
@@ -1000,6 +1002,26 @@ impl ProviderTransport for AntigravityAcpTransport {
         let prompt_outcome = budget
             .run(async {
                 tokio::pin!(prompt_fut);
+                let close_text_segment =
+                    |text_started: &mut bool,
+                     text_block_index: &mut usize,
+                     text_segment_text: &mut String,
+                     on_event: &mut StreamEventCallback<'_>| {
+                        if *text_started {
+                            *text_started = false;
+                            let segment = std::mem::take(text_segment_text);
+                            on_event(StreamEvent::TextEnd {
+                                turn_id: turn_id.clone(),
+                                block_index: *text_block_index,
+                                text: segment,
+                                phase: None,
+                                citations: Vec::new(),
+                                annotations: Vec::new(),
+                            });
+                            *text_block_index += 1;
+                        }
+                    };
+                #[allow(clippy::too_many_arguments)]
                 let handle_notif =
                     |method: &str,
                      params: &Value,
@@ -1011,6 +1033,8 @@ impl ProviderTransport for AntigravityAcpTransport {
                      thinking_text: &mut String,
                      thinking_segment_text: &mut String,
                      text_started: &mut bool,
+                     text_block_index: &mut usize,
+                     text_segment_text: &mut String,
                      final_text: &mut String,
                      announced_tools: &mut HashSet<String>,
                      usage: &mut TurnUsage,
@@ -1037,6 +1061,12 @@ impl ProviderTransport for AntigravityAcpTransport {
                         match kind {
                             "agent_thought_chunk" => {
                                 if let Some(d) = extract_chunk_text(update) {
+                                    close_text_segment(
+                                        text_started,
+                                        text_block_index,
+                                        text_segment_text,
+                                        on_event,
+                                    );
                                     if !*thinking_started || *thinking_closed {
                                         if *thinking_closed {
                                             *think_segment += 1;
@@ -1077,22 +1107,30 @@ impl ProviderTransport for AntigravityAcpTransport {
                                     }
                                     if !*text_started {
                                         *text_started = true;
+                                        text_segment_text.clear();
                                         on_event(StreamEvent::TextStart {
                                             turn_id: turn_id.clone(),
-                                            block_index: 0,
+                                            block_index: *text_block_index,
                                             phase: None,
                                         });
                                     }
+                                    text_segment_text.push_str(&d);
                                     final_text.push_str(&d);
                                     on_event(StreamEvent::TextDelta {
                                         turn_id: turn_id.clone(),
-                                        block_index: 0,
+                                        block_index: *text_block_index,
                                         delta: d,
                                         phase: None,
                                     });
                                 }
                             }
                             "tool_call" => {
+                                close_text_segment(
+                                    text_started,
+                                    text_block_index,
+                                    text_segment_text,
+                                    on_event,
+                                );
                                 if *thinking_started && !*thinking_closed {
                                     *thinking_closed = true;
                                     on_event(StreamEvent::ThinkingEnd {
@@ -1147,6 +1185,12 @@ impl ProviderTransport for AntigravityAcpTransport {
                                 let status =
                                     update.get("status").and_then(Value::as_str).unwrap_or("");
                                 if !id.is_empty() && matches!(status, "completed" | "failed") {
+                                    close_text_segment(
+                                        text_started,
+                                        text_block_index,
+                                        text_segment_text,
+                                        on_event,
+                                    );
                                     let name = update
                                         .get("title")
                                         .or_else(|| update.get("kind"))
@@ -1177,6 +1221,7 @@ impl ProviderTransport for AntigravityAcpTransport {
                         }
                     };
 
+                let mut notif_open = true;
                 loop {
                     tokio::select! {
                         biased;
@@ -1184,24 +1229,31 @@ impl ProviderTransport for AntigravityAcpTransport {
                             client.notify("session/cancel", json!({ "sessionId": session_id }));
                             return Err(ProviderTransportError::aborted("Model turn aborted."));
                         }
-                        maybe_notif = notif_rx.recv() => {
-                            if let Some((method, params)) = maybe_notif {
-                                handle_notif(
-                                    &method,
-                                    &params,
-                                    &mut raw_events,
-                                    &mut thinking_started,
-                                    &mut thinking_closed,
-                                    &mut think_segment,
-                                    &mut think_stream_id,
-                                    &mut thinking_text,
-                                    &mut thinking_segment_text,
-                                    &mut text_started,
-                                    &mut final_text,
-                                    &mut announced_tools,
-                                    &mut usage,
-                                    on_event,
-                                );
+                        maybe_notif = notif_rx.recv(), if notif_open => {
+                            match maybe_notif {
+                                Some((method, params)) => {
+                                    handle_notif(
+                                        &method,
+                                        &params,
+                                        &mut raw_events,
+                                        &mut thinking_started,
+                                        &mut thinking_closed,
+                                        &mut think_segment,
+                                        &mut think_stream_id,
+                                        &mut thinking_text,
+                                        &mut thinking_segment_text,
+                                        &mut text_started,
+                                        &mut text_block_index,
+                                        &mut text_segment_text,
+                                        &mut final_text,
+                                        &mut announced_tools,
+                                        &mut usage,
+                                        on_event,
+                                    );
+                                }
+                                None => {
+                                    notif_open = false;
+                                }
                             }
                         }
                         prompt_res = &mut prompt_fut => {
@@ -1218,6 +1270,8 @@ impl ProviderTransport for AntigravityAcpTransport {
                                     &mut thinking_text,
                                     &mut thinking_segment_text,
                                     &mut text_started,
+                                    &mut text_block_index,
+                                    &mut text_segment_text,
                                     &mut final_text,
                                     &mut announced_tools,
                                     &mut usage,
@@ -1256,8 +1310,8 @@ impl ProviderTransport for AntigravityAcpTransport {
         if text_started {
             on_event(StreamEvent::TextEnd {
                 turn_id: turn_id.clone(),
-                block_index: 0,
-                text: final_text.clone(),
+                block_index: text_block_index,
+                text: text_segment_text,
                 phase: None,
                 citations: Vec::new(),
                 annotations: Vec::new(),

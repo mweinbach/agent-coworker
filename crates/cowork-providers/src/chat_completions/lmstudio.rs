@@ -547,6 +547,11 @@ impl LmStudioLocalService {
         let mut opts = resolve_lmstudio_options(env, provider_options, saved_api_key);
         if let Some(explicit) = explicit_base_url.filter(|s| !s.trim().is_empty()) {
             let base = normalize_lmstudio_base_url(Some(explicit));
+            if base != opts.base_url {
+                // SECURITY BOUNDARY: never send saved, workspace-configured, or env LM Studio
+                // API keys to an unconfigured caller-supplied `baseUrl`.
+                opts.api_key = None;
+            }
             opts.inference_base_url = format!("{base}/v1");
             opts.api_base_url = format!("{base}/api/v1");
             opts.base_url = base;
@@ -575,7 +580,7 @@ impl LmStudioLocalService {
         base_url: Option<&str>,
         timeout_ms: Option<u64>,
     ) -> Result<LmStudioLocalStartResult, String> {
-        self.start_local_with_key(homedir, env, base_url, timeout_ms, None)
+        self.start_local_with_key(homedir, env, None, base_url, timeout_ms, None)
             .await
     }
 
@@ -583,13 +588,19 @@ impl LmStudioLocalService {
         &self,
         homedir: &Path,
         env: &HashMap<String, String>,
+        provider_options: Option<&Map<String, Value>>,
         base_url: Option<&str>,
         timeout_ms: Option<u64>,
         saved_api_key: Option<&str>,
     ) -> Result<LmStudioLocalStartResult, String> {
-        let mut opts = resolve_lmstudio_options(env, None, saved_api_key);
+        let mut opts = resolve_lmstudio_options(env, provider_options, saved_api_key);
         if let Some(explicit) = base_url.filter(|s| !s.trim().is_empty()) {
             let normalized = normalize_lmstudio_base_url(Some(explicit));
+            if normalized != opts.base_url {
+                // SECURITY BOUNDARY: never send saved, workspace-configured, or env LM Studio
+                // API keys to an unconfigured caller-supplied `baseUrl`.
+                opts.api_key = None;
+            }
             opts.inference_base_url = format!("{normalized}/v1");
             opts.api_base_url = format!("{normalized}/api/v1");
             opts.base_url = normalized;

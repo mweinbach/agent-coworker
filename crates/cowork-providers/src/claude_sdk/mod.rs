@@ -23,6 +23,7 @@ use tokio::sync::mpsc;
 use uuid::Uuid;
 
 use crate::codex_app_server::DynamicToolHandler;
+use crate::credential_proxy::{CredentialBrokerProxy, UpstreamAuth};
 use crate::managed_runtime::{kill_managed_process_tree, spawn_managed_stdio_process};
 use crate::transport::{
     ProviderStepRequest, ProviderStepResult, ProviderTransport, StreamEventCallback,
@@ -30,10 +31,13 @@ use crate::transport::{
 };
 
 pub use installer::{
-    CLAUDE_SDK_MANAGED_VERSION, ClaudeSdkInstallOptions, build_claude_sdk_spawn_env,
-    claude_sdk_override_configured, claude_sdk_uses_oauth_token, install_claude_sdk,
-    resolve_claude_sdk_home, resolve_claude_sdk_status, update_managed_claude_sdk,
+    CLAUDE_SDK_MANAGED_VERSION, ClaudeSdkInstallOptions, ClaudeSdkProxyAuth,
+    build_claude_sdk_spawn_env, claude_sdk_override_configured, claude_sdk_uses_oauth_token,
+    install_claude_sdk, resolve_claude_sdk_home, resolve_claude_sdk_status,
+    update_managed_claude_sdk,
 };
+
+const DEFAULT_ANTHROPIC_API_BASE_URL: &str = "https://api.anthropic.com";
 
 /// CLI-precedence inline settings passed to the managed `claude` subprocess so
 /// repository/user hooks (`SessionStart`, `PreToolUse`, etc.), custom status lines,
@@ -642,7 +646,37 @@ impl ProviderTransport for ClaudeSdkTransport {
             tools_disabled,
         );
 
-        let spawn_env = build_claude_sdk_spawn_env(&cw_home, &env, request.api_key.as_deref());
+        let credential_proxy = if let Some(secret) = request
+            .api_key
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            let upstream = request
+                .base_url
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .unwrap_or(DEFAULT_ANTHROPIC_API_BASE_URL);
+            let auth = if claude_sdk_uses_oauth_token(Some(secret)) {
+                UpstreamAuth::AnthropicOAuthToken(secret.to_owned())
+            } else {
+                UpstreamAuth::AnthropicApiKey(secret.to_owned())
+            };
+            Some(
+                CredentialBrokerProxy::start(upstream, auth)
+                    .await
+                    .map_err(ProviderTransportError::protocol)?,
+            )
+        } else {
+            None
+        };
+        let proxy_auth = credential_proxy.as_ref().map(|proxy| ClaudeSdkProxyAuth {
+            base_url: proxy.base_url().to_owned(),
+            proxy_token: proxy.proxy_token().to_owned(),
+            uses_oauth: claude_sdk_uses_oauth_token(request.api_key.as_deref()),
+        });
+        let spawn_env = build_claude_sdk_spawn_env(&cw_home, &env, proxy_auth.as_ref());
         let mut child =
             spawn_managed_stdio_process(&command, &args, &cwd, &spawn_env, "Claude SDK")
                 .map_err(ProviderTransportError::protocol)?;
@@ -1180,6 +1214,7 @@ impl ProviderTransport for ClaudeSdkTransport {
 
         drop(stdin_tx);
         kill_managed_process_tree(child).await;
+        drop(credential_proxy);
 
         stream_res?;
         if let Some(err) = result_error {

@@ -26,6 +26,7 @@ use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
 use crate::codex_app_server::DynamicToolHandler;
+use crate::credential_proxy::{CredentialBrokerProxy, UpstreamAuth};
 use crate::managed_runtime::{kill_managed_process_tree, spawn_managed_stdio_process};
 use crate::transport::{
     ProviderStepRequest, ProviderStepResult, ProviderTransport, StreamEventCallback,
@@ -33,12 +34,13 @@ use crate::transport::{
 };
 
 pub use installer::{
-    ANTIGRAVITY_ACP_MANAGED_VERSION, AntigravityAcpInstallOptions,
+    ANTIGRAVITY_ACP_MANAGED_VERSION, AntigravityAcpInstallOptions, AntigravityProxyAuth,
     antigravity_acp_override_configured, build_antigravity_acp_spawn_env, install_antigravity_acp,
     resolve_antigravity_acp_home, resolve_antigravity_acp_status, update_managed_antigravity_acp,
 };
 
 const ACP_RPC_TIMEOUT: Duration = Duration::from_secs(30);
+const DEFAULT_GEMINI_API_BASE_URL: &str = "https://generativelanguage.googleapis.com";
 
 #[derive(Clone, Default)]
 pub struct AntigravityAcpTransport {
@@ -684,7 +686,34 @@ impl ProviderTransport for AntigravityAcpTransport {
             .filter(|p| p.is_dir())
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
-        let spawn_env = build_antigravity_acp_spawn_env(&cw_home, &env, request.api_key.as_deref());
+        let credential_proxy = if let Some(secret) = request
+            .api_key
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            let upstream = request
+                .base_url
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .unwrap_or(DEFAULT_GEMINI_API_BASE_URL);
+            Some(
+                CredentialBrokerProxy::start(
+                    upstream,
+                    UpstreamAuth::GeminiApiKey(secret.to_owned()),
+                )
+                .await
+                .map_err(ProviderTransportError::protocol)?,
+            )
+        } else {
+            None
+        };
+        let proxy_auth = credential_proxy.as_ref().map(|proxy| AntigravityProxyAuth {
+            base_url: proxy.base_url().to_owned(),
+            proxy_token: proxy.proxy_token().to_owned(),
+        });
+        let spawn_env = build_antigravity_acp_spawn_env(&cw_home, &env, proxy_auth.as_ref());
         let mut child =
             spawn_managed_stdio_process(&command, &args, &cwd, &spawn_env, "Antigravity ACP")
                 .map_err(ProviderTransportError::protocol)?;
@@ -1322,6 +1351,7 @@ impl ProviderTransport for AntigravityAcpTransport {
 
         drop(stdin_tx);
         kill_managed_process_tree(child).await;
+        drop(credential_proxy);
 
         let prompt_result = prompt_outcome?;
         if let Some(u) = parse_acp_usage(&prompt_result) {

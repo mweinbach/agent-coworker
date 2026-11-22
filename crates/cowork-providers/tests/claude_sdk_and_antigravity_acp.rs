@@ -17,11 +17,11 @@ use cowork_inference::{
 };
 use cowork_providers::antigravity_acp::{
     ANTIGRAVITY_ACP_MANAGED_VERSION, AntigravityAcpInstallOptions, AntigravityAcpTransport,
-    build_antigravity_acp_spawn_env, install_antigravity_acp, resolve_antigravity_acp_home,
-    resolve_antigravity_acp_status,
+    AntigravityProxyAuth, build_antigravity_acp_spawn_env, install_antigravity_acp,
+    resolve_antigravity_acp_home, resolve_antigravity_acp_status,
 };
 use cowork_providers::claude_sdk::{
-    CLAUDE_SDK_MANAGED_VERSION, ClaudeSdkInstallOptions, ClaudeSdkTransport,
+    CLAUDE_SDK_MANAGED_VERSION, ClaudeSdkInstallOptions, ClaudeSdkProxyAuth, ClaudeSdkTransport,
     build_claude_sdk_spawn_env, install_claude_sdk, resolve_claude_sdk_home,
     resolve_claude_sdk_status,
 };
@@ -169,11 +169,20 @@ async fn claude_sdk_installer_verifies_sha256_and_fails_closed_on_tampering() {
     );
     assert_eq!(status_after.pin_matches_current, Some(true));
 
-    // 3. Isolated spawn env pins CLAUDE_CONFIG_DIR and strips inherited CLAUDE_* secrets.
+    // 3. Isolated spawn env pins CLAUDE_CONFIG_DIR, strips ambient credentials across providers,
+    //    and injects only the ephemeral loopback proxy URL and placeholder token.
     let mut parent = HashMap::new();
     parent.insert("CLAUDE_CONFIG_DIR".into(), "/Users/someone/.claude".into());
     parent.insert("ANTHROPIC_API_KEY".into(), "leaked-ambient-key".into());
-    let spawn_env = build_claude_sdk_spawn_env(&cowork_home, &parent, Some("sk-ant-oat-test-123"));
+    parent.insert("OPENAI_API_KEY".into(), "leaked-openai-key".into());
+    parent.insert("GEMINI_API_KEY".into(), "leaked-gemini-key".into());
+    parent.insert("AWS_SECRET_ACCESS_KEY".into(), "leaked-aws-secret".into());
+    let proxy_auth = ClaudeSdkProxyAuth {
+        base_url: "http://127.0.0.1:43210".into(),
+        proxy_token: "sk-ant-oat01-cowork-proxy-deadbeef".into(),
+        uses_oauth: true,
+    };
+    let spawn_env = build_claude_sdk_spawn_env(&cowork_home, &parent, Some(&proxy_auth));
     assert_eq!(
         spawn_env.get("CLAUDE_CONFIG_DIR").map(String::as_str),
         Some(
@@ -183,10 +192,22 @@ async fn claude_sdk_installer_verifies_sha256_and_fails_closed_on_tampering() {
         )
     );
     assert_eq!(
+        spawn_env.get("ANTHROPIC_BASE_URL").map(String::as_str),
+        Some("http://127.0.0.1:43210")
+    );
+    assert_eq!(
         spawn_env.get("CLAUDE_CODE_OAUTH_TOKEN").map(String::as_str),
-        Some("sk-ant-oat-test-123")
+        Some("sk-ant-oat01-cowork-proxy-deadbeef")
     );
     assert!(!spawn_env.contains_key("ANTHROPIC_API_KEY"));
+    assert!(!spawn_env.contains_key("OPENAI_API_KEY"));
+    assert!(!spawn_env.contains_key("GEMINI_API_KEY"));
+    assert!(!spawn_env.contains_key("AWS_SECRET_ACCESS_KEY"));
+    assert!(
+        spawn_env
+            .get("NO_PROXY")
+            .is_some_and(|v| v.contains("127.0.0.1"))
+    );
 
     server.abort();
 }
@@ -295,11 +316,18 @@ async fn antigravity_acp_installer_verifies_sha512_extracts_and_fails_closed() {
     assert_eq!(status.source, "managed");
     assert_eq!(status.pin_matches_current, Some(true));
 
-    // 3. Isolated env strips inherited ANTIGRAVITY_* / AGY_* and pins ~/.cowork/auth/antigravity-acp.
+    // 3. Isolated env strips inherited ANTIGRAVITY_* / AGY_* / cross-provider secrets and pins
+    //    only the ephemeral loopback proxy URL and placeholder token.
     let mut parent = HashMap::new();
     parent.insert("ANTIGRAVITY_HOME".into(), "/leaked/home".into());
     parent.insert("AGY_TOKEN".into(), "leaked".into());
-    let spawn_env = build_antigravity_acp_spawn_env(&cowork_home, &parent, Some("gem-key-1"));
+    parent.insert("ANTHROPIC_API_KEY".into(), "leaked-anthropic".into());
+    parent.insert("GEMINI_API_KEY".into(), "leaked-real-gemini".into());
+    let proxy_auth = AntigravityProxyAuth {
+        base_url: "http://127.0.0.1:43211".into(),
+        proxy_token: "AIzaSyCoworkProxy0123456789".into(),
+    };
+    let spawn_env = build_antigravity_acp_spawn_env(&cowork_home, &parent, Some(&proxy_auth));
     assert_eq!(
         spawn_env.get("ANTIGRAVITY_HOME").map(String::as_str),
         Some(
@@ -309,9 +337,18 @@ async fn antigravity_acp_installer_verifies_sha512_extracts_and_fails_closed() {
         )
     );
     assert!(!spawn_env.contains_key("AGY_TOKEN"));
+    assert!(!spawn_env.contains_key("ANTHROPIC_API_KEY"));
+    assert_eq!(
+        spawn_env.get("GOOGLE_GEMINI_BASE_URL").map(String::as_str),
+        Some("http://127.0.0.1:43211")
+    );
     assert_eq!(
         spawn_env.get("GEMINI_API_KEY").map(String::as_str),
-        Some("gem-key-1")
+        Some("AIzaSyCoworkProxy0123456789")
+    );
+    assert_eq!(
+        spawn_env.get("GOOGLE_API_KEY").map(String::as_str),
+        Some("AIzaSyCoworkProxy0123456789")
     );
 
     server.abort();
@@ -1416,4 +1453,388 @@ for line in sys.stdin:
         oauth_settings_val["enableAllProjectMcpServers"],
         json!(false)
     );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn claude_sdk_and_antigravity_broker_credentials_via_loopback_proxy_without_exposing_secrets_in_env()
+ {
+    use std::os::unix::fs::PermissionsExt;
+
+    use axum::http::HeaderMap;
+    use axum::routing::post;
+    use parking_lot::Mutex;
+
+    type ObservedUpstreamRequest = (String, Option<String>, Option<String>, Option<String>);
+
+    let seen_upstream: Arc<Mutex<Vec<ObservedUpstreamRequest>>> = Arc::new(Mutex::new(Vec::new()));
+    let seen_for_anthropic = Arc::clone(&seen_upstream);
+    let seen_for_gemini = Arc::clone(&seen_upstream);
+
+    let app = Router::new()
+        .route(
+            "/v1/messages",
+            post(move |headers: HeaderMap| {
+                let seen = Arc::clone(&seen_for_anthropic);
+                async move {
+                    let x_api = headers
+                        .get("x-api-key")
+                        .and_then(|v| v.to_str().ok())
+                        .map(str::to_owned);
+                    let auth = headers
+                        .get("authorization")
+                        .and_then(|v| v.to_str().ok())
+                        .map(str::to_owned);
+                    seen.lock()
+                        .push(("/v1/messages".to_owned(), x_api, auth, None));
+                    Response::builder()
+                        .status(StatusCode::OK)
+                        .header("content-type", "application/json")
+                        .body(Body::from(r#"{"ok":true,"provider":"anthropic"}"#))
+                        .unwrap()
+                }
+            }),
+        )
+        .route(
+            "/v1beta/models/gemini:generateContent",
+            post(move |uri: axum::http::Uri, headers: HeaderMap| {
+                let seen = Arc::clone(&seen_for_gemini);
+                async move {
+                    let x_goog = headers
+                        .get("x-goog-api-key")
+                        .and_then(|v| v.to_str().ok())
+                        .map(str::to_owned);
+                    let query = uri.query().map(str::to_owned);
+                    seen.lock()
+                        .push((uri.path().to_owned(), x_goog, None, query));
+                    Response::builder()
+                        .status(StatusCode::OK)
+                        .header("content-type", "application/json")
+                        .body(Body::from(r#"{"ok":true,"provider":"gemini"}"#))
+                        .unwrap()
+                }
+            }),
+        );
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let upstream_port = listener.local_addr().unwrap().port();
+    let upstream_url = format!("http://127.0.0.1:{upstream_port}");
+    let upstream_server = tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+
+    let tmp = TempDir::new().unwrap();
+    let real_claude_api_key = "sk-ant-api03-REAL-SECRET-NEVER-IN-CHILD-ENV";
+    let real_claude_oauth = "sk-ant-oat01-REAL-OAUTH-NEVER-IN-CHILD-ENV";
+    let real_gemini_key = "AIzaSyREAL-GEMINI-SECRET-NEVER-IN-CHILD-ENV";
+
+    // Mock Claude CLI that inspects its entire os.environ, checks 401 on wrong token, and calls
+    // ANTHROPIC_BASE_URL using the placeholder credential from its environment.
+    let claude_script_path = tmp.path().join("mock-claude-proxy.py");
+    let claude_script = r#"#!/usr/bin/env python3
+import json, os, sys, urllib.error, urllib.request
+
+def emit(obj):
+    sys.stdout.write(json.dumps(obj) + "\n")
+    sys.stdout.flush()
+
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    msg = json.loads(line)
+    if msg.get("type") == "control_request" and msg.get("request", {}).get("subtype") == "initialize":
+        emit({
+            "type": "control_response",
+            "response": {"subtype": "success", "request_id": msg["request_id"], "response": {}}
+        })
+    elif msg.get("type") == "user":
+        base = os.environ["ANTHROPIC_BASE_URL"]
+        all_env_values = "\n".join(os.environ.values())
+        # 1. Wrong token must fail with 401.
+        bad_req = urllib.request.Request(
+            f"{base}/v1/messages",
+            data=b"{}",
+            headers={"x-api-key": "wrong-token", "content-type": "application/json"},
+            method="POST",
+        )
+        try:
+            urllib.request.urlopen(bad_req)
+            bad_status = 200
+        except urllib.error.HTTPError as e:
+            bad_status = e.code
+
+        # 2. Placeholder token from env authenticates through Cowork's loopback broker.
+        if "CLAUDE_CODE_OAUTH_TOKEN" in os.environ:
+            headers = {
+                "authorization": f"Bearer {os.environ['CLAUDE_CODE_OAUTH_TOKEN']}",
+                "content-type": "application/json",
+            }
+        else:
+            headers = {
+                "x-api-key": os.environ["ANTHROPIC_API_KEY"],
+                "content-type": "application/json",
+            }
+        ok_req = urllib.request.Request(
+            f"{base}/v1/messages",
+            data=b"{}",
+            headers=headers,
+            method="POST",
+        )
+        with urllib.request.urlopen(ok_req) as resp:
+            body = resp.read().decode("utf-8")
+            ok_status = resp.status
+
+        payload = json.dumps({
+            "base": base,
+            "bad_status": bad_status,
+            "ok_status": ok_status,
+            "body": body,
+            "leaked_real": "REAL-SECRET" in all_env_values or "REAL-OAUTH" in all_env_values,
+        })
+        emit({"type": "system", "subtype": "init", "session_id": "claude-proxy-1"})
+        emit({"type": "stream_event", "event": {"type": "content_block_start", "index": 0, "content_block": {"type": "text"}}})
+        emit({"type": "stream_event", "event": {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": payload}}})
+        emit({"type": "stream_event", "event": {"type": "content_block_stop", "index": 0}})
+        emit({
+            "type": "result",
+            "subtype": "success",
+            "is_error": False,
+            "session_id": "claude-proxy-1",
+            "result": payload,
+            "usage": {"input_tokens": 5, "output_tokens": 5}
+        })
+        break
+"#;
+    std::fs::write(&claude_script_path, claude_script).unwrap();
+    std::fs::set_permissions(&claude_script_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let mut env = HashMap::new();
+    env.insert("HOME".into(), tmp.path().to_string_lossy().into_owned());
+    env.insert("PATH".into(), std::env::var("PATH").unwrap_or_default());
+    let mut provider_options = Map::new();
+    provider_options.insert("cwd".into(), json!(tmp.path().to_string_lossy()));
+    let budget = StepBudget::unbounded(Some(CancellationToken::new()));
+
+    let mut claude_transport = ClaudeSdkTransport::with_env(env.clone());
+    claude_transport.command_override = Some((
+        claude_script_path.to_string_lossy().into_owned(),
+        Vec::new(),
+    ));
+
+    // 1. Claude API-key turn: real secret never enters env, upstream receives real x-api-key.
+    let api_res = claude_transport
+        .stream_step(
+            ProviderStepRequest {
+                model_id: "claude-opus-4-8".to_owned(),
+                base_url: Some(upstream_url.clone()),
+                api_key: Some(real_claude_api_key.to_owned()),
+                extra_headers: HashMap::new(),
+                system_prompt: String::new(),
+                messages: vec![user_msg("proxy api")],
+                tools: Vec::new(),
+                authorized_tool_names: None,
+                provider_options: provider_options.clone(),
+                continuation: None,
+                policy: RequestPolicy::default(),
+                turn_id: "turn-proxy-claude-api".to_owned(),
+            },
+            &budget,
+            &mut |_| {},
+        )
+        .await
+        .expect("Claude SDK API-key proxied turn succeeds");
+    let api_text = api_res
+        .assistant
+        .content
+        .iter()
+        .find_map(|b| match b {
+            ContentBlock::Text { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .unwrap();
+    let api_payload: Value = serde_json::from_str(api_text).unwrap();
+    assert_eq!(api_payload["leaked_real"], json!(false));
+    assert_eq!(api_payload["bad_status"], json!(401));
+    assert_eq!(api_payload["ok_status"], json!(200));
+    let claude_proxy_base = api_payload["base"].as_str().unwrap().to_owned();
+    // Proxy must be torn down immediately once stream_step finishes.
+    assert!(
+        reqwest::Client::new()
+            .post(format!("{claude_proxy_base}/v1/messages"))
+            .send()
+            .await
+            .is_err(),
+        "ephemeral loopback proxy must close immediately after turn completes"
+    );
+
+    // 2. Claude OAuth turn: real OAuth token never enters env, upstream receives Authorization: Bearer.
+    let oauth_res = claude_transport
+        .stream_step(
+            ProviderStepRequest {
+                model_id: "claude-opus-4-8".to_owned(),
+                base_url: Some(upstream_url.clone()),
+                api_key: Some(real_claude_oauth.to_owned()),
+                extra_headers: HashMap::new(),
+                system_prompt: String::new(),
+                messages: vec![user_msg("proxy oauth")],
+                tools: Vec::new(),
+                authorized_tool_names: None,
+                provider_options: provider_options.clone(),
+                continuation: None,
+                policy: RequestPolicy::default(),
+                turn_id: "turn-proxy-claude-oauth".to_owned(),
+            },
+            &budget,
+            &mut |_| {},
+        )
+        .await
+        .expect("Claude SDK OAuth proxied turn succeeds");
+    let oauth_text = oauth_res
+        .assistant
+        .content
+        .iter()
+        .find_map(|b| match b {
+            ContentBlock::Text { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .unwrap();
+    let oauth_payload: Value = serde_json::from_str(oauth_text).unwrap();
+    assert_eq!(oauth_payload["leaked_real"], json!(false));
+    assert_eq!(oauth_payload["bad_status"], json!(401));
+    assert_eq!(oauth_payload["ok_status"], json!(200));
+
+    // 3. Antigravity ACP turn: real Gemini key never enters env, query `?key=` is stripped and
+    //    swapped for real `x-goog-api-key` header upstream.
+    let acp_script_path = tmp.path().join("mock-acp-proxy.py");
+    let acp_script = r#"#!/usr/bin/env python3
+import json, os, sys, urllib.error, urllib.request
+
+def send(obj):
+    sys.stdout.write(json.dumps(obj) + "\n")
+    sys.stdout.flush()
+
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    msg = json.loads(line)
+    method = msg.get("method")
+    req_id = msg.get("id")
+    if method == "initialize":
+        send({"jsonrpc": "2.0", "id": req_id, "result": {"protocolVersion": 1}})
+    elif method == "session/new":
+        send({"jsonrpc": "2.0", "id": req_id, "result": {"sessionId": "acp-proxy-1"}})
+    elif method == "session/set_model":
+        send({"jsonrpc": "2.0", "id": req_id, "result": {}})
+    elif method == "session/prompt":
+        sid = msg["params"]["sessionId"]
+        base = os.environ["GOOGLE_GEMINI_BASE_URL"]
+        token = os.environ["GEMINI_API_KEY"]
+        all_env_values = "\n".join(os.environ.values())
+
+        bad_req = urllib.request.Request(
+            f"{base}/v1beta/models/gemini:generateContent?alt=sse&key=wrong-key",
+            data=b"{}",
+            headers={"content-type": "application/json"},
+            method="POST",
+        )
+        try:
+            urllib.request.urlopen(bad_req)
+            bad_status = 200
+        except urllib.error.HTTPError as e:
+            bad_status = e.code
+
+        ok_req = urllib.request.Request(
+            f"{base}/v1beta/models/gemini:generateContent?alt=sse&key={token}",
+            data=b"{}",
+            headers={"content-type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(ok_req) as resp:
+            body = resp.read().decode("utf-8")
+            ok_status = resp.status
+
+        payload = json.dumps({
+            "bad_status": bad_status,
+            "ok_status": ok_status,
+            "body": body,
+            "leaked_real": "REAL-GEMINI-SECRET" in all_env_values,
+        })
+        send({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": sid, "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": payload}}}})
+        send({"jsonrpc": "2.0", "id": req_id, "result": {"stopReason": "end_turn"}})
+        break
+"#;
+    std::fs::write(&acp_script_path, acp_script).unwrap();
+    std::fs::set_permissions(&acp_script_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let mut acp_transport = AntigravityAcpTransport::with_env(env);
+    acp_transport.command_override =
+        Some((acp_script_path.to_string_lossy().into_owned(), Vec::new()));
+    let acp_res = acp_transport
+        .stream_step(
+            ProviderStepRequest {
+                model_id: "gemini-4-neon".to_owned(),
+                base_url: Some(upstream_url),
+                api_key: Some(real_gemini_key.to_owned()),
+                extra_headers: HashMap::new(),
+                system_prompt: String::new(),
+                messages: vec![user_msg("proxy gemini")],
+                tools: Vec::new(),
+                authorized_tool_names: None,
+                provider_options,
+                continuation: None,
+                policy: RequestPolicy::default(),
+                turn_id: "turn-proxy-acp".to_owned(),
+            },
+            &budget,
+            &mut |_| {},
+        )
+        .await
+        .expect("Antigravity ACP proxied turn succeeds");
+    let acp_text = acp_res
+        .assistant
+        .content
+        .iter()
+        .find_map(|b| match b {
+            ContentBlock::Text { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .unwrap();
+    let acp_payload: Value = serde_json::from_str(acp_text).unwrap();
+    assert_eq!(acp_payload["leaked_real"], json!(false));
+    assert_eq!(acp_payload["bad_status"], json!(401));
+    assert_eq!(acp_payload["ok_status"], json!(200));
+
+    let observed = seen_upstream.lock().clone();
+    assert_eq!(observed.len(), 3);
+    assert_eq!(
+        observed[0],
+        (
+            "/v1/messages".to_owned(),
+            Some(real_claude_api_key.to_owned()),
+            None,
+            None,
+        )
+    );
+    assert_eq!(
+        observed[1],
+        (
+            "/v1/messages".to_owned(),
+            None,
+            Some(format!("Bearer {real_claude_oauth}")),
+            None,
+        )
+    );
+    assert_eq!(
+        observed[2],
+        (
+            "/v1beta/models/gemini:generateContent".to_owned(),
+            Some(real_gemini_key.to_owned()),
+            None,
+            Some("alt=sse".to_owned()),
+        )
+    );
+
+    upstream_server.abort();
 }

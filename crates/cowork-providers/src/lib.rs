@@ -20,6 +20,7 @@ pub mod chat_completions;
 pub mod claude_sdk;
 pub mod codex_app_server;
 pub mod connection;
+pub(crate) mod credential_proxy;
 pub mod endpoint_capabilities;
 pub mod google_interactions;
 pub mod managed_runtime;

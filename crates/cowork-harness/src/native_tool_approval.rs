@@ -1897,6 +1897,73 @@ fn validate_inline_script_paths(
     Ok(())
 }
 
+fn contains_identifier_token(haystack_upper: &str, needle_upper: &str) -> bool {
+    let bytes = haystack_upper.as_bytes();
+    let mut start = 0usize;
+    while let Some(offset) = haystack_upper[start..].find(needle_upper) {
+        let idx = start + offset;
+        let end = idx + needle_upper.len();
+        let before_ok =
+            idx == 0 || !(bytes[idx - 1].is_ascii_alphanumeric() || bytes[idx - 1] == b'_');
+        let after_ok =
+            end == bytes.len() || !(bytes[end].is_ascii_alphanumeric() || bytes[end] == b'_');
+        if before_ok && after_ok {
+            return true;
+        }
+        start = idx + 1;
+    }
+    false
+}
+
+/// Defense-in-depth check blocking native shell commands that reference sensitive provider
+/// credentials, loopback credential-broker endpoints, runtime auth directories, or process
+/// `/proc/.../environ` tables — even when YOLO/DangerFullAccess is active.
+fn command_references_sensitive_provider_env(command: &str) -> Option<String> {
+    let normalized = command.replace('\\', "/").to_ascii_lowercase();
+    if normalized.contains("/proc/") && normalized.contains("/environ") {
+        return Some(
+            "Native shell command references process environment table under '/proc/*/environ'."
+                .to_owned(),
+        );
+    }
+
+    let upper = command.to_ascii_uppercase();
+    for var_name in [
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_OAUTH_TOKEN",
+        "ANTHROPIC_BASE_URL",
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "CLAUDE_CONFIG_DIR",
+        "GEMINI_API_KEY",
+        "GOOGLE_API_KEY",
+        "GOOGLE_GEMINI_BASE_URL",
+        "ANTIGRAVITY_HOME",
+        "ANTIGRAVITY_CONFIG_DIR",
+        "OPENAI_API_KEY",
+        "CODEX_API_KEY",
+        "OPENROUTER_API_KEY",
+        "TOGETHER_API_KEY",
+        "FIREWORKS_API_KEY",
+        "BASETEN_API_KEY",
+        "NVIDIA_API_KEY",
+        "MINIMAX_API_KEY",
+        "OPENCODE_API_KEY",
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_SESSION_TOKEN",
+        "AWS_BEARER_TOKEN_BEDROCK",
+        "LANGFUSE_SECRET_KEY",
+    ] {
+        if contains_identifier_token(&upper, var_name) {
+            return Some(format!(
+                "Native shell command references protected provider environment variable '{var_name}'."
+            ));
+        }
+    }
+    None
+}
+
 fn validate_native_shell_command_text(
     command: &str,
     base_dir: &Path,
@@ -1913,6 +1980,9 @@ fn validate_native_shell_command_text(
         return Err("Native shell command contains a NUL byte.".to_owned());
     }
     if let Some(reason) = command_mentions_protected_credential_path(command, ctx) {
+        return Err(reason);
+    }
+    if let Some(reason) = command_references_sensitive_provider_env(command) {
         return Err(reason);
     }
 

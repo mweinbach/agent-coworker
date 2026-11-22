@@ -12,6 +12,7 @@ use std::time::Duration;
 
 use uuid::Uuid;
 
+use crate::credential_proxy::merge_loopback_no_proxy;
 use crate::managed_runtime::{
     ChecksumAlgorithm, InstalledManagedBinary, ManagedRuntimeInstallStatus, ManagedRuntimeTarget,
     atomic_promote_managed_runtime, build_install_http_client, build_isolated_runtime_env,
@@ -139,8 +140,18 @@ pub fn resolve_claude_sdk_home(cowork_home: &Path) -> PathBuf {
     cowork_home.join("auth").join("claude-sdk")
 }
 
+/// Ephemeral loopback credential-proxy endpoint and placeholder token supplied to the
+/// managed `claude` subprocess so the real Anthropic API key or OAuth token never enters
+/// the CLI or native tool child environments.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClaudeSdkProxyAuth {
+    pub base_url: String,
+    pub proxy_token: String,
+    pub uses_oauth: bool,
+}
+
 /// Returns `true` when the configured secret is a Claude OAuth token (`sk-ant-oat*`),
-/// which `build_claude_sdk_spawn_env` exports via `CLAUDE_CODE_OAUTH_TOKEN`.
+/// which the loopback credential broker forwards via `Authorization: Bearer`.
 pub fn claude_sdk_uses_oauth_token(api_key: Option<&str>) -> bool {
     api_key
         .map(str::trim)
@@ -149,15 +160,16 @@ pub fn claude_sdk_uses_oauth_token(api_key: Option<&str>) -> bool {
 
 /// Builds the isolated environment for the managed `claude` subprocess:
 /// - Creates `<cowork_home>/auth/claude-sdk` (`0700`).
-/// - Strips inherited `CLAUDE_*`, `ANTHROPIC_API_KEY`, `ANTHROPIC_OAUTH_TOKEN`, and
+/// - Strips inherited `CLAUDE_*`, `ANTHROPIC_*`, cross-provider API keys, and
 ///   `COWORK_DESKTOP_PARENT_MANAGED`.
 /// - Pins `CLAUDE_CONFIG_DIR` to `<cowork_home>/auth/claude-sdk` and disables telemetry/auto-updater.
-/// - Injects the saved API key or OAuth token (`sk-ant-oat*` -> `CLAUDE_CODE_OAUTH_TOKEN`,
-///   otherwise `ANTHROPIC_API_KEY`).
+/// - When [`ClaudeSdkProxyAuth`] is provided, injects ONLY the ephemeral loopback proxy URL
+///   (`ANTHROPIC_BASE_URL`) and per-turn placeholder token (`CLAUDE_CODE_OAUTH_TOKEN` or
+///   `ANTHROPIC_API_KEY`) plus loopback `NO_PROXY` entries — never the saved account credential.
 pub fn build_claude_sdk_spawn_env(
     cowork_home: &Path,
     parent_env: &HashMap<String, String>,
-    api_key: Option<&str>,
+    proxy_auth: Option<&ClaudeSdkProxyAuth>,
 ) -> HashMap<String, String> {
     let config_dir = resolve_claude_sdk_home(cowork_home);
     let mut set_vars = vec![
@@ -172,17 +184,28 @@ pub fn build_claude_sdk_spawn_env(
             "1".to_owned(),
         ),
     ];
-    if let Some(secret) = api_key.map(str::trim).filter(|s| !s.is_empty()) {
-        if claude_sdk_uses_oauth_token(Some(secret)) {
-            set_vars.push(("CLAUDE_CODE_OAUTH_TOKEN".to_owned(), secret.to_owned()));
+    if let Some(proxy) = proxy_auth {
+        set_vars.push(("ANTHROPIC_BASE_URL".to_owned(), proxy.base_url.clone()));
+        if proxy.uses_oauth {
+            set_vars.push((
+                "CLAUDE_CODE_OAUTH_TOKEN".to_owned(),
+                proxy.proxy_token.clone(),
+            ));
         } else {
-            set_vars.push(("ANTHROPIC_API_KEY".to_owned(), secret.to_owned()));
+            set_vars.push(("ANTHROPIC_API_KEY".to_owned(), proxy.proxy_token.clone()));
         }
+        let existing_no_proxy = parent_env
+            .get("NO_PROXY")
+            .or_else(|| parent_env.get("no_proxy"))
+            .map(String::as_str);
+        let merged_no_proxy = merge_loopback_no_proxy(existing_no_proxy);
+        set_vars.push(("NO_PROXY".to_owned(), merged_no_proxy.clone()));
+        set_vars.push(("no_proxy".to_owned(), merged_no_proxy));
     }
     let (_, spawn_env) = build_isolated_runtime_env(
         cowork_home,
         "claude-sdk",
-        &["CLAUDE_", "ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN"],
+        &["CLAUDE_", "ANTHROPIC_"],
         &set_vars,
         parent_env,
     );

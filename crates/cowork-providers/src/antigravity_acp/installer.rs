@@ -13,6 +13,7 @@ use std::time::Duration;
 use serde::Deserialize;
 use uuid::Uuid;
 
+use crate::credential_proxy::merge_loopback_no_proxy;
 use crate::managed_runtime::{
     ChecksumAlgorithm, DEFAULT_MAX_METADATA_BYTES, DEFAULT_METADATA_TIMEOUT,
     InstalledManagedBinary, ManagedRuntimeInstallStatus, ManagedRuntimeTarget,
@@ -156,15 +157,27 @@ pub fn resolve_antigravity_acp_home(cowork_home: &Path) -> PathBuf {
     cowork_home.join("auth").join("antigravity-acp")
 }
 
+/// Ephemeral loopback credential-proxy endpoint and placeholder token supplied to the
+/// managed `antigravity acp` subprocess so the real Gemini API key never enters the CLI
+/// or native tool child environments.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AntigravityProxyAuth {
+    pub base_url: String,
+    pub proxy_token: String,
+}
+
 /// Builds the isolated environment for `antigravity acp`:
 /// - Creates `<cowork_home>/auth/antigravity-acp` (`0700`).
-/// - Strips inherited `ANTIGRAVITY_*`, `AGY_*`, and `COWORK_DESKTOP_PARENT_MANAGED`.
+/// - Strips inherited `ANTIGRAVITY_*`, `AGY_*`, `GEMINI_*`, `GOOGLE_API_KEY`,
+///   `GOOGLE_GEMINI_*`, cross-provider API keys, and `COWORK_DESKTOP_PARENT_MANAGED`.
 /// - Pins `ANTIGRAVITY_HOME`, `ANTIGRAVITY_CONFIG_DIR`, and `XDG_{CONFIG,DATA,CACHE}_HOME`.
-/// - Injects saved `GEMINI_API_KEY` when provided.
+/// - When [`AntigravityProxyAuth`] is provided, injects ONLY the ephemeral loopback proxy URL
+///   (`GOOGLE_GEMINI_BASE_URL`) and per-turn placeholder key (`GEMINI_API_KEY`/`GOOGLE_API_KEY`)
+///   plus loopback `NO_PROXY` entries — never the saved account credential.
 pub fn build_antigravity_acp_spawn_env(
     cowork_home: &Path,
     parent_env: &HashMap<String, String>,
-    api_key: Option<&str>,
+    proxy_auth: Option<&AntigravityProxyAuth>,
 ) -> HashMap<String, String> {
     let auth_home = resolve_antigravity_acp_home(cowork_home);
     let auth_str = auth_home.to_string_lossy().into_owned();
@@ -184,14 +197,28 @@ pub fn build_antigravity_acp_spawn_env(
             auth_home.join("cache").to_string_lossy().into_owned(),
         ),
     ];
-    if let Some(key) = api_key.map(str::trim).filter(|s| !s.is_empty()) {
-        set_vars.push(("GEMINI_API_KEY".to_owned(), key.to_owned()));
-        set_vars.push(("GOOGLE_API_KEY".to_owned(), key.to_owned()));
+    if let Some(proxy) = proxy_auth {
+        set_vars.push(("GOOGLE_GEMINI_BASE_URL".to_owned(), proxy.base_url.clone()));
+        set_vars.push(("GEMINI_API_KEY".to_owned(), proxy.proxy_token.clone()));
+        set_vars.push(("GOOGLE_API_KEY".to_owned(), proxy.proxy_token.clone()));
+        let existing_no_proxy = parent_env
+            .get("NO_PROXY")
+            .or_else(|| parent_env.get("no_proxy"))
+            .map(String::as_str);
+        let merged_no_proxy = merge_loopback_no_proxy(existing_no_proxy);
+        set_vars.push(("NO_PROXY".to_owned(), merged_no_proxy.clone()));
+        set_vars.push(("no_proxy".to_owned(), merged_no_proxy));
     }
     let (_, spawn_env) = build_isolated_runtime_env(
         cowork_home,
         "antigravity-acp",
-        &["ANTIGRAVITY_", "AGY_"],
+        &[
+            "ANTIGRAVITY_",
+            "AGY_",
+            "GEMINI_",
+            "GOOGLE_API_KEY",
+            "GOOGLE_GEMINI_",
+        ],
         &set_vars,
         parent_env,
     );

@@ -770,10 +770,37 @@ fn prune_managed_versions(cowork_home: &Path, runtime_dir: &str) {
     }
 }
 
+/// Ambient provider credential environment variable prefixes stripped unconditionally from
+/// every managed runtime child environment so native tools (e.g. Bash) can never inherit
+/// saved or ambient credentials from unrelated providers.
+const AMBIENT_CREDENTIAL_ENV_PREFIXES: &[&str] = &[
+    "ANTHROPIC_",
+    "CLAUDE_",
+    "GEMINI_",
+    "GOOGLE_API_KEY",
+    "GOOGLE_GEMINI_",
+    "OPENAI_API_KEY",
+    "CODEX_API_KEY",
+    "OPENROUTER_API_KEY",
+    "TOGETHER_API_KEY",
+    "FIREWORKS_API_KEY",
+    "BASETEN_API_KEY",
+    "NVIDIA_API_KEY",
+    "MINIMAX_API_KEY",
+    "OPENCODE_API_KEY",
+    "LMSTUDIO_API_KEY",
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_SESSION_TOKEN",
+    "AWS_BEARER_TOKEN_BEDROCK",
+    "LANGFUSE_SECRET_KEY",
+    "LANGFUSE_PUBLIC_KEY",
+];
+
 /// Builds a stripped, isolated child environment for a Cowork-managed provider runtime:
 /// creates `<cowork_home>/auth/<provider_dir>` with `0700` permissions, removes any variable
-/// matching `strip_prefixes` (case-insensitive) plus `COWORK_DESKTOP_PARENT_MANAGED`, and inserts
-/// `set_vars`.
+/// matching `strip_prefixes` or ambient provider credentials (case-insensitive) plus
+/// `COWORK_DESKTOP_PARENT_MANAGED`, and inserts `set_vars`.
 pub fn build_isolated_runtime_env(
     cowork_home: &Path,
     provider_auth_dir: &str,
@@ -790,6 +817,9 @@ pub fn build_isolated_runtime_env(
         if strip_prefixes
             .iter()
             .any(|prefix| upper.starts_with(prefix))
+            || AMBIENT_CREDENTIAL_ENV_PREFIXES
+                .iter()
+                .any(|prefix| upper.starts_with(prefix))
             || k.eq_ignore_ascii_case(cowork_sandbox::PARENT_MANAGED_ENV_VAR)
         {
             continue;

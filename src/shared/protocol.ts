@@ -90,6 +90,7 @@ type SessionConfigPatch = {
   };
   clearToolCalling?: boolean;
   providerOptions?: OpenAiCompatibleProviderOptionsByProvider;
+  clearProviderOptions?: boolean;
   userName?: string;
   userProfile?: {
     instructions?: string;

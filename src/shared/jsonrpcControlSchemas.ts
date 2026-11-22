@@ -2171,6 +2171,7 @@ const sessionDefaultsApplyRequestSchema = z
         allowedChildModelRefs: z.array(z.string()).optional(),
         workflowMaxConcurrentAgents: z.number().int().min(1).max(16).optional(),
         providerOptions: editableProviderOptionsSchema.optional(),
+        clearProviderOptions: z.boolean().optional(),
         userName: z.string().optional(),
         userProfile: userProfileSchema.optional(),
         featureFlags: z

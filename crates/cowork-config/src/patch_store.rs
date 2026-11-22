@@ -77,6 +77,7 @@ pub struct ProjectConfigPatch {
     pub clear_skill_improvement_model: bool,
     pub clear_tool_output_overflow_chars: bool,
     pub clear_tool_calling: bool,
+    pub clear_provider_options: bool,
     pub provider_options: Option<Map<String, Value>>,
 }
 
@@ -246,6 +247,7 @@ async fn persist_config_patch_file(
         && !patch.clear_skill_improvement_model
         && !patch.clear_tool_output_overflow_chars
         && !patch.clear_tool_calling
+        && !patch.clear_provider_options
         && !clear_observability_enabled
     {
         return Ok(());
@@ -333,6 +335,20 @@ async fn persist_config_patch_file(
                     if po.is_empty() {
                         next.remove("providerOptions");
                     }
+                }
+            }
+            if patch.clear_provider_options
+                && patch.provider_options.as_ref().is_none_or(Map::is_empty)
+                && let Some(Value::Object(po)) = next.get_mut("providerOptions")
+            {
+                po.retain(|k, _| {
+                    matches!(
+                        k.as_str(),
+                        "codeMode" | "deferredToolSearch" | "toolCallingStrategy"
+                    )
+                });
+                if po.is_empty() {
+                    next.remove("providerOptions");
                 }
             }
             if patch.clear_memory_generation_model {
@@ -569,6 +585,19 @@ pub fn merge_config_patch(config: &AgentConfig, patch: &ProjectConfigPatch) -> A
         }
         if let Some(strategy) = tc.strategy {
             next.tool_calling.strategy = strategy;
+        }
+    }
+    if patch.clear_provider_options
+        && let Some(po) = next.provider_options.as_mut()
+    {
+        po.retain(|k, _| {
+            matches!(
+                k.as_str(),
+                "codeMode" | "deferredToolSearch" | "toolCallingStrategy"
+            )
+        });
+        if po.is_empty() {
+            next.provider_options = None;
         }
     }
     if let Some(po_patch) = &patch.provider_options {

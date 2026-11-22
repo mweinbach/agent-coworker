@@ -15041,6 +15041,12 @@ fn merge_session_defaults_apply_params(
                 "userProfile" => {
                     dst_cfg.remove("clearUserProfile");
                 }
+                "clearProviderOptions" => {
+                    dst_cfg.remove("providerOptions");
+                }
+                "providerOptions" => {
+                    dst_cfg.remove("clearProviderOptions");
+                }
                 _ => {}
             }
             dst_cfg.insert(k, v);
@@ -16303,7 +16309,7 @@ struct ClearableDefaultKey {
     clear_server_key: &'static str,
 }
 
-const CLEARABLE_DEFAULT_KEYS: [ClearableDefaultKey; 4] = [
+const CLEARABLE_DEFAULT_KEYS: [ClearableDefaultKey; 5] = [
     ClearableDefaultKey {
         desktop_key: "defaultToolOutputOverflowChars",
         server_key: "toolOutputOverflowChars",
@@ -16328,6 +16334,12 @@ const CLEARABLE_DEFAULT_KEYS: [ClearableDefaultKey; 4] = [
         clear_desktop_key: "clearDefaultToolCalling",
         clear_server_key: "clearToolCalling",
     },
+    ClearableDefaultKey {
+        desktop_key: "providerOptions",
+        server_key: "providerOptions",
+        clear_desktop_key: "clearProviderOptions",
+        clear_server_key: "clearProviderOptions",
+    },
 ];
 
 fn should_clear_default(obj: &Map<String, Value>, spec: &ClearableDefaultKey) -> bool {
@@ -16343,6 +16355,10 @@ fn apply_defaults_obj_to_workspace(
     if !ws.defaults.is_object() {
         ws.defaults = json!({});
     }
+    let is_authoritative_snapshot = from_session_config
+        && (obj.contains_key("toolOutputOverflowChars")
+            || obj.contains_key("advancedMemory")
+            || obj.contains_key("skillImprovementEnabled"));
     if let Some(dst) = ws.defaults.as_object_mut() {
         for (k, v) in obj {
             if from_session_config && k == "toolOutputOverflowChars" {
@@ -16387,10 +16403,6 @@ fn apply_defaults_obj_to_workspace(
                 }
             }
         }
-        let is_authoritative_snapshot = from_session_config
-            && (obj.contains_key("toolOutputOverflowChars")
-                || obj.contains_key("advancedMemory")
-                || obj.contains_key("skillImprovementEnabled"));
         for spec in &CLEARABLE_DEFAULT_KEYS {
             if should_clear_default(obj, spec) {
                 dst.remove(spec.desktop_key);
@@ -16417,12 +16429,13 @@ fn apply_defaults_obj_to_workspace(
                 .get(spec.desktop_key)
                 .or_else(|| obj.get(spec.server_key))
             {
-                let empty_model_override = matches!(
+                let empty_override = (matches!(
                     spec.server_key,
                     "memoryGenerationModel" | "skillImprovementModel"
                 ) && (val.is_null()
-                    || val.as_str().is_some_and(|s| s.trim().is_empty()));
-                if empty_model_override {
+                    || val.as_str().is_some_and(|s| s.trim().is_empty())))
+                    || (spec.server_key == "providerOptions" && val.is_null());
+                if empty_override {
                     dst.remove(spec.desktop_key);
                     dst.remove(spec.server_key);
                 } else {
@@ -16434,10 +16447,10 @@ fn apply_defaults_obj_to_workspace(
             } else if is_authoritative_snapshot
                 && matches!(
                     spec.server_key,
-                    "memoryGenerationModel" | "skillImprovementModel"
+                    "memoryGenerationModel" | "skillImprovementModel" | "providerOptions"
                 )
             {
-                // `build_session_config_event` omits optional model overrides when unset; clear
+                // `build_session_config_event` omits optional overrides when unset; clear
                 // obsolete local overrides on full authoritative snapshots while preserving no-op
                 // semantics for partial patches.
                 dst.remove(spec.desktop_key);
@@ -16525,8 +16538,14 @@ fn apply_defaults_obj_to_workspace(
     if let Some(up) = obj.get("userProfile") {
         ws.user_profile = (!up.is_null()).then(|| up.clone());
     }
-    if let Some(po) = obj.get("providerOptions") {
-        ws.provider_options = (!po.is_null()).then(|| po.clone());
+    if obj.get("clearProviderOptions").and_then(Value::as_bool) == Some(true)
+        || obj.get("providerOptions") == Some(&Value::Null)
+    {
+        ws.provider_options = None;
+    } else if let Some(po) = obj.get("providerOptions") {
+        ws.provider_options = Some(po.clone());
+    } else if is_authoritative_snapshot {
+        ws.provider_options = None;
     }
     if let Some(dst) = ws.defaults.as_object_mut() {
         for nullable_desktop_key in [
@@ -16687,7 +16706,9 @@ fn build_session_defaults_config_map(raw: &Map<String, Value>) -> Map<String, Va
         }
     }
     for spec in &CLEARABLE_DEFAULT_KEYS {
-        if should_clear_default(raw, spec) {
+        let null_provider_clear = spec.server_key == "providerOptions"
+            && raw.get("providerOptions") == Some(&Value::Null);
+        if should_clear_default(raw, spec) || null_provider_clear {
             map.remove(spec.server_key);
             map.insert(spec.clear_server_key.to_string(), json!(true));
         } else if map.contains_key(spec.server_key) {
@@ -16695,7 +16716,6 @@ fn build_session_defaults_config_map(raw: &Map<String, Value>) -> Map<String, Va
         }
     }
     for strip_if_null in [
-        "providerOptions",
         "reasoningEffort",
         "lmStudioEnabled",
         "workflowMaxConcurrentAgents",
@@ -25995,6 +26015,41 @@ mod tests {
         assert!(cfg.get("memoryGenerationModel").is_none());
         assert_eq!(cfg["clearSkillImprovementModel"], json!(true));
         assert!(cfg.get("skillImprovementModel").is_none());
+
+        // Now clear provider options on Project A and re-share to Project B: both desktop state
+        // and the harness `cowork/session/defaults/apply` RPC must carry `clearProviderOptions: true`.
+        state
+            .workspaces
+            .iter_mut()
+            .find(|w| w.id == "ws-a")
+            .unwrap()
+            .provider_options = None;
+        state.services.emitted_ws_commands.clear();
+        sync_workspace_defaults_everywhere(&mut state, "ws-a");
+
+        let b_after_clear = state.workspaces.iter().find(|w| w.id == "ws-b").unwrap();
+        assert_eq!(b_after_clear.provider_options, None);
+        assert!(b_after_clear.defaults.get("providerOptions").is_none());
+        assert!(b_after_clear.defaults.get("clearProviderOptions").is_none());
+
+        let b_clear_rpc = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .find_map(|c| match c {
+                WsCommand::SendRequest {
+                    workspace_id,
+                    method,
+                    params,
+                    ..
+                } if workspace_id == "ws-b" && method == "cowork/session/defaults/apply" => {
+                    Some(params)
+                }
+                _ => None,
+            })
+            .expect("expected defaults/apply RPC for ws-b after clearing providerOptions");
+        assert_eq!(b_clear_rpc["config"]["clearProviderOptions"], json!(true));
+        assert!(b_clear_rpc["config"].get("providerOptions").is_none());
     }
 
     #[test]

@@ -227,11 +227,16 @@ pub(crate) fn build_shared_workspace_defaults_patch(
         }),
     );
 
-    // Provider options (explicit null clears stale local options on target workspaces).
-    patch.insert(
-        "providerOptions".to_string(),
-        src.provider_options.clone().unwrap_or(Value::Null),
-    );
+    // Clearable override: provider options (explicit `clearProviderOptions` clears stale workspace overrides).
+    if let Some(po) = src
+        .provider_options
+        .as_ref()
+        .filter(|v| v.as_object().is_some_and(|m| !m.is_empty()))
+    {
+        patch.insert("providerOptions".to_string(), po.clone());
+    } else {
+        patch.insert("clearProviderOptions".to_string(), Value::Bool(true));
+    }
 
     // Clearable override 1: tool calling.
     if let Some(tc) = pick_default(&["defaultToolCalling", "toolCalling"]) {

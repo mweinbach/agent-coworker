@@ -2,13 +2,17 @@
 //!
 //! Ported from `apps/desktop/src/ui/settings/pages/WorkspacesPage.tsx` (`surface="defaults"`).
 
+use std::collections::HashMap;
+
 use rune::{El, col, row, text};
 use rune_kit::{Button, ButtonVariant, Checkbox, ControlSize, Kit, Select, SelectAppearance};
 use serde_json::{Value, json};
 
 use crate::actions::{Action, NativeAction, NavAction, SettingsAction};
 use crate::router::SettingsPageId;
-use crate::state::{AppState, ServerLifecycleState, WorkspaceRecord, WorkspaceRuntime};
+use crate::state::{
+    AppState, ProviderStatusSummary, ServerLifecycleState, WorkspaceRecord, WorkspaceRuntime,
+};
 use crate::theme::ThemeTokens;
 use crate::views::settings::icons;
 use crate::views::settings::primitives::{
@@ -17,7 +21,7 @@ use crate::views::settings::primitives::{
     update_desktop_settings,
 };
 use crate::views::settings::providers::is_provider_connected;
-use crate::views::settings::providers_utils::sort_and_filter_providers;
+use crate::views::settings::providers_utils::sort_and_filter_provider_refs;
 use crate::views::settings::shell::PageContent;
 
 /// Normalized per-workspace tool-calling configuration.
@@ -845,27 +849,29 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
         );
     }
 
-    let ws_id_share = ws_id.clone();
-    confirm_dialog(
-        ConfirmDialogSpec {
-            key: "behavior-share-settings-confirm",
-            open: s.settings_ui.workspace_share_confirm_open,
-            title: "Share settings everywhere",
-            description: "All folders and chats will be synced to the current settings. This will overwrite provider, model, and behavior settings on other folders and chats.".to_string(),
-            confirm_label: "Share settings",
-            danger: true,
-        },
-        |s| s.settings_ui.workspace_share_confirm_open = false,
-        move |s| {
-            s.settings_ui.workspace_share_confirm_open = false;
-            update_desktop_settings(s, |next| {
-                next.per_workspace_settings = false;
-            });
-            sync_workspace_defaults_everywhere(s, &ws_id_share);
-        },
-        k,
-        &mut overlays,
-    );
+    if s.settings_ui.workspace_share_confirm_open {
+        let ws_id_share = ws_id.clone();
+        confirm_dialog(
+            ConfirmDialogSpec {
+                key: "behavior-share-settings-confirm",
+                open: true,
+                title: "Share settings everywhere",
+                description: "All folders and chats will be synced to the current settings. This will overwrite provider, model, and behavior settings on other folders and chats.".to_string(),
+                confirm_label: "Share settings",
+                danger: true,
+            },
+            |s| s.settings_ui.workspace_share_confirm_open = false,
+            move |s| {
+                s.settings_ui.workspace_share_confirm_open = false;
+                update_desktop_settings(s, |next| {
+                    next.per_workspace_settings = false;
+                });
+                sync_workspace_defaults_everywhere(s, &ws_id_share);
+            },
+            k,
+            &mut overlays,
+        );
+    }
 
     if let Some(remove_id) = s.settings_ui.workspace_remove_confirm_id.clone() {
         let remove_name = s
@@ -931,17 +937,61 @@ pub fn models_defaults_sections(
     let Some(ws) = active_behavior_workspace(s) else {
         return Vec::new();
     };
-    let ws_id = ws.id.clone();
     let statuses = s
         .workspace_runtime_by_id
-        .get(&ws_id)
+        .get(&ws.id)
         .map(|rt| rt.provider_statuses.as_slice())
         .unwrap_or(&[]);
+    let status_map: HashMap<&str, &ProviderStatusSummary> = statuses
+        .iter()
+        .map(|st| (st.provider.as_str(), st))
+        .collect();
+    models_defaults_sections_inner(s, ws, &status_map, k, t, overlays)
+}
 
-    let configured = sort_and_filter_providers(&s.provider_catalog, statuses, "")
+/// Internal entry point called by `providers::view` so an already-built `status_map`
+/// can be reused when the target workspace matches.
+pub(crate) fn models_defaults_sections_with_status_map(
+    s: &AppState,
+    precomputed_ws_id: Option<&str>,
+    precomputed_status_map: &HashMap<&str, &ProviderStatusSummary>,
+    k: &Kit,
+    t: &ThemeTokens,
+    overlays: &mut Vec<El>,
+) -> Vec<El> {
+    let Some(ws) = active_behavior_workspace(s) else {
+        return Vec::new();
+    };
+    if precomputed_ws_id == Some(ws.id.as_str()) {
+        models_defaults_sections_inner(s, ws, precomputed_status_map, k, t, overlays)
+    } else {
+        let statuses = s
+            .workspace_runtime_by_id
+            .get(&ws.id)
+            .map(|rt| rt.provider_statuses.as_slice())
+            .unwrap_or(&[]);
+        let status_map: HashMap<&str, &ProviderStatusSummary> = statuses
+            .iter()
+            .map(|st| (st.provider.as_str(), st))
+            .collect();
+        models_defaults_sections_inner(s, ws, &status_map, k, t, overlays)
+    }
+}
+
+fn models_defaults_sections_inner(
+    s: &AppState,
+    ws: &WorkspaceRecord,
+    status_map: &HashMap<&str, &ProviderStatusSummary>,
+    k: &Kit,
+    t: &ThemeTokens,
+    overlays: &mut Vec<El>,
+) -> Vec<El> {
+    let ws_id = ws.id.clone();
+
+    let configured = sort_and_filter_provider_refs(s.provider_catalog.iter(), status_map, "")
         .into_iter()
         .filter(|p| {
-            let status = statuses.iter().find(|st| st.provider == p.id);
+            let status = status_map.get(p.id.as_str()).copied();
             is_provider_connected(p, status, Some(ws))
         })
         .collect::<Vec<_>>();
@@ -1285,34 +1335,46 @@ pub fn models_defaults_sections(
             )
             .child(child_select)
     } else {
-        let allowed = ws.default_allowed_child_model_refs.clone();
+        let allowed_set: std::collections::HashSet<&str> = ws
+            .default_allowed_child_model_refs
+            .iter()
+            .map(String::as_str)
+            .collect();
         let checks: Vec<El> = configured
             .iter()
             .flat_map(|prov| {
                 prov.models
                     .iter()
                     .filter(|m| m.enabled)
-                    .map(move |m| (prov.name.clone(), format!("{}:{}", prov.id, m.id)))
+                    .map(move |m| (prov.name.as_str(), format!("{}:{}", prov.id, m.id)))
             })
             .map(|(pname, model_ref)| {
-                let checked = allowed.iter().any(|r| r == &model_ref);
-                let allowed_now = allowed.clone();
+                let checked = allowed_set.contains(model_ref.as_str());
                 let ws_allow = ws_id.clone();
-                let cur_pref = ws
-                    .default_preferred_child_model_ref
-                    .clone()
-                    .unwrap_or_default();
+                let label = format!("{pname}: {model_ref}");
                 Checkbox::new(checked)
-                    .label(format!("{pname}: {model_ref}"))
+                    .label(label)
                     .on_toggle(move |s: &mut AppState| {
-                        let mut next = allowed_now.clone();
+                        let (mut next, cur_pref) = s
+                            .workspaces
+                            .iter()
+                            .find(|w| w.id == ws_allow)
+                            .map(|w| {
+                                (
+                                    w.default_allowed_child_model_refs.clone(),
+                                    w.default_preferred_child_model_ref
+                                        .clone()
+                                        .unwrap_or_default(),
+                                )
+                            })
+                            .unwrap_or_default();
                         if checked {
                             next.retain(|r| r != &model_ref);
                         } else if !next.iter().any(|r| r == &model_ref) {
                             next.push(model_ref.clone());
                         }
                         let next_pref = if next.iter().any(|r| r == &cur_pref) {
-                            cur_pref.clone()
+                            cur_pref
                         } else {
                             next.first().cloned().unwrap_or_default()
                         };

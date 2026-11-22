@@ -1,19 +1,35 @@
 //! Sorting, status, and formatting helpers for Providers (`providersPageUtils.ts`).
 
+use std::collections::HashMap;
+use std::sync::OnceLock;
+
 use serde_json::Value;
 
 use crate::state::{ProviderModelSummary, ProviderStatusSummary, ProviderSummary};
-use crate::views::settings::primitives::StatusTone;
+use crate::views::settings::primitives::{StatusTone, contains_ascii_ci};
+
+fn provider_priority_map() -> &'static HashMap<&'static str, usize> {
+    static MAP: OnceLock<HashMap<&'static str, usize>> = OnceLock::new();
+    MAP.get_or_init(|| {
+        cowork_config::provider_specs()
+            .iter()
+            .enumerate()
+            .map(|(idx, spec)| (spec.id.as_str(), idx))
+            .collect()
+    })
+}
 
 /// Returns the sort rank for a provider id from canonical `config/providers.json` order
 /// (lower appears first when connection status ties).
 pub fn provider_priority_rank(id: &str) -> usize {
-    let lower = id.trim().to_ascii_lowercase();
-    let specs = cowork_config::provider_specs();
-    specs
-        .iter()
-        .position(|spec| spec.id == lower)
-        .unwrap_or(specs.len())
+    let trimmed = id.trim();
+    let map = provider_priority_map();
+    if trimmed.bytes().all(|b| !b.is_ascii_uppercase()) {
+        map.get(trimmed).copied().unwrap_or(map.len())
+    } else {
+        let lower = trimmed.to_ascii_lowercase();
+        map.get(lower.as_str()).copied().unwrap_or(map.len())
+    }
 }
 
 /// Computes badge label and tone for a provider summary + runtime status snapshot.
@@ -56,45 +72,56 @@ pub fn format_auth_method_label(method: &str) -> String {
     }
 }
 
+/// Filters and sorts borrowed provider references with connected/configured providers first,
+/// then built-in order, avoiding linear status lookups inside the comparator.
+pub(crate) fn sort_and_filter_provider_refs<'a>(
+    providers: impl IntoIterator<Item = &'a ProviderSummary>,
+    status_map: &HashMap<&str, &ProviderStatusSummary>,
+    query: &str,
+) -> Vec<&'a ProviderSummary> {
+    let needle = query.trim().to_ascii_lowercase();
+    let mut keyed: Vec<(&'a ProviderSummary, bool, usize)> = providers
+        .into_iter()
+        .filter(|p| {
+            if needle.is_empty() {
+                return true;
+            }
+            contains_ascii_ci(&p.id, &needle)
+                || contains_ascii_ci(&p.name, &needle)
+                || p.models.iter().any(|m| {
+                    contains_ascii_ci(&m.id, &needle) || contains_ascii_ci(&m.name, &needle)
+                })
+        })
+        .map(|p| {
+            let conn = status_map
+                .get(p.id.as_str())
+                .is_some_and(|s| s.healthy || s.connected);
+            let rank = provider_priority_rank(&p.id);
+            (p, conn, rank)
+        })
+        .collect();
+
+    keyed.sort_by(|(a, a_conn, a_rank), (b, b_conn, b_rank)| {
+        b_conn
+            .cmp(a_conn)
+            .then_with(|| b.configured.cmp(&a.configured))
+            .then_with(|| a_rank.cmp(b_rank))
+            .then_with(|| a.name.cmp(&b.name))
+    });
+    keyed.into_iter().map(|(p, _, _)| p).collect()
+}
+
 /// Filters and sorts providers with connected/configured providers first, then built-in order.
 pub fn sort_and_filter_providers<'a>(
     providers: &'a [ProviderSummary],
     statuses: &[ProviderStatusSummary],
     query: &str,
 ) -> Vec<&'a ProviderSummary> {
-    let needle = query.trim().to_ascii_lowercase();
-    let mut matches: Vec<&ProviderSummary> = providers
+    let status_map: HashMap<&str, &ProviderStatusSummary> = statuses
         .iter()
-        .filter(|p| {
-            if needle.is_empty() {
-                return true;
-            }
-            p.id.to_ascii_lowercase().contains(&needle)
-                || p.name.to_ascii_lowercase().contains(&needle)
-                || p.models.iter().any(|m| {
-                    m.id.to_ascii_lowercase().contains(&needle)
-                        || m.name.to_ascii_lowercase().contains(&needle)
-                })
-        })
+        .map(|st| (st.provider.as_str(), st))
         .collect();
-
-    matches.sort_by(|a, b| {
-        let a_conn = statuses
-            .iter()
-            .find(|s| s.provider == a.id)
-            .is_some_and(|s| s.healthy || s.connected);
-        let b_conn = statuses
-            .iter()
-            .find(|s| s.provider == b.id)
-            .is_some_and(|s| s.healthy || s.connected);
-
-        b_conn
-            .cmp(&a_conn)
-            .then_with(|| b.configured.cmp(&a.configured))
-            .then_with(|| provider_priority_rank(&a.id).cmp(&provider_priority_rank(&b.id)))
-            .then_with(|| a.name.cmp(&b.name))
-    });
-    matches
+    sort_and_filter_provider_refs(providers.iter(), &status_map, query)
 }
 
 /// Extracts a concise single-line summary from optional rate-limit JSON metadata.

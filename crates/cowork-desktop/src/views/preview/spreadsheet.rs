@@ -1,8 +1,13 @@
 //! Read-only spreadsheet preview renderer powered by `rune_kit::Table`.
 
 use std::borrow::Cow;
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 
-use rune::{Align, El, ScrollSpec, col, el, icon, row, text};
+use rune::{Align, El, GrowthSpec, ScrollSpec, col, el, icon, memo, row, text};
 use rune_kit::{
     Badge, BadgeVariant, Button, ButtonVariant, Cell, ControlSize, Kit, SegmentedControl, Table,
     TableColumn, TableStyle,
@@ -15,6 +20,186 @@ use crate::theme::ThemeTokens;
 use crate::views::chat::icons;
 
 const ROW_INDEX_COL_ID: &str = "__row";
+const MAX_RAW_CSV_LINE_CACHE_ENTRIES: usize = 4;
+
+type CsvLineRanges = Arc<Vec<(usize, usize)>>;
+
+#[derive(Clone)]
+struct CachedCsvLines {
+    rev: u64,
+    raw: Arc<str>,
+    ranges: CsvLineRanges,
+}
+
+#[derive(Default)]
+struct RawCsvLineCacheState {
+    next_rev: u64,
+    entries: HashMap<(u64, usize), CachedCsvLines>,
+}
+
+thread_local! {
+    static RAW_CSV_LINE_CACHE: RefCell<RawCsvLineCacheState> =
+        RefCell::new(RawCsvLineCacheState::default());
+}
+
+/// Fast O(1) bucket hash for raw CSV buffers (always paired with exact string equality on lookup).
+fn fast_text_fingerprint(raw: &str) -> u64 {
+    let bytes = raw.as_bytes();
+    let mut h = DefaultHasher::new();
+    bytes.len().hash(&mut h);
+    if bytes.len() <= 1024 {
+        bytes.hash(&mut h);
+    } else {
+        bytes[..512].hash(&mut h);
+        let mid = bytes.len() / 2;
+        bytes[mid.saturating_sub(128)..(mid + 128).min(bytes.len())].hash(&mut h);
+        bytes[bytes.len() - 512..].hash(&mut h);
+    }
+    h.finish()
+}
+
+/// Indexes line byte ranges `(start, end)` once per exact raw CSV string so Raw CSV mode
+/// virtualizes by line safely without hash-collision slicing bugs.
+fn cached_csv_line_ranges(raw: &str) -> CachedCsvLines {
+    let key = (fast_text_fingerprint(raw), raw.len());
+    RAW_CSV_LINE_CACHE.with(|slot| {
+        let mut state = slot.borrow_mut();
+        if let Some(existing) = state.entries.get(&key)
+            && existing.raw.as_ref() == raw
+        {
+            return existing.clone();
+        }
+        if state.entries.len() >= MAX_RAW_CSV_LINE_CACHE_ENTRIES {
+            state.entries.clear();
+        }
+        let bytes = raw.as_bytes();
+        let mut ranges = Vec::new();
+        if !bytes.is_empty() {
+            let mut line_start = 0usize;
+            for (idx, &b) in bytes.iter().enumerate() {
+                if b == b'\n' {
+                    let line_end = if idx > line_start && bytes[idx - 1] == b'\r' {
+                        idx - 1
+                    } else {
+                        idx
+                    };
+                    ranges.push((line_start, line_end));
+                    line_start = idx + 1;
+                }
+            }
+            if line_start < bytes.len() {
+                let mut line_end = bytes.len();
+                if line_end > line_start && bytes[line_end - 1] == b'\r' {
+                    line_end -= 1;
+                }
+                ranges.push((line_start, line_end));
+            }
+        }
+        state.next_rev = state.next_rev.wrapping_add(1).max(1);
+        let entry = CachedCsvLines {
+            rev: state.next_rev,
+            raw: Arc::from(raw),
+            ranges: Arc::new(ranges),
+        };
+        state.entries.insert(key, entry.clone());
+        entry
+    })
+}
+
+/// Zero-allocation decimal parser for `c{N}` spreadsheet column identifiers.
+#[inline]
+fn parse_col_index(col_id: &str) -> Option<usize> {
+    let bytes = col_id.as_bytes();
+    if bytes.len() < 2 || bytes[0] != b'c' {
+        return None;
+    }
+    let mut idx: usize = 0;
+    for &b in &bytes[1..] {
+        if !b.is_ascii_digit() {
+            return None;
+        }
+        idx = idx.checked_mul(10)?.checked_add((b - b'0') as usize)?;
+    }
+    Some(idx)
+}
+
+fn spreadsheet_memo_version(
+    s: &AppState,
+    preview: &FilePreviewState,
+    data: &SpreadsheetPreviewData,
+    active_idx: usize,
+    raw_csv_rev: Option<u64>,
+    t: &ThemeTokens,
+) -> u64 {
+    let mut h = DefaultHasher::new();
+    (
+        t.dark,
+        t.accent.r.to_bits(),
+        t.accent.g.to_bits(),
+        t.accent.b.to_bits(),
+        t.panel_bg.r.to_bits(),
+        t.border_muted.a.to_bits(),
+        s.desktop_settings.reduced_transparency,
+        s.desktop_settings.high_contrast,
+        s.ui_scale.to_bits(),
+    )
+        .hash(&mut h);
+    (
+        preview.workspace_id.as_str(),
+        preview.path.as_str(),
+        preview.truncated,
+        preview.content.is_some(),
+        raw_csv_rev,
+    )
+        .hash(&mut h);
+    (
+        data.format.as_str(),
+        data.total_sheets,
+        data.sheets_truncated,
+        data.max_rows_cap,
+        data.max_cols_cap,
+        data.max_cells_cap,
+        data.sheets.len(),
+        active_idx,
+        s.preview_ui.raw_csv_mode,
+        s.preview_ui.table_rev,
+    )
+        .hash(&mut h);
+    for sheet in &data.sheets {
+        (
+            sheet.name.as_str(),
+            sheet.headers.len(),
+            sheet.rows.len(),
+            sheet.total_rows,
+            sheet.total_cols,
+            sheet.start_row,
+            sheet.start_col,
+            sheet.rows_truncated,
+            sheet.cols_truncated,
+            sheet.cells_truncated,
+        )
+            .hash(&mut h);
+    }
+    if let Some(sheet) = data.sheets.get(active_idx) {
+        sheet.headers.hash(&mut h);
+        sheet.col_widths.hash(&mut h);
+        for align in &sheet.col_alignments {
+            matches!(align, SpreadsheetCellAlign::Right).hash(&mut h);
+        }
+        let row_len = sheet.rows.len();
+        if row_len <= 16 {
+            for r in &sheet.rows {
+                r.hash(&mut h);
+            }
+        } else {
+            for step in 0..16 {
+                let idx = (step * (row_len - 1)) / 15;
+                sheet.rows[idx].hash(&mut h);
+            }
+        }
+    }
+    h.finish()
+}
 
 fn active_sheet_from_state<'a>(
     s: &'a AppState,
@@ -60,6 +245,30 @@ pub fn render_spreadsheet_preview(
     } else {
         s.preview_ui.active_sheet.min(data.sheets.len() - 1)
     };
+    let raw_csv_cache = if data.format == "CSV"
+        && s.preview_ui.raw_csv_mode
+        && let Some(raw_text) = preview.content.as_deref()
+    {
+        Some(cached_csv_line_ranges(raw_text))
+    } else {
+        None
+    };
+    let raw_csv_rev = raw_csv_cache.as_ref().map(|entry| entry.rev);
+    let version = spreadsheet_memo_version(s, preview, data, active_idx, raw_csv_rev, t);
+    memo("spreadsheet-preview-root", version, || {
+        render_spreadsheet_preview_inner(s, preview, data, active_idx, raw_csv_cache, k, t)
+    })
+}
+
+fn render_spreadsheet_preview_inner(
+    s: &AppState,
+    preview: &FilePreviewState,
+    data: &SpreadsheetPreviewData,
+    active_idx: usize,
+    raw_csv_cache: Option<CachedCsvLines>,
+    k: &Kit,
+    t: &ThemeTokens,
+) -> El {
     let active_sheet = active_sheet_from_state(s, data);
 
     let dim_summary = if let Some(sheet) = active_sheet {
@@ -132,7 +341,6 @@ pub fn render_spreadsheet_preview(
     }
 
     let mut root = col()
-        .key("spreadsheet-preview-root")
         .w_full()
         .h_full()
         .grow(1.0)
@@ -165,10 +373,33 @@ pub fn render_spreadsheet_preview(
             .child(el().w_full().h(1.0).fill(t.border_muted));
     }
 
-    if data.format == "CSV"
-        && s.preview_ui.raw_csv_mode
-        && let Some(raw_text) = preview.content.as_deref()
+    if let Some(CachedCsvLines {
+        raw: raw_arc,
+        ranges: line_ranges,
+        ..
+    }) = raw_csv_cache
     {
+        let line_count = line_ranges.len();
+        let code_font = t.code;
+        let text_color = t.text_base;
+        let lines_col = col()
+            .key("spreadsheet-preview-raw-csv-lines")
+            .w_full()
+            .padding(12.0)
+            .gap(2.0)
+            .growth(GrowthSpec::default())
+            .virtual_rows(
+                line_count,
+                18.0,
+                |_: &AppState, i| Cow::Owned(format!("csv-raw-line-{i}")),
+                move |_: &AppState, i| {
+                    let line = line_ranges
+                        .get(i)
+                        .and_then(|&(start, end)| raw_arc.get(start..end))
+                        .unwrap_or("");
+                    text(line).font(code_font).color(text_color).w_full()
+                },
+            );
         root = root.child(
             col()
                 .key("spreadsheet-preview-raw-csv")
@@ -180,14 +411,7 @@ pub fn render_spreadsheet_preview(
                 .scroll(ScrollSpec {
                     stick_bottom: false,
                 })
-                .padding(12.0)
-                .child(
-                    text(raw_text)
-                        .font(t.code)
-                        .color(t.text_base)
-                        .wrap()
-                        .w_full(),
-                ),
+                .child(lines_col),
         );
         return root;
     }
@@ -275,7 +499,7 @@ fn render_sheet_table(s: &AppState, sheet_idx: usize, sheet: &SpreadsheetSheetDa
 
     let mut table = Table::new(
         |s: &AppState| &s.preview_ui.table,
-        |s: &mut AppState| &mut s.preview_ui.table,
+        |s: &mut AppState| s.preview_ui.table_mut(),
         sheet_row_count,
         sheet_row_id,
     )
@@ -323,14 +547,11 @@ fn render_sheet_table(s: &AppState, sheet_idx: usize, sheet: &SpreadsheetSheetDa
             return Cell::text("");
         };
         if col_id == ROW_INDEX_COL_ID {
-            return Cell::text(format!("{}", sheet.start_row + row_idx + 1))
+            return Cell::text((sheet.start_row + row_idx + 1).to_string())
                 .mono()
                 .muted();
         }
-        let Some(col_idx) = col_id
-            .strip_prefix('c')
-            .and_then(|rest| rest.parse::<usize>().ok())
-        else {
+        let Some(col_idx) = parse_col_index(col_id) else {
             return Cell::text("");
         };
         let val = sheet

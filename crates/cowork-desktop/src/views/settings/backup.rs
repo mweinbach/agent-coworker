@@ -1,6 +1,11 @@
 //! Backups & Checkpoints settings page (`apps/desktop/src/ui/settings/pages/BackupPage.tsx`).
 
-use rune::{El, TextEdit, col, el, icon, row, text};
+use std::borrow::Cow;
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::rc::Rc;
+
+use rune::{El, GrowthSpec, ScrollSpec, TextEdit, col, el, icon, row, text};
 use rune_kit::{Button, ButtonVariant, ControlSize, Kit};
 use serde_json::json;
 
@@ -10,10 +15,16 @@ use crate::theme::ThemeTokens;
 use crate::views::settings::icons;
 use crate::views::settings::primitives::{
     ConfirmDialogSpec, EmptyState, Section, SettingsRow, StatusTone, confirm_dialog,
-    find_management_target, format_byte_size, format_timestamp_friendly, management_targets,
-    mini_switch, search_input, settings_page, stat_tile, status_pill,
+    contains_ascii_ci, find_management_target, format_byte_size, format_timestamp_friendly,
+    management_targets, mini_switch, search_input, settings_page, stat_tile, status_pill,
 };
 use crate::views::settings::shell::PageContent;
+
+const MAX_ISO_TS_CACHE: usize = 512;
+
+thread_local! {
+    static ISO_TS_CACHE: RefCell<HashMap<String, Option<i64>>> = RefCell::new(HashMap::new());
+}
 
 #[derive(Clone, Debug)]
 struct BackupRowItem {
@@ -40,9 +51,20 @@ fn parse_iso_timestamp_ms(raw: &str) -> Option<i64> {
     if trimmed.is_empty() {
         return None;
     }
-    chrono::DateTime::parse_from_rfc3339(trimmed)
-        .ok()
-        .map(|dt| dt.timestamp_millis())
+    ISO_TS_CACHE.with(|slot| {
+        let mut cache = slot.borrow_mut();
+        if let Some(&cached) = cache.get(trimmed) {
+            return cached;
+        }
+        let parsed = chrono::DateTime::parse_from_rfc3339(trimmed)
+            .ok()
+            .map(|dt| dt.timestamp_millis());
+        if cache.len() >= MAX_ISO_TS_CACHE {
+            cache.clear();
+        }
+        cache.insert(trimmed.to_string(), parsed);
+        parsed
+    })
 }
 
 fn checkpoint_row(
@@ -291,25 +313,34 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
         .into_iter()
         .filter(|b| {
             filter.is_empty()
-                || b.label.to_ascii_lowercase().contains(&filter)
-                || b.selection_id.to_ascii_lowercase().contains(&filter)
-                || b.session_id.to_ascii_lowercase().contains(&filter)
-                || b.session_title.to_ascii_lowercase().contains(&filter)
+                || contains_ascii_ci(&b.label, &filter)
+                || contains_ascii_ci(&b.selection_id, &filter)
+                || contains_ascii_ci(&b.session_id, &filter)
+                || contains_ascii_ci(&b.session_title, &filter)
                 || b.checkpoint_id
                     .as_deref()
-                    .is_some_and(|cp| cp.to_ascii_lowercase().contains(&filter))
+                    .is_some_and(|cp| contains_ascii_ci(cp, &filter))
                 || b.trigger
                     .as_deref()
-                    .is_some_and(|tr| tr.to_ascii_lowercase().contains(&filter))
+                    .is_some_and(|tr| contains_ascii_ci(tr, &filter))
         })
         .collect();
 
-    let selected_backup = s
+    let selected_backup_id = s
         .settings_ui
         .backup_selected_id
         .as_deref()
+        .and_then(|sel| {
+            visible_backups
+                .iter()
+                .find(|b| b.selection_id == sel)
+                .map(|b| b.selection_id.clone())
+        })
+        .or_else(|| visible_backups.first().map(|b| b.selection_id.clone()));
+    let selected_backup = selected_backup_id
+        .as_deref()
         .and_then(|sel| visible_backups.iter().find(|b| b.selection_id == sel))
-        .or_else(|| visible_backups.first());
+        .cloned();
 
     let mut rail = col()
         .w(290.0)
@@ -355,14 +386,55 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                 .wrap(),
         );
     } else {
-        for entry in &visible_backups {
-            let is_selected =
-                selected_backup.is_some_and(|sel| sel.selection_id == entry.selection_id);
-            rail = rail.child(backup_list_item(entry, is_selected, k, t));
-        }
+        let count = visible_backups.len();
+        let list_h = ((count as f32) * 74.0).clamp(160.0, 460.0);
+        let rows_rc = Rc::new(visible_backups);
+        let keys_rc = Rc::clone(&rows_rc);
+        let selected_for_rows = selected_backup_id.clone();
+        let kit_clone = k.clone();
+        let tokens = *t;
+        let list_stack = col()
+            .key("backup-snapshots-rows")
+            .w_full()
+            .gap(8.0)
+            .growth(GrowthSpec::default())
+            .virtual_rows(
+                count,
+                68.0,
+                move |_: &AppState, i| {
+                    Cow::Owned(
+                        keys_rc
+                            .get(i)
+                            .map(|item| format!("backup-item-{}", item.selection_id))
+                            .unwrap_or_else(|| format!("backup-item-{i}")),
+                    )
+                },
+                move |_: &AppState, i| {
+                    let Some(entry) = rows_rc.get(i) else {
+                        return el().key(format!("backup-item-{i}"));
+                    };
+                    let is_selected =
+                        selected_for_rows.as_deref() == Some(entry.selection_id.as_str());
+                    backup_list_item(entry, is_selected, &kit_clone, &tokens)
+                },
+            );
+        rail = rail.child(
+            k.scroll_bar(
+                col()
+                    .key("backup-snapshots-scroll")
+                    .w_full()
+                    .h(list_h)
+                    .min_h(0.0)
+                    .scroll(ScrollSpec {
+                        stick_bottom: false,
+                    })
+                    .child(list_stack),
+            )
+            .w_full(),
+        );
     }
 
-    let detail_pane = match (active_target, selected_backup) {
+    let detail_pane = match (active_target, selected_backup.as_ref()) {
         (_, None) => col().grow(1.0).px(20.0).py(20.0).child(
             EmptyState::new("No backups available")
                 .icon(&icons::ARCHIVE_RESTORE)
@@ -539,100 +611,96 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
     blocks.push(split_card);
 
     let mut overlays = Vec::new();
-    if let (Some(target), Some(snapshot)) = (active_target, selected_backup) {
-        let ws_restore = target.id.clone();
-        let backup_id_restore = snapshot.selection_id.clone();
-        confirm_dialog(
-            ConfirmDialogSpec {
-                key: "backup-restore-confirm",
-                open: s.settings_ui.backup_restore_confirm_open,
-                title: "Restore workspace from backup?",
-                description: format!(
-                    "Overwrites modified files in {} using snapshot {}. A safety checkpoint is created first.",
-                    target.label, snapshot.selection_id
-                ),
-                confirm_label: "Restore backup",
-                danger: true,
-            },
-            |s| {
-                s.settings_ui.backup_restore_confirm_open = false;
-            },
-            move |s| {
-                s.settings_ui.backup_restore_confirm_open = false;
-                let (session_id, cp_opt) = split_backup_id(&backup_id_restore);
-                if let Some(cp_id) = cp_opt {
-                    s.dispatch(Action::Settings(SettingsAction::RestoreBackupCheckpoint {
-                        workspace_id: ws_restore.clone(),
-                        target_session_id: session_id.to_string(),
-                        checkpoint_id: Some(cp_id.to_string()),
-                    }));
-                } else {
-                    s.dispatch(Action::Settings(SettingsAction::RestoreBackup {
-                        workspace_id: ws_restore.clone(),
-                        backup_id: backup_id_restore.clone(),
-                    }));
-                }
-            },
-            k,
-            &mut overlays,
-        );
-
-        let del_id = s.settings_ui.backup_delete_confirm_id.clone();
-        let ws_del = target.id.clone();
-        let is_cp_delete = del_id
-            .as_deref()
-            .and_then(|id| split_backup_id(id).1)
-            .is_some();
-        confirm_dialog(
-            ConfirmDialogSpec {
-                key: "backup-delete-confirm",
-                open: del_id.is_some(),
-                title: if is_cp_delete {
-                    "Delete backup checkpoint?"
-                } else {
-                    "Delete backup entry?"
+    if let (Some(target), Some(snapshot)) = (active_target, selected_backup.as_ref()) {
+        if s.settings_ui.backup_restore_confirm_open {
+            let ws_restore = target.id.clone();
+            let backup_id_restore = snapshot.selection_id.clone();
+            confirm_dialog(
+                ConfirmDialogSpec {
+                    key: "backup-restore-confirm",
+                    open: true,
+                    title: "Restore workspace from backup?",
+                    description: format!(
+                        "Overwrites modified files in {} using snapshot {}. A safety checkpoint is created first.",
+                        target.label, snapshot.selection_id
+                    ),
+                    confirm_label: "Restore backup",
+                    danger: true,
                 },
-                description: if is_cp_delete {
-                    format!(
-                        "Permanently removes checkpoint {} from backup storage.",
-                        del_id.as_deref().unwrap_or("")
-                    )
-                } else {
-                    format!(
-                        "Permanently removes backup {} and its checkpoints from backup storage.",
-                        del_id.as_deref().unwrap_or("")
-                    )
+                |s| {
+                    s.settings_ui.backup_restore_confirm_open = false;
                 },
-                confirm_label: if is_cp_delete {
-                    "Delete checkpoint"
-                } else {
-                    "Delete backup"
-                },
-                danger: true,
-            },
-            |s| {
-                s.settings_ui.backup_delete_confirm_id = None;
-            },
-            move |s| {
-                if let Some(id) = s.settings_ui.backup_delete_confirm_id.take() {
-                    let (session_id, cp_opt) = split_backup_id(&id);
+                move |s| {
+                    s.settings_ui.backup_restore_confirm_open = false;
+                    let (session_id, cp_opt) = split_backup_id(&backup_id_restore);
                     if let Some(cp_id) = cp_opt {
-                        s.dispatch(Action::Settings(SettingsAction::DeleteBackup {
-                            workspace_id: ws_del.clone(),
+                        s.dispatch(Action::Settings(SettingsAction::RestoreBackupCheckpoint {
+                            workspace_id: ws_restore.clone(),
                             target_session_id: session_id.to_string(),
-                            checkpoint_id: cp_id.to_string(),
+                            checkpoint_id: Some(cp_id.to_string()),
                         }));
                     } else {
-                        s.dispatch(Action::Settings(SettingsAction::DeleteBackupEntry {
-                            workspace_id: ws_del.clone(),
-                            target_session_id: session_id.to_string(),
+                        s.dispatch(Action::Settings(SettingsAction::RestoreBackup {
+                            workspace_id: ws_restore.clone(),
+                            backup_id: backup_id_restore.clone(),
                         }));
                     }
-                }
-            },
-            k,
-            &mut overlays,
-        );
+                },
+                k,
+                &mut overlays,
+            );
+        }
+
+        if let Some(del_id) = s.settings_ui.backup_delete_confirm_id.as_deref() {
+            let ws_del = target.id.clone();
+            let is_cp_delete = split_backup_id(del_id).1.is_some();
+            confirm_dialog(
+                ConfirmDialogSpec {
+                    key: "backup-delete-confirm",
+                    open: true,
+                    title: if is_cp_delete {
+                        "Delete backup checkpoint?"
+                    } else {
+                        "Delete backup entry?"
+                    },
+                    description: if is_cp_delete {
+                        format!("Permanently removes checkpoint {del_id} from backup storage.")
+                    } else {
+                        format!(
+                            "Permanently removes backup {del_id} and its checkpoints from backup storage."
+                        )
+                    },
+                    confirm_label: if is_cp_delete {
+                        "Delete checkpoint"
+                    } else {
+                        "Delete backup"
+                    },
+                    danger: true,
+                },
+                |s| {
+                    s.settings_ui.backup_delete_confirm_id = None;
+                },
+                move |s| {
+                    if let Some(id) = s.settings_ui.backup_delete_confirm_id.take() {
+                        let (session_id, cp_opt) = split_backup_id(&id);
+                        if let Some(cp_id) = cp_opt {
+                            s.dispatch(Action::Settings(SettingsAction::DeleteBackup {
+                                workspace_id: ws_del.clone(),
+                                target_session_id: session_id.to_string(),
+                                checkpoint_id: cp_id.to_string(),
+                            }));
+                        } else {
+                            s.dispatch(Action::Settings(SettingsAction::DeleteBackupEntry {
+                                workspace_id: ws_del.clone(),
+                                target_session_id: session_id.to_string(),
+                            }));
+                        }
+                    }
+                },
+                k,
+                &mut overlays,
+            );
+        }
     }
 
     PageContent::simple(settings_page(blocks))

@@ -4,13 +4,17 @@
 //! (verified LibreOffice PNGs or deterministic text-only SVGs) in Deck or Grid
 //! mode with thumbnail strip, prev/next controls, keyboard navigation, and notices.
 
+use std::borrow::Cow;
 use std::cell::RefCell;
+use std::collections::hash_map::DefaultHasher;
+use std::collections::{HashMap, VecDeque};
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use base64::Engine as _;
 use rune::{
-    Align, Color, Cursor, El, Icon, ImageCache, Pixels, ScrollSpec, SurfaceFit, TextStyle, col, el,
-    icon, row, text,
+    Align, Color, Cursor, El, GrowthSpec, Icon, ImageCache, Pixels, ScrollSpec, SurfaceFit,
+    TextStyle, col, el, icon, memo, row, text,
 };
 use rune_kit::{
     Badge, BadgeVariant, Button, ButtonVariant, ControlSize, IconButton, IconButtonVariant, Kit,
@@ -22,6 +26,7 @@ use crate::actions::{Action, NativeAction};
 use crate::state::{AppState, FilePreviewState};
 use crate::theme::ThemeTokens;
 use crate::views::chat::icons as chat_icons;
+use crate::views::shell::helpers::{RightRailKind, resolve_adaptive_layout};
 
 const fn lucide_icon(name: &'static str, body: &'static str) -> Icon {
     Icon {
@@ -56,8 +61,232 @@ static ICON_CHEVRON_LEFT: Icon = lucide_icon(
     r#"<g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></g>"#,
 );
 
+const MAX_DECODED_SLIDES_CACHE: usize = 128;
+const MAX_PIXELS_SLIDES_CACHE: usize = 256;
+const MAX_PENDING_SLIDE_LOADS: usize = 64;
+
+type UriFingerprint = (u64, u64, usize);
+type PixelsCacheKey = (UriFingerprint, u32);
+
+#[derive(Clone)]
+struct CachedDecodedSlide {
+    mime: String,
+    bytes: Arc<[u8]>,
+    text_overlay: Option<SvgTextOverlay>,
+}
+
+struct PendingSlideLoad {
+    key: PixelsCacheKey,
+    entry: Arc<CachedDecodedSlide>,
+    size_pt: f32,
+    scale: f32,
+}
+
+#[derive(Default)]
+struct PresentationCacheState {
+    image_cache: Option<ImageCache>,
+    has_real_waker: bool,
+    decoded: HashMap<UriFingerprint, Option<Arc<CachedDecodedSlide>>>,
+    pixels: HashMap<PixelsCacheKey, Pixels>,
+    pending: VecDeque<PendingSlideLoad>,
+    ready_gen: u64,
+}
+
+fn is_text_only_rendering_mode(mode: Option<&str>) -> bool {
+    matches!(mode, Some("text" | "text-fallback"))
+}
+
+/// Returns `(cache_bucket_id, decode_size_pt, decode_scale)` so slides are decoded once
+/// across thumbnail, deck stage, grid card, and viewport resizes:
+/// - Raster bitmaps (PNG/JPEG/WebP): size-independent `(0, 512.0, 1.0)`, scaled on GPU.
+/// - Text-only fallback SVGs (native `text()` overlay on plain backdrop): compact `(320, 320.0, 1.0)`.
+/// - Graphic SVGs (including SVGs with `<text>` labels): two coarse buckets
+///   (`<= 320pt` -> `256@1.5x`, `> 320pt` -> `640@1.5x`).
+fn slide_raster_spec(
+    entry: &CachedDecodedSlide,
+    text_only_deck: bool,
+    requested_size_pt: f32,
+) -> (u32, f32, f32) {
+    if !entry.mime.eq_ignore_ascii_case("image/svg+xml") {
+        (0, 512.0, 1.0)
+    } else if text_only_deck && entry.text_overlay.is_some() {
+        (320, 320.0, 1.0)
+    } else if requested_size_pt <= 320.0 {
+        (256, 256.0, 1.5)
+    } else {
+        (640, 640.0, 1.5)
+    }
+}
+
 thread_local! {
-    static PRESENTATION_IMAGE_CACHE: RefCell<Option<ImageCache>> = const { RefCell::new(None) };
+    static PRESENTATION_IMAGE_CACHE: RefCell<PresentationCacheState> =
+        RefCell::new(PresentationCacheState::default());
+}
+
+fn current_slide_ready_gen() -> u64 {
+    PRESENTATION_IMAGE_CACHE.with(|slot| slot.borrow().ready_gen)
+}
+
+fn fnv1a_update(mut h: u64, bytes: &[u8]) -> u64 {
+    for &b in bytes {
+        h ^= u64::from(b);
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    h
+}
+
+/// Computes a fast O(1) 128-bit + length fingerprint for slide data URIs.
+///
+/// Small URIs (<= 4 KiB, e.g. SVG fallbacks and unit test fixtures) are hashed in full.
+/// Multi-megabyte rasterized PNG data URIs hash header, 4 interior windows, and tail
+/// (covering PNG headers, IDAT payload regions, and CRC/IEND chunks) in <1µs.
+fn uri_fingerprint(uri: &str) -> UriFingerprint {
+    let bytes = uri.as_bytes();
+    let len = bytes.len();
+    let mut h1 = DefaultHasher::new();
+    let mut h2 = 0xcbf29ce484222325_u64;
+    len.hash(&mut h1);
+    h2 = fnv1a_update(h2, &len.to_le_bytes());
+    if len <= 4096 {
+        bytes.hash(&mut h1);
+        h2 = fnv1a_update(h2, bytes);
+    } else {
+        let head = &bytes[..512];
+        let tail = &bytes[len - 512..];
+        head.hash(&mut h1);
+        h2 = fnv1a_update(h2, head);
+        for step in 1..=4 {
+            let start = ((len - 128) * step) / 5;
+            let slice = &bytes[start..start + 128];
+            slice.hash(&mut h1);
+            h2 = fnv1a_update(h2, slice);
+        }
+        tail.hash(&mut h1);
+        h2 = fnv1a_update(h2, tail);
+    }
+    (h1.finish(), h2, len)
+}
+
+fn ensure_presentation_image_cache<'a>(
+    state: &'a mut PresentationCacheState,
+    s: &AppState,
+) -> &'a mut ImageCache {
+    if !state.has_real_waker
+        && let Some(waker) = s.services.waker.clone()
+    {
+        state.image_cache = Some(ImageCache::new(waker));
+        state.has_real_waker = true;
+        state.pixels.clear();
+        state.pending.clear();
+        state.ready_gen = state.ready_gen.wrapping_add(1);
+    }
+    state.image_cache.get_or_insert_with(|| {
+        let waker = s.services.waker.clone().unwrap_or_else(|| Arc::new(|| {}));
+        ImageCache::new(waker)
+    })
+}
+
+/// Polls any in-flight async slide image decodes and returns a monotonic generation counter
+/// that advances whenever a newly-decoded slide becomes ready or errors (invalidating `rune::memo`).
+fn poll_pending_slide_visuals(s: &AppState) -> u64 {
+    PRESENTATION_IMAGE_CACHE.with(|slot| {
+        let mut state = slot.borrow_mut();
+        let _ = ensure_presentation_image_cache(&mut state, s);
+        if state.pending.is_empty() {
+            return state.ready_gen;
+        }
+        let mut still_pending = VecDeque::with_capacity(state.pending.len());
+        let pending = std::mem::take(&mut state.pending);
+        for job in pending {
+            if state.pixels.contains_key(&job.key) {
+                continue;
+            }
+            let Some(cache) = state.image_cache.as_mut() else {
+                still_pending.push_back(job);
+                continue;
+            };
+            let img = cache.load_mime(
+                Arc::clone(&job.entry.bytes),
+                &job.entry.mime,
+                job.size_pt,
+                job.scale,
+            );
+            if img.error().is_some() {
+                state.ready_gen = state.ready_gen.wrapping_add(1);
+                continue;
+            }
+            if img.is_ready() {
+                if state.pixels.len() >= MAX_PIXELS_SLIDES_CACHE {
+                    state.pixels.clear();
+                }
+                state.pixels.insert(job.key, img.pixels().clone());
+                state.ready_gen = state.ready_gen.wrapping_add(1);
+            } else {
+                still_pending.push_back(job);
+            }
+        }
+        state.pending = still_pending;
+        state.ready_gen
+    })
+}
+
+fn decode_data_uri_payload(uri: &str) -> Option<Arc<CachedDecodedSlide>> {
+    let trimmed = uri.trim();
+    let payload = trimmed
+        .get(..5)
+        .filter(|prefix| prefix.eq_ignore_ascii_case("data:"))
+        .and_then(|_| trimmed.get(5..))?;
+    let (meta, raw) = payload.split_once(',')?;
+    let mime = meta.split(';').next().unwrap_or("").trim();
+    if !mime
+        .get(..6)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("image/"))
+    {
+        return None;
+    }
+
+    let is_base64 = meta
+        .split(';')
+        .skip(1)
+        .any(|p| p.trim().eq_ignore_ascii_case("base64"));
+
+    let bytes: Vec<u8> = if is_base64 {
+        if raw.as_bytes().iter().any(u8::is_ascii_whitespace) {
+            let mut compact = Vec::with_capacity(raw.len());
+            for &b in raw.as_bytes() {
+                if !b.is_ascii_whitespace() {
+                    compact.push(b);
+                }
+            }
+            base64::engine::general_purpose::STANDARD
+                .decode(&compact)
+                .ok()?
+        } else {
+            base64::engine::general_purpose::STANDARD
+                .decode(raw.as_bytes())
+                .ok()?
+        }
+    } else if raw.contains('%') {
+        decode_percent_encoded_bytes(raw)
+    } else {
+        raw.as_bytes().to_vec()
+    };
+
+    if bytes.is_empty() {
+        return None;
+    }
+
+    let text_overlay = if mime.eq_ignore_ascii_case("image/svg+xml") {
+        extract_svg_text_overlay(&bytes)
+    } else {
+        None
+    };
+
+    Some(Arc::new(CachedDecodedSlide {
+        mime: mime.to_string(),
+        bytes: Arc::<[u8]>::from(bytes),
+        text_overlay,
+    }))
 }
 
 fn decode_percent_encoded_bytes(raw: &str) -> Vec<u8> {
@@ -109,6 +338,7 @@ pub(super) struct SvgTextOverlay {
 pub(super) struct DecodedSlideVisual {
     pub pixels: Option<Pixels>,
     pub text_overlay: Option<SvgTextOverlay>,
+    pub loading: bool,
 }
 
 fn svg_srgb_channel(ch: u8) -> f32 {
@@ -428,67 +658,89 @@ pub(super) fn extract_svg_text_overlay(svg_bytes: &[u8]) -> Option<SvgTextOverla
 
 /// Decodes a `data:image/...` URL (PNG or text-fallback SVG) into cached GPU pixels and
 /// optional extracted SVG text lines.
-pub(super) fn decode_slide_visual(s: &AppState, uri: &str, size_pt: f32) -> DecodedSlideVisual {
-    let Some(payload) = uri.trim().strip_prefix("data:") else {
-        return DecodedSlideVisual::default();
-    };
-    let Some((meta, raw)) = payload.split_once(',') else {
-        return DecodedSlideVisual::default();
-    };
-    let mime = meta.split(';').next().unwrap_or("").trim();
-    if !mime.to_ascii_lowercase().starts_with("image/") {
-        return DecodedSlideVisual::default();
-    }
+///
+/// Decoded bytes, parsed SVG text overlays, and ready GPU `Pixels` are cached per slide
+/// fingerprint so repeated commits do zero base64 decoding or XML parsing.
+pub(super) fn decode_slide_visual(
+    s: &AppState,
+    uri: &str,
+    size_pt: f32,
+    text_only_deck: bool,
+) -> DecodedSlideVisual {
+    let fp = uri_fingerprint(uri);
+    let sync_wait = s.services.waker.is_none();
 
-    let is_base64 = meta
-        .split(';')
-        .skip(1)
-        .any(|p| p.trim().eq_ignore_ascii_case("base64"));
+    PRESENTATION_IMAGE_CACHE.with(|slot| {
+        let mut state = slot.borrow_mut();
+        let _ = ensure_presentation_image_cache(&mut state, s);
 
-    let bytes: Vec<u8> = if is_base64 {
-        let compact: String = raw.chars().filter(|c| !c.is_ascii_whitespace()).collect();
-        let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(compact.as_bytes())
-        else {
+        let decoded_entry = if let Some(cached) = state.decoded.get(&fp) {
+            cached.clone()
+        } else {
+            let parsed = decode_data_uri_payload(uri);
+            if state.decoded.len() >= MAX_DECODED_SLIDES_CACHE {
+                state.decoded.clear();
+            }
+            state.decoded.insert(fp, parsed.clone());
+            parsed
+        };
+
+        let Some(entry) = decoded_entry else {
             return DecodedSlideVisual::default();
         };
-        decoded
-    } else if raw.contains('%') {
-        decode_percent_encoded_bytes(raw)
-    } else {
-        raw.as_bytes().to_vec()
-    };
 
-    if bytes.is_empty() {
-        return DecodedSlideVisual::default();
-    }
+        let (bucket_id, decode_size_pt, decode_scale) =
+            slide_raster_spec(&entry, text_only_deck, size_pt);
+        let px_key: PixelsCacheKey = (fp, bucket_id);
 
-    let text_overlay = if mime.eq_ignore_ascii_case("image/svg+xml") {
-        extract_svg_text_overlay(&bytes)
-    } else {
-        None
-    };
+        if let Some(px) = state.pixels.get(&px_key) {
+            return DecodedSlideVisual {
+                pixels: Some(px.clone()),
+                text_overlay: entry.text_overlay.clone(),
+                loading: false,
+            };
+        }
 
-    let sync_wait = s.services.waker.is_none();
-    let pixels = PRESENTATION_IMAGE_CACHE.with(|slot| {
-        let mut guard = slot.borrow_mut();
-        let cache = guard.get_or_insert_with(|| {
-            let waker = s.services.waker.clone().unwrap_or_else(|| Arc::new(|| {}));
-            ImageCache::new(waker)
-        });
-        let img = cache.load_mime(Arc::<[u8]>::from(bytes), mime, size_pt, 2.0);
+        let cache = ensure_presentation_image_cache(&mut state, s);
+        let img = cache.load_mime(
+            Arc::clone(&entry.bytes),
+            &entry.mime,
+            decode_size_pt,
+            decode_scale,
+        );
         if sync_wait && !img.is_ready() {
             let _ = img.wait();
         }
-        if img.error().is_some() || !img.is_ready() {
-            return None;
-        }
-        Some(img.pixels().clone())
-    });
+        let (pixels, loading) = if img.error().is_some() {
+            (None, false)
+        } else if img.is_ready() {
+            let px = img.pixels().clone();
+            if state.pixels.len() >= MAX_PIXELS_SLIDES_CACHE {
+                state.pixels.clear();
+            }
+            state.pixels.insert(px_key, px.clone());
+            (Some(px), false)
+        } else {
+            if !state.pending.iter().any(|job| job.key == px_key) {
+                while state.pending.len() >= MAX_PENDING_SLIDE_LOADS {
+                    state.pending.pop_front();
+                }
+                state.pending.push_back(PendingSlideLoad {
+                    key: px_key,
+                    entry: Arc::clone(&entry),
+                    size_pt: decode_size_pt,
+                    scale: decode_scale,
+                });
+            }
+            (None, true)
+        };
 
-    DecodedSlideVisual {
-        pixels,
-        text_overlay,
-    }
+        DecodedSlideVisual {
+            pixels,
+            text_overlay: entry.text_overlay.clone(),
+            loading,
+        }
+    })
 }
 
 fn estimated_preview_width(s: &AppState) -> f32 {
@@ -497,12 +749,16 @@ fn estimated_preview_width(s: &AppState) -> f32 {
     } else {
         1280.0
     };
-    let sidebar_w = if s.sidebar.is_open() {
-        s.sidebar.width()
-    } else {
-        0.0
-    };
-    let content_w = (vp_w - sidebar_w).max(320.0);
+    let adaptive = resolve_adaptive_layout(
+        vp_w,
+        s.sidebar.is_open(),
+        s.sidebar.width(),
+        true,
+        s.context_sidebar.is_open(),
+        s.context_sidebar.width(),
+        RightRailKind::Context,
+    );
+    let content_w = (vp_w - adaptive.left_width - adaptive.right_width).max(320.0);
     if s.shell_ui.preview_maximized {
         content_w
     } else {
@@ -535,6 +791,94 @@ fn dispatch_reload_presentation(s: &mut AppState, workspace_id: &str, path: &str
     }));
 }
 
+fn presentation_theme_sig(s: &AppState, t: &ThemeTokens) -> u64 {
+    let mut h = DefaultHasher::new();
+    (
+        t.dark,
+        t.accent.r.to_bits(),
+        t.accent.g.to_bits(),
+        t.accent.b.to_bits(),
+        t.panel_bg.r.to_bits(),
+        t.sidebar_bg.r.to_bits(),
+        t.border_muted.a.to_bits(),
+        s.desktop_settings.reduced_transparency,
+        s.desktop_settings.high_contrast,
+        s.ui_scale.to_bits(),
+    )
+        .hash(&mut h);
+    h.finish()
+}
+
+fn grid_cols_for_width(est_width: f32) -> usize {
+    if est_width >= 880.0 {
+        3
+    } else if est_width >= 540.0 {
+        2
+    } else {
+        1
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn presentation_memo_version(
+    s: &AppState,
+    preview: &FilePreviewState,
+    data: &PresentationPreviewData,
+    active_idx: usize,
+    compact: bool,
+    est_w: f32,
+    ready_gen: u64,
+    theme_sig: u64,
+) -> u64 {
+    let mut h = DefaultHasher::new();
+    (
+        theme_sig,
+        s.services.waker.is_some(),
+        ready_gen,
+        preview.workspace_id.as_str(),
+        preview.path.as_str(),
+        data.loading,
+        data.rendering_mode.as_deref(),
+    )
+        .hash(&mut h);
+    (
+        data.warnings.as_slice(),
+        data.error_kind.as_deref(),
+        data.error_message.as_deref(),
+        data.slides.len(),
+        active_idx,
+        matches!(
+            s.preview_ui.presentation_layout,
+            PresentationLayoutMode::Grid
+        ),
+        compact,
+    )
+        .hash(&mut h);
+    match s.preview_ui.presentation_layout {
+        PresentationLayoutMode::Deck => {
+            let stage_est_w =
+                (est_w - if compact { 0.0 } else { 156.0 } - 28.0).clamp(260.0, 960.0);
+            ((stage_est_w / 16.0).round() as i32).hash(&mut h);
+        }
+        PresentationLayoutMode::Grid => {
+            let cols = grid_cols_for_width(est_w);
+            let card_w =
+                ((est_w - 24.0 - 12.0 * (cols as f32 - 1.0)) / cols as f32 - 16.0).max(160.0);
+            (cols, (card_w / 16.0).round() as i32).hash(&mut h);
+        }
+    }
+    for slide in &data.slides {
+        (
+            slide.slide_index,
+            slide.slide_id.as_deref(),
+            slide.title.as_deref(),
+            uri_fingerprint(&slide.png_base64),
+        )
+            .hash(&mut h);
+    }
+    h.finish()
+}
+
 /// Renders the read-only PowerPoint presentation preview body inside `inline-file-preview`.
 pub fn render_presentation_preview(
     s: &AppState,
@@ -551,11 +895,36 @@ pub fn render_presentation_preview(
     } else {
         s.preview_ui.active_slide.min(total_slides - 1)
     };
+    let ready_gen = poll_pending_slide_visuals(s);
+    let theme_sig = presentation_theme_sig(s, t);
+    let version = presentation_memo_version(
+        s, preview, data, active_idx, compact, est_w, ready_gen, theme_sig,
+    );
 
+    memo("pptx-preview-root", version, || {
+        render_presentation_preview_inner(
+            s, preview, data, active_idx, compact, est_w, ready_gen, theme_sig, k, t,
+        )
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_presentation_preview_inner(
+    s: &AppState,
+    preview: &FilePreviewState,
+    data: &PresentationPreviewData,
+    active_idx: usize,
+    compact: bool,
+    est_w: f32,
+    ready_gen: u64,
+    theme_sig: u64,
+    k: &Kit,
+    t: &ThemeTokens,
+) -> El {
+    let total_slides = data.slides.len();
     let meta_bar = build_meta_bar(s, preview, data, compact, k, t);
 
     let mut root = col()
-        .key("pptx-preview-root")
         .w_full()
         .h_full()
         .grow(1.0)
@@ -589,10 +958,19 @@ pub fn render_presentation_preview(
         build_empty_view(t)
     } else {
         match s.preview_ui.presentation_layout {
-            PresentationLayoutMode::Deck => {
-                build_deck_view(s, &data.slides, active_idx, compact, est_w, k, t)
-            }
-            PresentationLayoutMode::Grid => build_grid_view(s, &data.slides, active_idx, est_w, t),
+            PresentationLayoutMode::Deck => build_deck_view(
+                s,
+                &data.slides,
+                active_idx,
+                compact,
+                est_w,
+                ready_gen,
+                is_text_only_rendering_mode(data.rendering_mode.as_deref()),
+                theme_sig,
+                k,
+                t,
+            ),
+            PresentationLayoutMode::Grid => build_grid_view(&data.slides, est_w, theme_sig, t),
         }
     };
 
@@ -938,6 +1316,16 @@ fn render_slide_frame_with_visual(
     }
 
     if visual.pixels.is_none() && visual.text_overlay.is_none() {
+        if visual.loading {
+            return frame.fill(t.sidebar_bg).center().padding(8.0).child(
+                text("Loading slide…")
+                    .font(t.caption)
+                    .color(t.text_faint)
+                    .align(Align::Center)
+                    .wrap()
+                    .w_full(),
+            );
+        }
         return frame.fill(t.sidebar_bg).center().padding(8.0).child(
             text("Slide preview unavailable.")
                 .font(t.caption)
@@ -966,9 +1354,10 @@ fn render_slide_canvas_frame(
     decode_size_pt: f32,
     box_size: (f32, f32),
     is_thumb: bool,
+    text_only_deck: bool,
     t: &ThemeTokens,
 ) -> El {
-    let visual = decode_slide_visual(s, &slide.png_base64, decode_size_pt);
+    let visual = decode_slide_visual(s, &slide.png_base64, decode_size_pt, text_only_deck);
     let ratio = visual_aspect_ratio(&visual);
     let fit_w_pt = box_size.0.min(box_size.1 * ratio).max(40.0);
     el().aspect_fit(ratio).child(render_slide_frame_with_visual(
@@ -990,6 +1379,54 @@ fn slide_number_pill(idx: usize, pad_x: f32, pad_y: f32, inset: f32, t: &ThemeTo
         )
 }
 
+#[allow(clippy::too_many_arguments)]
+fn build_memoized_thumbnail_tile(
+    s: &AppState,
+    slide: &PresentationSlideData,
+    idx: usize,
+    total_slides: usize,
+    active: bool,
+    compact: bool,
+    ready_gen: u64,
+    text_only_deck: bool,
+    theme_sig: u64,
+    t: &ThemeTokens,
+) -> El {
+    let mut h = DefaultHasher::new();
+    (
+        idx,
+        total_slides,
+        active,
+        compact,
+        ready_gen,
+        text_only_deck,
+    )
+        .hash(&mut h);
+    (
+        theme_sig,
+        s.services.waker.is_some(),
+        slide.slide_index,
+        slide.slide_id.as_deref(),
+        slide.title.as_deref(),
+        uri_fingerprint(&slide.png_base64),
+    )
+        .hash(&mut h);
+    let key = format!("pptx-thumb-{idx}");
+    memo(key.as_str(), h.finish(), || {
+        build_thumbnail_tile(
+            s,
+            slide,
+            idx,
+            total_slides,
+            active,
+            compact,
+            text_only_deck,
+            t,
+        )
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
 fn build_thumbnail_tile(
     s: &AppState,
     slide: &PresentationSlideData,
@@ -997,6 +1434,7 @@ fn build_thumbnail_tile(
     total_slides: usize,
     active: bool,
     compact: bool,
+    text_only_deck: bool,
     t: &ThemeTokens,
 ) -> El {
     let border_col = if active { t.accent } else { t.border_muted };
@@ -1022,13 +1460,13 @@ fn build_thumbnail_tile(
             220.0,
             (thumb_w_pt, thumb_h),
             true,
+            text_only_deck,
             t,
         ))
         .child(slide_number_pill(idx, 4.0, 1.0, 4.0, t));
 
     let title = slide_display_title(slide, idx);
     let mut tile = col()
-        .key(format!("pptx-thumb-{idx}"))
         .gap(4.0)
         .padding(5.0)
         .radius(6.0)
@@ -1055,20 +1493,24 @@ fn build_thumbnail_tile(
     tile
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_deck_view(
     s: &AppState,
     slides: &[PresentationSlideData],
     active_idx: usize,
     compact: bool,
     est_width: f32,
+    ready_gen: u64,
+    text_only_deck: bool,
+    theme_sig: u64,
     k: &Kit,
     t: &ThemeTokens,
 ) -> El {
     let total = slides.len();
     let active_slide = &slides[active_idx];
 
-    let mut thumb_items = if compact {
-        row()
+    let thumb_items = if compact {
+        let mut strip = row()
             .key("pptx-thumb-strip")
             .w_full()
             .h(98.0)
@@ -1078,35 +1520,78 @@ fn build_deck_view(
             .gap(6.0)
             .center_y()
             .fill(t.sidebar_bg)
-            .scroll_x()
+            .scroll_x();
+        for (idx, slide) in slides.iter().enumerate() {
+            strip = strip.child(build_memoized_thumbnail_tile(
+                s,
+                slide,
+                idx,
+                total,
+                idx == active_idx,
+                true,
+                ready_gen,
+                text_only_deck,
+                theme_sig,
+                t,
+            ));
+        }
+        strip
     } else {
+        let tokens = *t;
+        let rows_stack = col()
+            .key("pptx-thumb-strip-rows")
+            .w_full()
+            .padding(8.0)
+            .gap(6.0)
+            .growth(GrowthSpec::default())
+            .virtual_rows(
+                total,
+                108.0,
+                |_: &AppState, idx| Cow::Owned(format!("pptx-thumb-{idx}")),
+                move |s: &AppState, idx| {
+                    let Some(pres) = s
+                        .active_file_preview
+                        .as_ref()
+                        .and_then(|p| p.presentation.as_deref())
+                    else {
+                        return el().key(format!("pptx-thumb-{idx}"));
+                    };
+                    let Some(slide) = pres.slides.get(idx) else {
+                        return el().key(format!("pptx-thumb-{idx}"));
+                    };
+                    let live_total = pres.slides.len();
+                    let live_active = s.preview_ui.active_slide.min(live_total.saturating_sub(1));
+                    let live_text_only =
+                        is_text_only_rendering_mode(pres.rendering_mode.as_deref());
+                    let live_ready_gen = current_slide_ready_gen();
+                    build_memoized_thumbnail_tile(
+                        s,
+                        slide,
+                        idx,
+                        live_total,
+                        idx == live_active,
+                        false,
+                        live_ready_gen,
+                        live_text_only,
+                        theme_sig,
+                        &tokens,
+                    )
+                },
+            );
         col()
             .key("pptx-thumb-strip")
             .w(156.0)
             .h_full()
             .shrink()
             .min_h(0.0)
-            .padding(8.0)
-            .gap(6.0)
             .fill(t.sidebar_bg)
             .scroll(ScrollSpec {
                 stick_bottom: false,
             })
+            .child(rows_stack)
     };
 
-    for (idx, slide) in slides.iter().enumerate() {
-        thumb_items = thumb_items.child(build_thumbnail_tile(
-            s,
-            slide,
-            idx,
-            total,
-            idx == active_idx,
-            compact,
-            t,
-        ));
-    }
-
-    let stage_visual = decode_slide_visual(s, &active_slide.png_base64, 900.0);
+    let stage_visual = decode_slide_visual(s, &active_slide.png_base64, 900.0, text_only_deck);
     let stage_ratio = visual_aspect_ratio(&stage_visual);
     let stage_est_w = (est_width - if compact { 0.0 } else { 156.0 } - 28.0).clamp(260.0, 960.0);
 
@@ -1216,94 +1701,163 @@ fn build_deck_view(
     }
 }
 
-fn build_grid_view(
+#[allow(clippy::too_many_arguments)]
+fn build_memoized_grid_card(
     s: &AppState,
+    slide: &PresentationSlideData,
+    idx: usize,
+    total: usize,
+    active: bool,
+    card_w: f32,
+    ready_gen: u64,
+    text_only_deck: bool,
+    theme_sig: u64,
+    t: &ThemeTokens,
+) -> El {
+    let mut h = DefaultHasher::new();
+    (
+        idx,
+        total,
+        active,
+        (card_w / 16.0).round() as i32,
+        ready_gen,
+        text_only_deck,
+    )
+        .hash(&mut h);
+    (
+        theme_sig,
+        s.services.waker.is_some(),
+        slide.slide_index,
+        slide.slide_id.as_deref(),
+        slide.title.as_deref(),
+        uri_fingerprint(&slide.png_base64),
+    )
+        .hash(&mut h);
+    let key = format!("pptx-grid-card-{idx}");
+    memo(key.as_str(), h.finish(), || {
+        let border_col = if active { t.accent } else { t.border_muted };
+        let bg_col = if active {
+            t.accent.alpha(if t.dark { 0.14 } else { 0.06 })
+        } else {
+            t.sidebar_bg
+        };
+
+        let img_box = el()
+            .w_full()
+            .h(128.0)
+            .center()
+            .child(render_slide_canvas_frame(
+                s,
+                slide,
+                320.0,
+                (card_w, 128.0),
+                false,
+                text_only_deck,
+                t,
+            ))
+            .child(slide_number_pill(idx, 5.0, 2.0, 6.0, t));
+
+        col()
+            .grow(1.0)
+            .shrink()
+            .min_w(0.0)
+            .gap(6.0)
+            .padding(8.0)
+            .radius(8.0)
+            .border(if active { 1.5 } else { 1.0 }, border_col)
+            .fill(bg_col)
+            .cursor(Cursor::Pointer)
+            .on_press(move |s: &mut AppState| {
+                s.preview_ui.select_slide(idx, total);
+                s.preview_ui
+                    .set_presentation_layout(PresentationLayoutMode::Deck);
+            })
+            .child(img_box)
+            .child(
+                text(slide_display_title(slide, idx))
+                    .font(t.caption)
+                    .color(if active { t.text_base } else { t.text_muted })
+                    .truncate()
+                    .w_full(),
+            )
+    })
+}
+
+fn build_grid_view(
     slides: &[PresentationSlideData],
-    active_idx: usize,
     est_width: f32,
+    theme_sig: u64,
     t: &ThemeTokens,
 ) -> El {
     let total = slides.len();
-    let cols = if est_width >= 880.0 {
-        3
-    } else if est_width >= 540.0 {
-        2
-    } else {
-        1
-    };
+    let cols = grid_cols_for_width(est_width);
+    let row_count = total.div_ceil(cols);
+    let card_w = ((est_width - 24.0 - 12.0 * (cols as f32 - 1.0)) / cols as f32 - 16.0).max(160.0);
+    let tokens = *t;
 
-    let mut scroll_col = col()
+    let grid_rows = col()
+        .key("pptx-grid-rows")
+        .w_full()
+        .padding(12.0)
+        .gap(12.0)
+        .growth(GrowthSpec::default())
+        .virtual_rows(
+            row_count,
+            174.0,
+            |_: &AppState, row_idx| Cow::Owned(format!("pptx-grid-row-{row_idx}")),
+            move |s: &AppState, row_idx| {
+                let Some(pres) = s
+                    .active_file_preview
+                    .as_ref()
+                    .and_then(|p| p.presentation.as_deref())
+                else {
+                    return row()
+                        .key(format!("pptx-grid-row-{row_idx}"))
+                        .w_full()
+                        .gap(12.0);
+                };
+                let slides = pres.slides.as_slice();
+                let live_total = slides.len();
+                let live_active = s.preview_ui.active_slide.min(live_total.saturating_sub(1));
+                let live_text_only = is_text_only_rendering_mode(pres.rendering_mode.as_deref());
+                let live_ready_gen = current_slide_ready_gen();
+                let start = row_idx * cols;
+                let end = (start + cols).min(slides.len());
+                let row_slice = slides.get(start..end).unwrap_or(&[]);
+                let mut grid_row = row()
+                    .key(format!("pptx-grid-row-{row_idx}"))
+                    .w_full()
+                    .gap(12.0);
+                for (offset, slide) in row_slice.iter().enumerate() {
+                    let idx = start + offset;
+                    grid_row = grid_row.child(build_memoized_grid_card(
+                        s,
+                        slide,
+                        idx,
+                        live_total,
+                        idx == live_active,
+                        card_w,
+                        live_ready_gen,
+                        live_text_only,
+                        theme_sig,
+                        &tokens,
+                    ));
+                }
+                for _ in row_slice.len()..cols {
+                    grid_row = grid_row.child(el().grow(1.0).shrink().min_w(0.0));
+                }
+                grid_row
+            },
+        );
+
+    col()
         .key("pptx-grid-scroll")
         .w_full()
         .grow(1.0)
         .shrink()
         .min_h(0.0)
-        .padding(12.0)
-        .gap(12.0)
         .scroll(ScrollSpec {
             stick_bottom: false,
-        });
-
-    for (row_idx, chunk) in slides.chunks(cols).enumerate() {
-        let mut grid_row = row().w_full().gap(12.0);
-        for (offset, slide) in chunk.iter().enumerate() {
-            let idx = row_idx * cols + offset;
-            let active = idx == active_idx;
-            let border_col = if active { t.accent } else { t.border_muted };
-            let bg_col = if active {
-                t.accent.alpha(if t.dark { 0.14 } else { 0.06 })
-            } else {
-                t.sidebar_bg
-            };
-
-            let card_w =
-                ((est_width - 24.0 - 12.0 * (cols as f32 - 1.0)) / cols as f32 - 16.0).max(160.0);
-            let img_box = el()
-                .w_full()
-                .h(128.0)
-                .center()
-                .child(render_slide_canvas_frame(
-                    s,
-                    slide,
-                    320.0,
-                    (card_w, 128.0),
-                    false,
-                    t,
-                ))
-                .child(slide_number_pill(idx, 5.0, 2.0, 6.0, t));
-
-            let card = col()
-                .key(format!("pptx-grid-card-{idx}"))
-                .grow(1.0)
-                .shrink()
-                .min_w(0.0)
-                .gap(6.0)
-                .padding(8.0)
-                .radius(8.0)
-                .border(if active { 1.5 } else { 1.0 }, border_col)
-                .fill(bg_col)
-                .cursor(Cursor::Pointer)
-                .on_press(move |s: &mut AppState| {
-                    s.preview_ui.select_slide(idx, total);
-                    s.preview_ui
-                        .set_presentation_layout(PresentationLayoutMode::Deck);
-                })
-                .child(img_box)
-                .child(
-                    text(slide_display_title(slide, idx))
-                        .font(t.caption)
-                        .color(if active { t.text_base } else { t.text_muted })
-                        .truncate()
-                        .w_full(),
-                );
-
-            grid_row = grid_row.child(card);
-        }
-        for _ in chunk.len()..cols {
-            grid_row = grid_row.child(el().grow(1.0).shrink().min_w(0.0));
-        }
-        scroll_col = scroll_col.child(grid_row);
-    }
-
-    scroll_col
+        })
+        .child(grid_rows)
 }

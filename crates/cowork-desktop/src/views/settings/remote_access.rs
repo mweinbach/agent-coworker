@@ -1,10 +1,13 @@
 //! Remote Access settings page (`apps/desktop/src/ui/settings/pages/RemoteAccessPage.tsx`).
 
 use std::cell::RefCell;
-use std::collections::HashSet;
+use std::collections::hash_map::DefaultHasher;
+use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 
 use qrcode::{Color as QrColor, QrCode};
-use rune::{Color, El, Pixels, col, el, icon, row, text};
+use rune::{Color, El, Pixels, col, el, icon, memo, row, text};
 use rune_kit::{Button, ButtonVariant, ControlSize, Kit};
 use serde_json::{Map, Value};
 
@@ -16,7 +19,7 @@ use crate::views::settings::icons;
 use crate::views::settings::primitives::{
     ConfirmDialogSpec, EmptyState, Section, SettingsRow, StatusTone, callout_banner,
     confirm_dialog, find_management_target, format_timestamp_friendly, management_targets,
-    mini_switch, settings_page, status_pill,
+    mini_switch, settings_page, status_pill, theme_memo_sig,
 };
 use crate::views::settings::shell::PageContent;
 
@@ -31,8 +34,27 @@ const PERMISSION_CONTROLS: &[(&str, &str)] = &[
     ("backups", "Backups"),
 ];
 
+const MAX_PHONE_PERMS_CACHE: usize = 64;
+
 thread_local! {
     static QR_PIXEL_CACHE: RefCell<Option<(String, Pixels)>> = const { RefCell::new(None) };
+    static PHONE_PERMS_CACHE: RefCell<HashMap<String, Arc<HashSet<String>>>> =
+        RefCell::new(HashMap::new());
+}
+
+fn cached_phone_permissions(raw: &str) -> Arc<HashSet<String>> {
+    PHONE_PERMS_CACHE.with(|slot| {
+        let mut cache = slot.borrow_mut();
+        if let Some(existing) = cache.get(raw) {
+            return Arc::clone(existing);
+        }
+        let parsed = Arc::new(parse_phone_permissions(raw));
+        if cache.len() >= MAX_PHONE_PERMS_CACHE {
+            cache.clear();
+        }
+        cache.insert(raw.to_string(), Arc::clone(&parsed));
+        parsed
+    })
 }
 
 fn qr_pixels_for_url(url: &str) -> Option<Pixels> {
@@ -144,7 +166,7 @@ pub fn update_phone_permission_string(raw: &str, key: &str, enabled: bool) -> St
 }
 
 fn device_card(device: &TrustedPhoneSummary, k: &Kit, t: &ThemeTokens) -> El {
-    let enabled_perms = parse_phone_permissions(&device.permissions);
+    let enabled_perms = cached_phone_permissions(&device.permissions);
     let device_id = device.id.clone();
     let device_id_forget = device.id.clone();
 
@@ -205,24 +227,30 @@ fn device_card(device: &TrustedPhoneSummary, k: &Kit, t: &ThemeTokens) -> El {
             .color(t.text_muted),
     );
 
-    for (perm_key, perm_label) in PERMISSION_CONTROLS {
-        let checked = enabled_perms.contains(*perm_key);
+    for &(perm_key, perm_label) in PERMISSION_CONTROLS {
+        let checked = enabled_perms.contains(perm_key);
         let pid = device.id.clone();
-        let raw_perms = device.permissions.clone();
-        let pk = (*perm_key).to_string();
         perm_rows = perm_rows.child(
             row()
                 .w_full()
                 .items_center()
                 .justify_between()
                 .gap(12.0)
-                .child(text(*perm_label).font(k.ty.small).color(t.text_muted))
+                .child(text(perm_label).font(k.ty.small).color(t.text_muted))
                 .child(mini_switch(
                     checked,
-                    *perm_label,
+                    perm_label,
                     false,
                     move |s: &mut AppState| {
-                        let next_perms = update_phone_permission_string(&raw_perms, &pk, !checked);
+                        let raw_perms = s
+                            .remote_access
+                            .trusted_phones
+                            .iter()
+                            .find(|p| p.id == pid)
+                            .map(|p| p.permissions.as_str())
+                            .unwrap_or("");
+                        let next_perms =
+                            update_phone_permission_string(raw_perms, perm_key, !checked);
                         s.dispatch(Action::Settings(
                             SettingsAction::UpdateTrustedPhonePermissions {
                                 phone_id: pid.clone(),
@@ -252,21 +280,6 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
     let targets = management_targets(s);
     let active_ws = find_management_target(s, &targets, s.resolve_management_workspace_id());
 
-    let mut blocks: Vec<El> = Vec::new();
-    let mut header_actions: Vec<El> = Vec::new();
-
-    if !flag_enabled {
-        blocks.push(callout_banner(
-            StatusTone::Warning,
-            "Remote Access is disabled in this build configuration.",
-            k,
-            t,
-        ));
-    }
-    if let Some(err) = ra.error.as_deref().filter(|msg| !msg.trim().is_empty()) {
-        blocks.push(callout_banner(StatusTone::Danger, err, k, t));
-    }
-
     let toggle_btn = Button::new(if ra.running {
         "Stop"
     } else {
@@ -280,7 +293,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
     .icon(&icons::WIFI)
     .control_size(ControlSize::Regular)
     .disabled(!ra.available || !flag_enabled || active_ws.is_none())
-    .on_press(move |s: &mut AppState| {
+    .on_press(|s: &mut AppState| {
         let next = !s.remote_access.running;
         s.dispatch(Action::Settings(SettingsAction::SetRemoteAccessEnabled(
             next,
@@ -298,190 +311,234 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
         })
         .build(k);
 
-    header_actions.push(toggle_btn);
-    header_actions.push(rotate_btn);
+    let header_actions = vec![toggle_btn, rotate_btn];
 
-    let status_pill_el = if !ra.available {
-        status_pill("Unavailable", StatusTone::Warning, k, t)
-    } else if ra.running {
-        status_pill("Running", StatusTone::Success, k, t)
-    } else {
-        status_pill("Idle", StatusTone::Neutral, k, t)
-    };
-
-    let ws_name = active_ws
-        .map(|w| w.label.as_str())
-        .unwrap_or("No workspace selected");
-    let ws_path = active_ws
-        .map(|w| w.path.as_str())
-        .unwrap_or("Select or add a workspace before starting the mobile bridge.");
-
-    let mut bridge_section = Section::new()
-        .title("Workspace bridge")
-        .description("Expose a single workspace through blind TLS relay while desktop runs.")
-        .action(status_pill_el)
-        .child(SettingsRow::new(ws_name).description(ws_path).build(k, t));
-
-    if let Some(relay_url) = ra.relay_url.as_deref().filter(|u| !u.trim().is_empty()) {
-        bridge_section = bridge_section.child(
-            SettingsRow::new("Relay endpoint")
-                .description(relay_url)
-                .build(k, t),
-        );
+    let mut body_h = DefaultHasher::new();
+    (
+        theme_memo_sig(s, t),
+        flag_enabled,
+        active_ws.map(|w| (w.id.as_str(), w.label.as_str(), w.path.as_str())),
+        ra.available,
+        ra.running,
+        ra.error.as_deref(),
+        ra.relay_url.as_deref(),
+        ra.pairing_url.as_deref(),
+        s.settings_ui.remote_access_copied_url.as_deref(),
+        ra.trusted_phones.len(),
+    )
+        .hash(&mut body_h);
+    for phone in &ra.trusted_phones {
+        (
+            phone.id.as_str(),
+            phone.name.as_str(),
+            phone.permissions.as_str(),
+            phone.paired_at,
+        )
+            .hash(&mut body_h);
     }
 
-    blocks.push(bridge_section.build(k, t));
+    let body = memo("settings-remote-access-body", body_h.finish(), || {
+        let mut blocks: Vec<El> = Vec::new();
+        if !flag_enabled {
+            blocks.push(callout_banner(
+                StatusTone::Warning,
+                "Remote Access is disabled in this build configuration.",
+                k,
+                t,
+            ));
+        }
+        if let Some(err) = ra.error.as_deref().filter(|msg| !msg.trim().is_empty()) {
+            blocks.push(callout_banner(StatusTone::Danger, err, k, t));
+        }
 
-    let qr_body = if let Some(url) = ra.pairing_url.as_deref().filter(|u| !u.trim().is_empty()) {
-        let url_owned = url.to_string();
-        let mut qr_col = col().w_full().items_center().gap(14.0).py(12.0);
-        if let Some(px) = qr_pixels_for_url(url) {
-            qr_col = qr_col.child(
-                el().px(10.0)
-                    .py(10.0)
-                    .radius(k.radius.lg)
-                    .fill(Color::WHITE)
-                    .border(1.0, t.border)
-                    .child(el().w(200.0).h(200.0).pixels(&px)),
+        let status_pill_el = if !ra.available {
+            status_pill("Unavailable", StatusTone::Warning, k, t)
+        } else if ra.running {
+            status_pill("Running", StatusTone::Success, k, t)
+        } else {
+            status_pill("Idle", StatusTone::Neutral, k, t)
+        };
+
+        let ws_name = active_ws
+            .map(|w| w.label.as_str())
+            .unwrap_or("No workspace selected");
+        let ws_path = active_ws
+            .map(|w| w.path.as_str())
+            .unwrap_or("Select or add a workspace before starting the mobile bridge.");
+
+        let mut bridge_section = Section::new()
+            .title("Workspace bridge")
+            .description("Expose a single workspace through blind TLS relay while desktop runs.")
+            .action(status_pill_el)
+            .child(SettingsRow::new(ws_name).description(ws_path).build(k, t));
+
+        if let Some(relay_url) = ra.relay_url.as_deref().filter(|u| !u.trim().is_empty()) {
+            bridge_section = bridge_section.child(
+                SettingsRow::new("Relay endpoint")
+                    .description(relay_url)
+                    .build(k, t),
             );
         }
-        let copied = s.settings_ui.remote_access_copied_url.as_deref() == Some(url);
-        qr_col = qr_col.child(
-            row().w_full().min_w(0.0).gap(8.0).flex_wrap().child(
-                Button::new(if copied {
-                    "Pairing key copied"
-                } else {
-                    "Copy pairing key"
-                })
-                .variant(ButtonVariant::Outline)
-                .icon(&icons::COPY)
-                .control_size(ControlSize::Regular)
-                .on_press(move |s: &mut AppState| {
-                    s.settings_ui.remote_access_copied_url = Some(url_owned.clone());
-                    s.dispatch(Action::Native(NativeAction::CopyText(url_owned.clone())));
-                })
-                .build(k),
-            ),
+
+        blocks.push(bridge_section.build(k, t));
+
+        let qr_body = if let Some(url) = ra.pairing_url.as_deref().filter(|u| !u.trim().is_empty())
+        {
+            let url_owned = url.to_string();
+            let mut qr_col = col().w_full().items_center().gap(14.0).py(12.0);
+            if let Some(px) = qr_pixels_for_url(url) {
+                qr_col = qr_col.child(
+                    el().px(10.0)
+                        .py(10.0)
+                        .radius(k.radius.lg)
+                        .fill(Color::WHITE)
+                        .border(1.0, t.border)
+                        .child(el().w(200.0).h(200.0).pixels(&px)),
+                );
+            }
+            let copied = s.settings_ui.remote_access_copied_url.as_deref() == Some(url);
+            qr_col = qr_col.child(
+                row().w_full().min_w(0.0).gap(8.0).flex_wrap().child(
+                    Button::new(if copied {
+                        "Pairing key copied"
+                    } else {
+                        "Copy pairing key"
+                    })
+                    .variant(ButtonVariant::Outline)
+                    .icon(&icons::COPY)
+                    .control_size(ControlSize::Regular)
+                    .on_press(move |s: &mut AppState| {
+                        s.settings_ui.remote_access_copied_url = Some(url_owned.clone());
+                        s.dispatch(Action::Native(NativeAction::CopyText(url_owned.clone())));
+                    })
+                    .build(k),
+                ),
+            );
+            qr_col
+        } else {
+            EmptyState::new("Enable remote access to generate a pairing QR")
+                .icon(&icons::QR_CODE)
+                .description("Once the bridge is running, scan the QR code from Cowork Mobile.")
+                .build(k, t)
+        };
+
+        let qr_section = Section::new()
+            .title("Pairing QR")
+            .description("Scan this QR code from Cowork Mobile or copy the pairing key manually.")
+            .child(el().w_full().px(16.0).py(12.0).child(qr_body))
+            .build(k, t);
+
+        let mut devices_section = Section::new().title("Trusted devices").description(
+            "Trust is scoped to this workspace. Revoked phones lose access immediately.",
         );
-        qr_col
-    } else {
-        EmptyState::new("Enable remote access to generate a pairing QR")
-            .icon(&icons::QR_CODE)
-            .description("Once the bridge is running, scan the QR code from Cowork Mobile.")
-            .build(k, t)
-    };
 
-    let qr_section = Section::new()
-        .title("Pairing QR")
-        .description("Scan this QR code from Cowork Mobile or copy the pairing key manually.")
-        .child(el().w_full().px(16.0).py(12.0).child(qr_body))
-        .build(k, t);
-
-    let mut devices_section = Section::new()
-        .title("Trusted devices")
-        .description("Trust is scoped to this workspace. Revoked phones lose access immediately.");
-
-    if !ra.trusted_phones.is_empty() {
-        devices_section = devices_section.action(
-            Button::new("Forget all devices")
-                .variant(ButtonVariant::Danger)
-                .icon(&icons::TRASH)
-                .control_size(ControlSize::Small)
-                .on_press(|s: &mut AppState| {
-                    s.settings_ui.forget_all_phones_open = true;
-                })
-                .build(k),
-        );
-        for phone in &ra.trusted_phones {
-            devices_section = devices_section.child(device_card(phone, k, t));
+        if !ra.trusted_phones.is_empty() {
+            devices_section = devices_section.action(
+                Button::new("Forget all devices")
+                    .variant(ButtonVariant::Danger)
+                    .icon(&icons::TRASH)
+                    .control_size(ControlSize::Small)
+                    .on_press(|s: &mut AppState| {
+                        s.settings_ui.forget_all_phones_open = true;
+                    })
+                    .build(k),
+            );
+            for phone in &ra.trusted_phones {
+                devices_section = devices_section.child(device_card(phone, k, t));
+            }
+        } else {
+            devices_section = devices_section.child(
+                EmptyState::new("No trusted device yet")
+                    .icon(&icons::SMARTPHONE)
+                    .description("Scan the pairing QR to connect your first mobile device.")
+                    .build(k, t),
+            );
         }
-    } else {
-        devices_section = devices_section.child(
-            EmptyState::new("No trusted device yet")
-                .icon(&icons::SMARTPHONE)
-                .description("Scan the pairing QR to connect your first mobile device.")
-                .build(k, t),
+
+        blocks.push(
+            row()
+                .w_full()
+                .items_start()
+                .gap(16.0)
+                .child(col().grow(1.0).min_w(0.0).child(qr_section))
+                .child(
+                    col()
+                        .w(380.0)
+                        .min_w(320.0)
+                        .child(devices_section.build(k, t)),
+                ),
+        );
+
+        settings_page(blocks)
+    });
+
+    let mut overlays = Vec::new();
+    if let Some(forget_id) = s.settings_ui.forget_phone_id.as_deref() {
+        let forget_target_name = ra
+            .trusted_phones
+            .iter()
+            .find(|p| p.id == forget_id)
+            .map(|p| {
+                if p.name.trim().is_empty() {
+                    p.id.as_str()
+                } else {
+                    p.name.trim()
+                }
+            })
+            .unwrap_or("this device");
+
+        confirm_dialog(
+            ConfirmDialogSpec {
+                key: "remote-access-forget-device",
+                open: true,
+                title: "Forget trusted device?",
+                description: format!(
+                    "Revokes remote access for {forget_target_name}. The phone will need to scan a new QR code before it can reconnect."
+                ),
+                confirm_label: "Forget device",
+                danger: true,
+            },
+            |s| {
+                s.settings_ui.forget_phone_id = None;
+            },
+            |s| {
+                if let Some(phone_id) = s.settings_ui.forget_phone_id.take() {
+                    s.dispatch(Action::Settings(SettingsAction::ForgetTrustedPhone {
+                        phone_id,
+                    }));
+                }
+            },
+            k,
+            &mut overlays,
         );
     }
 
-    blocks.push(
-        row()
-            .w_full()
-            .items_start()
-            .gap(16.0)
-            .child(col().grow(1.0).min_w(0.0).child(qr_section))
-            .child(
-                col()
-                    .w(380.0)
-                    .min_w(320.0)
-                    .child(devices_section.build(k, t)),
-            ),
-    );
+    if s.settings_ui.forget_all_phones_open {
+        confirm_dialog(
+            ConfirmDialogSpec {
+                key: "remote-access-forget-all",
+                open: true,
+                title: "Forget all trusted devices?",
+                description: format!(
+                    "Revokes remote access for all {} trusted phone(s). Each phone must scan a new QR code to reconnect.",
+                    ra.trusted_phones.len()
+                ),
+                confirm_label: "Forget all devices",
+                danger: true,
+            },
+            |s| {
+                s.settings_ui.forget_all_phones_open = false;
+            },
+            |s| {
+                s.settings_ui.forget_all_phones_open = false;
+                s.dispatch(Action::Settings(SettingsAction::RevokeAllTrustedPhones));
+            },
+            k,
+            &mut overlays,
+        );
+    }
 
-    let mut overlays = Vec::new();
-    let forget_target_id = s.settings_ui.forget_phone_id.clone();
-    let forget_target_name = forget_target_id
-        .as_deref()
-        .and_then(|id| ra.trusted_phones.iter().find(|p| p.id == id))
-        .map(|p| {
-            if p.name.trim().is_empty() {
-                p.id.as_str()
-            } else {
-                p.name.trim()
-            }
-        })
-        .unwrap_or("this device")
-        .to_string();
-
-    confirm_dialog(
-        ConfirmDialogSpec {
-            key: "remote-access-forget-device",
-            open: forget_target_id.is_some(),
-            title: "Forget trusted device?",
-            description: format!(
-                "Revokes remote access for {forget_target_name}. The phone will need to scan a new QR code before it can reconnect."
-            ),
-            confirm_label: "Forget device",
-            danger: true,
-        },
-        |s| {
-            s.settings_ui.forget_phone_id = None;
-        },
-        move |s| {
-            if let Some(phone_id) = s.settings_ui.forget_phone_id.take() {
-                s.dispatch(Action::Settings(SettingsAction::ForgetTrustedPhone {
-                    phone_id,
-                }));
-            }
-        },
-        k,
-        &mut overlays,
-    );
-
-    confirm_dialog(
-        ConfirmDialogSpec {
-            key: "remote-access-forget-all",
-            open: s.settings_ui.forget_all_phones_open,
-            title: "Forget all trusted devices?",
-            description: format!(
-                "Revokes remote access for all {} trusted phone(s). Each phone must scan a new QR code to reconnect.",
-                ra.trusted_phones.len()
-            ),
-            confirm_label: "Forget all devices",
-            danger: true,
-        },
-        |s| {
-            s.settings_ui.forget_all_phones_open = false;
-        },
-        |s| {
-            s.settings_ui.forget_all_phones_open = false;
-            s.dispatch(Action::Settings(SettingsAction::RevokeAllTrustedPhones));
-        },
-        k,
-        &mut overlays,
-    );
-
-    PageContent::simple(settings_page(blocks))
+    PageContent::simple(body)
         .with_header_actions(header_actions)
         .with_overlays(overlays)
 }

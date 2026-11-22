@@ -41,11 +41,12 @@ use crate::state::AppState;
 use crate::theme::{self, ThemeTokens};
 use crate::views::SubviewOutput;
 pub use crate::views::settings::shell::SettingsLayout;
-use crate::views::settings::shell::{resolve_active_page, settings_layout};
+use crate::views::settings::shell::{resolve_active_page_with_groups, settings_layout_with_groups};
 
 /// Builds the structural Settings pieces for `views::shell::build_settings_frame`.
 pub fn build_layout(s: &AppState, _cx: &Cx<AppState>, k: &Kit, t: &ThemeTokens) -> SettingsLayout {
-    let active_page = resolve_active_page(s);
+    let (active_page, remote_access_available, include_dev, groups) =
+        resolve_active_page_with_groups(s);
     let content = match active_page {
         SettingsPageId::Models | SettingsPageId::Providers => providers::view(s, k, t),
         SettingsPageId::Subagents => subagents::view(s, k, t),
@@ -65,7 +66,16 @@ pub fn build_layout(s: &AppState, _cx: &Cx<AppState>, k: &Kit, t: &ThemeTokens) 
         SettingsPageId::PrivacyTelemetry => privacy_telemetry::view(s, k, t),
     };
 
-    settings_layout(s, k, t, active_page, content)
+    settings_layout_with_groups(
+        s,
+        k,
+        t,
+        active_page,
+        remote_access_available,
+        include_dev,
+        &groups,
+        content,
+    )
 }
 
 /// Renders the full-window Settings shell in a standalone `SplitView` (used by settings tests).

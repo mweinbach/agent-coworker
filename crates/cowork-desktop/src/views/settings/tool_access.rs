@@ -3,6 +3,11 @@
 //! Covers Plugins, Skills & Marketplaces, Custom Connectors (MCP), ChatGPT Apps
 //! (feature-gated `openAiNativeConnectors`), and Search provider configuration.
 
+use std::cell::RefCell;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
+
 use rune::{El, TextEdit, col, el, row, text};
 use rune_kit::{
     Button, ButtonVariant, ControlSize, Dialog, Kit, Select, SelectAppearance, TextArea, TextInput,
@@ -15,12 +20,19 @@ use crate::state::{AppState, PluginSummary, ProviderStatusSummary, SkillSummary,
 use crate::theme::ThemeTokens;
 use crate::views::settings::primitives::{
     ConfirmDialogSpec, EmptyState, EntityIconSize, Section, StatusTone, callout_banner,
-    compact_tabs, confirm_dialog, entity_icon, mini_switch, search_input, settings_page, stat_tile,
-    status_pill,
+    cmp_ascii_ci, compact_tabs, confirm_dialog, contains_ascii_ci, entity_icon, mini_switch,
+    search_input, settings_page, stat_tile, status_pill,
 };
 use crate::views::settings::shell::PageContent;
 use crate::views::settings::state::ToolAccessTab;
 use crate::views::settings::{connectors, icons, mcp_servers};
+
+thread_local! {
+    static PARSED_SKILLS_CACHE: RefCell<Option<(u64, Arc<Vec<SkillRowEntry>>)>> =
+        const { RefCell::new(None) };
+    static PARSED_MARKETPLACES_CACHE: RefCell<Option<(u64, Arc<Vec<MarketplaceItem>>)>> =
+        const { RefCell::new(None) };
+}
 
 /// Supported workspace search backend identifiers matching `WorkspacesPage.tsx`.
 pub const WEB_SEARCH_BACKENDS: &[(&str, &str)] = &[
@@ -297,6 +309,125 @@ pub(crate) fn collect_visible_skill_rows(s: &AppState) -> Vec<SkillRowEntry> {
     collect_visible_skill_rows_from(&s.skill_installations, &s.skills)
 }
 
+fn marketplaces_fingerprint(raw: &[Value]) -> u64 {
+    let mut h = DefaultHasher::new();
+    raw.len().hash(&mut h);
+    for v in raw {
+        (
+            v.get("id").and_then(Value::as_str),
+            v.get("repo").and_then(Value::as_str),
+            v.get("displayName").and_then(Value::as_str),
+            v.get("pluginCount").and_then(Value::as_u64),
+            v.get("skillCount").and_then(Value::as_u64),
+            v.get("fetchError").and_then(Value::as_str),
+        )
+            .hash(&mut h);
+    }
+    h.finish()
+}
+
+fn cached_marketplaces(raw: &[Value]) -> Arc<Vec<MarketplaceItem>> {
+    let fp = marketplaces_fingerprint(raw);
+    PARSED_MARKETPLACES_CACHE.with(|slot| {
+        let mut cache = slot.borrow_mut();
+        if let Some((cached_fp, items)) = cache.as_ref()
+            && *cached_fp == fp
+        {
+            return Arc::clone(items);
+        }
+        let parsed = Arc::new(parse_marketplaces(raw));
+        *cache = Some((fp, Arc::clone(&parsed)));
+        parsed
+    })
+}
+
+fn skills_source_fingerprint(
+    ws_id: &str,
+    skill_installations: &[Value],
+    skills: &[SkillSummary],
+) -> u64 {
+    let mut h = DefaultHasher::new();
+    (ws_id, skill_installations.len(), skills.len()).hash(&mut h);
+    if !skill_installations.is_empty() {
+        for inst in skill_installations {
+            (
+                inst.get("plugin").is_some_and(|p| !p.is_null()),
+                inst.get("installationId").and_then(Value::as_str),
+                inst.get("name").and_then(Value::as_str),
+                inst.pointer("/interface/displayName")
+                    .and_then(Value::as_str),
+                inst.pointer("/interface/shortDescription")
+                    .and_then(Value::as_str),
+                inst.get("description").and_then(Value::as_str),
+                inst.get("scope").and_then(Value::as_str),
+                inst.get("enabled").and_then(Value::as_bool),
+            )
+                .hash(&mut h);
+            (
+                inst.get("writable").and_then(Value::as_bool),
+                inst.get("state").and_then(Value::as_str),
+                inst.get("updateAvailable").and_then(Value::as_bool),
+                inst.get("shadowedByScope").and_then(Value::as_str),
+                inst.pointer("/interface/iconSmall").and_then(Value::as_str),
+                inst.pointer("/interface/iconLarge").and_then(Value::as_str),
+                inst.pointer("/origin/repo").and_then(Value::as_str),
+                inst.pointer("/origin/url").and_then(Value::as_str),
+                inst.pointer("/origin/sourcePath").and_then(Value::as_str),
+                inst.pointer("/origin/kind").and_then(Value::as_str),
+            )
+                .hash(&mut h);
+            if let Some(diags) = inst.get("diagnostics").and_then(Value::as_array) {
+                diags.len().hash(&mut h);
+                for d in diags {
+                    d.get("message").and_then(Value::as_str).hash(&mut h);
+                }
+            } else {
+                0usize.hash(&mut h);
+            }
+        }
+    } else {
+        for sk in skills {
+            (
+                sk.name.as_str(),
+                sk.description.as_str(),
+                sk.scope.as_str(),
+                sk.enabled,
+                sk.update_available,
+                sk.installation_id.as_deref(),
+                sk.source.as_deref(),
+                sk.icon.as_deref(),
+                sk.error.as_deref(),
+            )
+                .hash(&mut h);
+        }
+    }
+    h.finish()
+}
+
+fn cached_visible_skill_rows_for_workspace(s: &AppState, ws_id: &str) -> Arc<Vec<SkillRowEntry>> {
+    let installations = s.skill_installations_for_workspace(ws_id);
+    let skills = s.skills_for_workspace(ws_id);
+    let fp = if s.skills_rev != 0 {
+        let mut h = DefaultHasher::new();
+        (ws_id, s.skills_rev, installations.len(), skills.len()).hash(&mut h);
+        h.finish()
+    } else {
+        skills_source_fingerprint(ws_id, installations, skills)
+    };
+    PARSED_SKILLS_CACHE.with(|slot| {
+        let mut cache = slot.borrow_mut();
+        if let Some((cached_fp, rows)) = cache.as_ref()
+            && *cached_fp == fp
+        {
+            return Arc::clone(rows);
+        }
+        let parsed = Arc::new(collect_visible_skill_rows_from(installations, skills));
+        *cache = Some((fp, Arc::clone(&parsed)));
+        parsed
+    })
+}
+
+#[cfg(test)]
 pub(crate) fn collect_visible_skill_rows_for_workspace(
     s: &AppState,
     ws_id: &str,
@@ -471,7 +602,7 @@ fn collect_visible_skill_rows_from(
         let right_active = usize::from(right.state != "effective");
         left_active
             .cmp(&right_active)
-            .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
+            .then_with(|| cmp_ascii_ci(&left.name, &right.name))
             .then_with(|| left.scope.cmp(&right.scope))
             .then_with(|| left.key.cmp(&right.key))
     });
@@ -644,7 +775,7 @@ fn plugins_tab_view(
     let workspace_available_plugins = s.available_plugins_for_workspace(ws_id);
     let workspace_plugin_warnings = s.plugin_catalog_warnings_for_workspace(ws_id);
     let mut plugins: Vec<&PluginSummary> = workspace_plugins.iter().collect();
-    plugins.sort_by_key(|p| p.display_label().to_lowercase());
+    plugins.sort_by(|a, b| cmp_ascii_ci(a.display_label(), b.display_label()));
 
     let visible: Vec<&PluginSummary> = plugins
         .iter()
@@ -653,10 +784,10 @@ fn plugins_tab_view(
             if query.is_empty() {
                 true
             } else {
-                p.display_label().to_ascii_lowercase().contains(&query)
-                    || p.name.to_ascii_lowercase().contains(&query)
-                    || p.description.to_ascii_lowercase().contains(&query)
-                    || p.id.to_ascii_lowercase().contains(&query)
+                contains_ascii_ci(p.display_label(), &query)
+                    || contains_ascii_ci(&p.name, &query)
+                    || contains_ascii_ci(&p.description, &query)
+                    || contains_ascii_ci(&p.id, &query)
             }
         })
         .collect();
@@ -773,14 +904,12 @@ fn plugins_tab_view(
                     .get("displayName")
                     .or_else(|| item.get("name"))
                     .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_ascii_lowercase();
+                    .unwrap_or("");
                 let desc = item
                     .get("description")
                     .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_ascii_lowercase();
-                name.contains(&query) || desc.contains(&query)
+                    .unwrap_or("");
+                contains_ascii_ci(name, &query) || contains_ascii_ci(desc, &query)
             }
         })
         .collect();
@@ -1379,7 +1508,7 @@ fn skills_tab_view(
         .text
         .trim()
         .to_ascii_lowercase();
-    let skills = collect_visible_skill_rows_for_workspace(s, ws_id);
+    let skills = cached_visible_skill_rows_for_workspace(s, ws_id);
 
     let visible: Vec<&SkillRowEntry> = skills
         .iter()
@@ -1387,9 +1516,9 @@ fn skills_tab_view(
             if query.is_empty() {
                 true
             } else {
-                sk.display_name.to_ascii_lowercase().contains(&query)
-                    || sk.name.to_ascii_lowercase().contains(&query)
-                    || sk.description.to_ascii_lowercase().contains(&query)
+                contains_ascii_ci(&sk.display_name, &query)
+                    || contains_ascii_ci(&sk.name, &query)
+                    || contains_ascii_ci(&sk.description, &query)
             }
         })
         .collect();
@@ -1483,7 +1612,7 @@ fn skills_tab_view(
         }
     }
 
-    let marketplaces = parse_marketplaces(&s.marketplaces);
+    let marketplaces = cached_marketplaces(&s.marketplaces);
     let add_mkt_btn = Button::new("+ Add marketplace")
         .variant(ButtonVariant::Outline)
         .control_size(ControlSize::Small)
@@ -1510,7 +1639,7 @@ fn skills_tab_view(
             ),
         );
     } else {
-        for mkt in marketplaces {
+        for mkt in marketplaces.iter() {
             let mut meta_parts = vec![mkt.repo.clone()];
             if let Some(p) = mkt.plugin_count {
                 meta_parts.push(format!("{p} plugin{}", if p == 1 { "" } else { "s" }));
@@ -1574,20 +1703,18 @@ fn skills_tab_view(
                     .get("displayName")
                     .or_else(|| item.get("name"))
                     .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_ascii_lowercase();
+                    .unwrap_or("");
                 let desc = item
                     .get("description")
                     .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_ascii_lowercase();
-                name.contains(&query) || desc.contains(&query)
+                    .unwrap_or("");
+                contains_ascii_ci(name, &query) || contains_ascii_ci(desc, &query)
             }
         })
         .collect();
 
     append_install_skill_dialog(s, ws_id, k, t, overlays);
-    append_skill_detail_dialog(s, ws_id, k, t, overlays);
+    append_skill_detail_dialog(s, ws_id, &skills, k, t, overlays);
     append_skill_delete_confirm(s, ws_id, k, overlays);
     append_add_marketplace_dialog(s, ws_id, k, t, overlays);
     append_marketplace_remove_confirm(s, ws_id, k, overlays);
@@ -1970,6 +2097,7 @@ fn append_install_skill_dialog(
 fn append_skill_detail_dialog(
     s: &AppState,
     ws_id: &str,
+    rows: &[SkillRowEntry],
     k: &Kit,
     t: &ThemeTokens,
     overlays: &mut Vec<El>,
@@ -1977,7 +2105,6 @@ fn append_skill_detail_dialog(
     let Some(selected_key) = s.settings_ui.selected_skill_id.as_deref() else {
         return;
     };
-    let rows = collect_visible_skill_rows_for_workspace(s, ws_id);
     let Some(sk) = rows
         .iter()
         .find(|entry| entry.key == selected_key || entry.name == selected_key)
@@ -2380,7 +2507,6 @@ fn search_tab_view(
     let backend_open =
         s.settings_ui.open_select_key.as_deref() == Some("tool-access-search-backend");
     let ws_id_backend = ws.id.clone();
-    let existing_opts_backend = ws.provider_options.clone();
     let backend_select = Select::new("tool-access-search-backend", &backend_labels)
         .label("Web search provider")
         .appearance(SelectAppearance::Field)
@@ -2406,7 +2532,12 @@ fn search_tab_view(
             if let Some((backend_id, _)) =
                 WEB_SEARCH_BACKENDS.iter().find(|(_, lbl)| *lbl == chosen)
             {
-                let next_opts = patch_search_provider(existing_opts_backend.as_ref(), backend_id);
+                let existing_opts = s
+                    .workspaces
+                    .iter()
+                    .find(|w| w.id == ws_id_backend)
+                    .and_then(|w| w.provider_options.as_ref());
+                let next_opts = patch_search_provider(existing_opts, backend_id);
                 s.dispatch(Action::Settings(SettingsAction::UpdateWorkspaceDefaults {
                     workspace_id: ws_id_backend.clone(),
                     defaults: json!({ "providerOptions": next_opts }),
@@ -2462,7 +2593,6 @@ fn search_tab_view(
         let fb_open =
             s.settings_ui.open_select_key.as_deref() == Some("tool-access-search-fallback");
         let ws_id_fb = ws.id.clone();
-        let existing_opts_fb = ws.provider_options.clone();
         let fb_select = Select::new("tool-access-search-fallback", &fb_labels)
             .label("Fallback local search tool")
             .appearance(SelectAppearance::Field)
@@ -2489,7 +2619,12 @@ fn search_tab_view(
                     .iter()
                     .find(|(_, lbl)| *lbl == chosen)
                 {
-                    let next_opts = patch_local_search_fallback(existing_opts_fb.as_ref(), fb_id);
+                    let existing_opts = s
+                        .workspaces
+                        .iter()
+                        .find(|w| w.id == ws_id_fb)
+                        .and_then(|w| w.provider_options.as_ref());
+                    let next_opts = patch_local_search_fallback(existing_opts, fb_id);
                     s.dispatch(Action::Settings(SettingsAction::UpdateWorkspaceDefaults {
                         workspace_id: ws_id_fb.clone(),
                         defaults: json!({ "providerOptions": next_opts }),
@@ -2529,7 +2664,6 @@ fn search_tab_view(
 
     let mode_open = s.settings_ui.open_select_key.as_deref() == Some("tool-access-codex-mode");
     let ws_id_mode = ws.id.clone();
-    let existing_opts_mode = ws.provider_options.clone();
     let mode_select = Select::new("tool-access-codex-mode", CODEX_WEB_SEARCH_MODES)
         .label("Codex web search mode")
         .appearance(SelectAppearance::Field)
@@ -2552,7 +2686,12 @@ fn search_tab_view(
         })
         .on_choose(move |s: &mut AppState, chosen, _tx| {
             s.settings_ui.open_select_key = None;
-            let next_opts = patch_codex_search_mode(existing_opts_mode.as_ref(), chosen);
+            let existing_opts = s
+                .workspaces
+                .iter()
+                .find(|w| w.id == ws_id_mode)
+                .and_then(|w| w.provider_options.as_ref());
+            let next_opts = patch_codex_search_mode(existing_opts, chosen);
             s.dispatch(Action::Settings(SettingsAction::UpdateWorkspaceDefaults {
                 workspace_id: ws_id_mode.clone(),
                 defaults: json!({ "providerOptions": next_opts }),

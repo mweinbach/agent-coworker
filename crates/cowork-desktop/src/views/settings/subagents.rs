@@ -2,7 +2,12 @@
 //!
 //! Ported from `apps/desktop/src/ui/settings/pages/SubagentsPage.tsx`.
 
-use std::collections::HashSet;
+use std::borrow::Cow;
+use std::cell::RefCell;
+use std::collections::hash_map::DefaultHasher;
+use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 
 use rune::{El, ScrollSpec, TextEdit, col, el, row, text};
 use rune_kit::{
@@ -14,18 +19,26 @@ use serde_json::{Value, json};
 use crate::actions::{Action, SettingsAction};
 use crate::state::{
     AgentProfileCatalogEntry, AgentProfileDefinitionWire, AgentProfileUpsertInputWire, AppState,
-    SubagentProfile, WorkspaceRecord,
+    ProviderStatusSummary, SubagentProfile, WorkspaceRecord,
 };
 use crate::theme::ThemeTokens;
 use crate::views::settings::icons;
 use crate::views::settings::primitives::{
     ConfirmDialogSpec, EmptyState, EntityIconSize, Section, SettingsRow, StatusTone,
-    callout_banner, compact_tabs, confirm_dialog, entity_icon, mini_switch, search_input,
-    settings_page, status_pill,
+    callout_banner, cmp_ascii_ci, compact_tabs, confirm_dialog, contains_ascii_ci, entity_icon,
+    mini_switch, search_input, settings_page, status_pill,
 };
 use crate::views::settings::providers::is_provider_connected;
-use crate::views::settings::providers_utils::{model_display_name, sort_and_filter_providers};
+use crate::views::settings::providers_utils::{model_display_name, sort_and_filter_provider_refs};
 use crate::views::settings::shell::PageContent;
+
+type ModelOptionList = Arc<Vec<(String, String)>>;
+type ModelOptionsCacheEntry = (u64, ModelOptionList);
+
+thread_local! {
+    static SUBAGENT_MODEL_OPTIONS_CACHE: RefCell<Option<ModelOptionsCacheEntry>> =
+        const { RefCell::new(None) };
+}
 
 /// Minimum, maximum, and default workflow concurrency fan-out.
 pub const WORKFLOW_CONCURRENCY_MIN: u64 = 1;
@@ -185,38 +198,85 @@ fn workspace_display_name(ws: &WorkspaceRecord) -> String {
     }
 }
 
-fn collect_model_options(s: &AppState, ws: Option<&WorkspaceRecord>) -> Vec<(String, String)> {
-    let statuses = ws
+fn model_options_fingerprint(s: &AppState, ws: Option<&WorkspaceRecord>) -> u64 {
+    let mut h = DefaultHasher::new();
+    ws.map(|w| {
+        (
+            w.id.as_str(),
+            w.defaults.get("lmStudioEnabled").and_then(Value::as_bool),
+        )
+    })
+    .hash(&mut h);
+    (s.provider_catalog_rev, s.provider_catalog.len()).hash(&mut h);
+    if s.provider_catalog_rev == 0 {
+        for p in &s.provider_catalog {
+            (p.id.as_str(), p.name.as_str(), p.configured, p.models.len()).hash(&mut h);
+            for m in &p.models {
+                (m.id.as_str(), m.name.as_str(), m.enabled).hash(&mut h);
+            }
+        }
+    }
+    if let Some(statuses) = ws
         .and_then(|w| s.workspace_runtime_by_id.get(&w.id))
         .map(|rt| rt.provider_statuses.as_slice())
-        .unwrap_or(&[]);
-    let mut out = Vec::new();
-    for p in sort_and_filter_providers(&s.provider_catalog, statuses, "") {
-        let status = statuses.iter().find(|st| st.provider == p.id);
-        if !is_provider_connected(p, status, ws) {
-            continue;
-        }
-        for m in &p.models {
-            if !m.enabled {
-                continue;
-            }
-            let value = format!("{}:{}", p.id, m.id);
-            let label = format!("{} · {}", p.name, model_display_name(m));
-            out.push((value, label));
+    {
+        statuses.len().hash(&mut h);
+        for st in statuses {
+            (st.provider.as_str(), st.healthy, st.connected).hash(&mut h);
         }
     }
-    out
+    h.finish()
 }
 
-fn catalog_entries(s: &AppState, workspace_id: &str) -> Vec<AgentProfileCatalogEntry> {
+fn collect_model_options(s: &AppState, ws: Option<&WorkspaceRecord>) -> Arc<Vec<(String, String)>> {
+    let fp = model_options_fingerprint(s, ws);
+    SUBAGENT_MODEL_OPTIONS_CACHE.with(|slot| {
+        let mut cache = slot.borrow_mut();
+        if let Some((cached_fp, opts)) = cache.as_ref()
+            && *cached_fp == fp
+        {
+            return Arc::clone(opts);
+        }
+        let statuses = ws
+            .and_then(|w| s.workspace_runtime_by_id.get(&w.id))
+            .map(|rt| rt.provider_statuses.as_slice())
+            .unwrap_or(&[]);
+        let status_map: HashMap<&str, &ProviderStatusSummary> = statuses
+            .iter()
+            .map(|st| (st.provider.as_str(), st))
+            .collect();
+        let mut out = Vec::new();
+        for p in sort_and_filter_provider_refs(s.provider_catalog.iter(), &status_map, "") {
+            let status = status_map.get(p.id.as_str()).copied();
+            if !is_provider_connected(p, status, ws) {
+                continue;
+            }
+            for m in &p.models {
+                if !m.enabled {
+                    continue;
+                }
+                let value = format!("{}:{}", p.id, m.id);
+                let label = format!("{} · {}", p.name, model_display_name(m));
+                out.push((value, label));
+            }
+        }
+        let arc = Arc::new(out);
+        *cache = Some((fp, Arc::clone(&arc)));
+        arc
+    })
+}
+
+fn catalog_entries<'a>(s: &'a AppState, workspace_id: &str) -> Cow<'a, [AgentProfileCatalogEntry]> {
     let catalog = s.agent_profiles_catalog_for_workspace(workspace_id);
     if !catalog.profiles.is_empty() {
-        return catalog.profiles.clone();
+        return Cow::Borrowed(catalog.profiles.as_slice());
     }
-    s.subagents_for_workspace(workspace_id)
-        .iter()
-        .map(legacy_subagent_to_catalog_entry)
-        .collect()
+    Cow::Owned(
+        s.subagents_for_workspace(workspace_id)
+            .iter()
+            .map(legacy_subagent_to_catalog_entry)
+            .collect(),
+    )
 }
 
 fn legacy_subagent_to_catalog_entry(profile: &SubagentProfile) -> AgentProfileCatalogEntry {
@@ -624,7 +684,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
         .trim()
         .to_ascii_lowercase();
     let entries = catalog_entries(s, &ws.id);
-    let mut filtered: Vec<AgentProfileCatalogEntry> = entries
+    let mut filtered: Vec<&AgentProfileCatalogEntry> = entries
         .iter()
         .filter(|entry| {
             let entry_scope = if entry.scope == "workspace" {
@@ -637,17 +697,15 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
         .filter(|entry| {
             let p = &entry.profile;
             query.is_empty()
-                || p.display_name.to_ascii_lowercase().contains(&query)
-                || p.id.to_ascii_lowercase().contains(&query)
-                || p.description.to_ascii_lowercase().contains(&query)
+                || contains_ascii_ci(&p.display_name, &query)
+                || contains_ascii_ci(&p.id, &query)
+                || contains_ascii_ci(&p.description, &query)
         })
-        .cloned()
         .collect();
-    filtered.sort_by_key(|a| {
-        (
-            a.profile.id != "default",
-            a.profile.display_name.to_lowercase(),
-        )
+    filtered.sort_by(|a, b| {
+        (a.profile.id != "default")
+            .cmp(&(b.profile.id != "default"))
+            .then_with(|| cmp_ascii_ci(&a.profile.display_name, &b.profile.display_name))
     });
 
     if filtered.is_empty() {
@@ -693,7 +751,6 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
             } else {
                 "global"
             };
-            let entry_clone = entry.clone();
             let p_id_avail = profile.id.clone();
             let p_id_del = profile.id.clone();
             let p_scope_del = p_scope.to_string();
@@ -779,12 +836,28 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                 ));
             }
             if !is_locked_default {
+                let ws_edit = ws_id.clone();
+                let id_edit = profile.id.clone();
+                let scope_edit = p_scope.to_string();
                 actions = actions.child(
                     Button::new("Edit")
                         .variant(ButtonVariant::Outline)
                         .control_size(ControlSize::Small)
                         .on_press(move |s: &mut AppState| {
-                            open_edit_dialog(s, &entry_clone);
+                            let found = catalog_entries(s, &ws_edit)
+                                .iter()
+                                .find(|e| {
+                                    let sc = if e.scope == "workspace" {
+                                        "workspace"
+                                    } else {
+                                        "global"
+                                    };
+                                    e.profile.id == id_edit && sc == scope_edit
+                                })
+                                .cloned();
+                            if let Some(entry) = found {
+                                open_edit_dialog(s, &entry);
+                            }
                         })
                         .build(k),
                 );
@@ -949,11 +1022,11 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
             .build(k, &mut overlays);
 
         let model_options = collect_model_options(s, Some(ws));
-        let mut model_labels = vec!["Inherit parent model".to_string()];
-        for (_, label) in &model_options {
-            model_labels.push(label.clone());
+        let mut model_label_refs: Vec<&str> = Vec::with_capacity(model_options.len() + 1);
+        model_label_refs.push("Inherit parent model");
+        for (_, label) in model_options.iter() {
+            model_label_refs.push(label.as_str());
         }
-        let model_label_refs: Vec<&str> = model_labels.iter().map(String::as_str).collect();
         let selected_model_value = if s.settings_ui.subagent_draft_model.is_empty() {
             String::new()
         } else if s.settings_ui.subagent_draft_provider.is_empty() {
@@ -970,7 +1043,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
             .map(|(_, l)| l.as_str())
             .unwrap_or("Inherit parent model");
         let model_open = s.settings_ui.open_select_key.as_deref() == Some("subagent-dialog-model");
-        let model_pairs = model_options.clone();
+        let model_pairs = Arc::clone(&model_options);
         let model_select = Select::new("subagent-dialog-model", &model_label_refs)
             .label("Subagent model")
             .appearance(SelectAppearance::Field)

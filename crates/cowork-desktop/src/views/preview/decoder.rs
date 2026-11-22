@@ -346,23 +346,75 @@ fn compute_sheet_metrics(
 }
 
 /// Returns true if a trimmed cell string represents a number, currency figure, or percentage.
+///
+/// Zero-allocation on the fast path (all ASCII strings up to 64 bytes, with or without commas).
+/// Rejects double-signed inputs (`"+-100"`) and malformed comma grouping (`"1,,000"`).
 pub(crate) fn looks_numeric_text(raw: &str) -> bool {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return false;
     }
-    let without_sign = trimmed
-        .strip_prefix(['+', '-'])
-        .unwrap_or(trimmed)
-        .trim_start();
-    let without_currency = without_sign
-        .strip_prefix(['$', '€', '£', '¥'])
-        .unwrap_or(without_sign)
-        .trim_start();
-    let clean = without_currency
-        .strip_prefix(['+', '-'])
-        .unwrap_or(without_currency);
+    let (had_leading_sign, without_sign) = match trimmed.strip_prefix(['+', '-']) {
+        Some(rest) => (true, rest.trim_start()),
+        None => (false, trimmed),
+    };
+    let (had_currency, without_currency) = match without_sign.strip_prefix(['$', '€', '£', '¥'])
+    {
+        Some(rest) => (true, rest.trim_start()),
+        None => (false, without_sign),
+    };
+    let clean = if !had_leading_sign && had_currency {
+        without_currency
+            .strip_prefix(['+', '-'])
+            .unwrap_or(without_currency)
+    } else {
+        without_currency
+    };
     let clean = clean.strip_suffix('%').unwrap_or(clean).trim();
+    if clean.is_empty() || !clean.is_ascii() {
+        return false;
+    }
+    let bytes = clean.as_bytes();
+    if matches!(bytes[0], b'+' | b'-') {
+        return false;
+    }
+    if !bytes.contains(&b',') {
+        return clean.parse::<f64>().is_ok_and(f64::is_finite);
+    }
+    let split_idx = bytes
+        .iter()
+        .position(|&b| matches!(b, b'.' | b'e' | b'E'))
+        .unwrap_or(bytes.len());
+    let (int_bytes, rest_bytes) = bytes.split_at(split_idx);
+    if rest_bytes.contains(&b',') {
+        return false;
+    }
+    for (group_idx, group) in int_bytes.split(|&b| b == b',').enumerate() {
+        if group.is_empty() || !group.iter().all(u8::is_ascii_digit) {
+            return false;
+        }
+        if group_idx == 0 {
+            if group.len() > 3 {
+                return false;
+            }
+        } else if group.len() != 3 {
+            return false;
+        }
+    }
+    if bytes.len() <= 64 {
+        let mut buf = [0u8; 64];
+        let mut n = 0usize;
+        for &b in bytes {
+            if b != b',' {
+                buf[n] = b;
+                n += 1;
+            }
+        }
+        return std::str::from_utf8(&buf[..n])
+            .ok()
+            .and_then(|s| s.parse::<f64>().ok())
+            .is_some_and(f64::is_finite);
+    }
     let normalized = clean.replace(',', "");
     normalized.parse::<f64>().is_ok_and(f64::is_finite)
 }

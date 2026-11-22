@@ -1,8 +1,10 @@
 //! Experiments / Feature Flags settings page (`apps/desktop/src/ui/settings/pages/FeatureFlagsPage.tsx`).
 
 use std::collections::BTreeSet;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 
-use rune::{El, row, text};
+use rune::{El, memo, row, text};
 use rune_kit::Kit;
 
 use crate::actions::{Action, SettingsAction};
@@ -10,6 +12,7 @@ use crate::state::AppState;
 use crate::theme::ThemeTokens;
 use crate::views::settings::primitives::{
     Section, SettingsRow, StatusTone, callout_banner, mini_switch, settings_page, status_pill,
+    theme_memo_sig,
 };
 use crate::views::settings::shell::PageContent;
 
@@ -176,93 +179,119 @@ fn render_flag_row(spec: FlagRowSpec<'_>, k: &Kit, t: &ThemeTokens) -> El {
 
 /// Renders the Experiments (Feature Flags) settings page.
 pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
-    let banner = callout_banner(
-        StatusTone::Neutral,
-        "Experimental flags change desktop surface availability. Flags marked Restart required take full effect after relaunch.",
-        k,
-        t,
-    );
+    let mut h = DefaultHasher::new();
+    (theme_memo_sig(s, t), s.is_packaged).hash(&mut h);
+    let mut flags_acc = 0u64;
+    for (fk, fv) in &s.feature_flags {
+        let mut fh = DefaultHasher::new();
+        (fk.as_str(), *fv).hash(&mut fh);
+        flags_acc = flags_acc.wrapping_add(fh.finish());
+    }
+    let mut ov_acc = 0u64;
+    for (ok, ov) in &s.feature_flag_overrides {
+        let mut oh = DefaultHasher::new();
+        (ok.as_str(), *ov).hash(&mut oh);
+        ov_acc = ov_acc.wrapping_add(oh.finish());
+    }
+    (
+        s.feature_flags.len(),
+        flags_acc,
+        s.feature_flag_overrides.len(),
+        ov_acc,
+    )
+        .hash(&mut h);
 
-    let known_rows: Vec<El> = KNOWN_FEATURE_FLAGS
-        .iter()
-        .map(|meta| {
-            let overridden = !s.is_packaged && s.feature_flag_overrides.contains_key(meta.id);
-            let enabled = resolve_flag_enabled(s, meta);
-            let packaged_forced_off = s.is_packaged && meta.packaged_forced_off;
-            render_flag_row(
-                FlagRowSpec {
-                    id: meta.id.to_string(),
-                    label: meta.label,
-                    description: meta.description,
-                    enabled,
-                    overridden,
-                    restart_required: meta.restart_required,
-                    disabled: packaged_forced_off || s.is_packaged,
-                    packaged_forced_off,
-                },
-                k,
-                t,
-            )
-        })
-        .collect();
+    let body = memo("settings-experiments-body", h.finish(), || {
+        let banner = callout_banner(
+            StatusTone::Neutral,
+            "Experimental flags change desktop surface availability. Flags marked Restart required take full effect after relaunch.",
+            k,
+            t,
+        );
 
-    let known_ids: BTreeSet<&str> = KNOWN_FEATURE_FLAGS.iter().map(|f| f.id).collect();
-    let extra_keys: BTreeSet<String> = s
-        .feature_flags
-        .keys()
-        .filter(|id| !known_ids.contains(id.as_str()))
-        .cloned()
-        .collect();
-
-    let mut sections = vec![
-        banner,
-        Section::new()
-            .title("Feature flags")
-            .description("Toggle pre-release capabilities for this local Cowork installation.")
-            .children(known_rows)
-            .build(k, t),
-    ];
-
-    if !extra_keys.is_empty() && !s.is_packaged {
-        let extra_rows: Vec<El> = extra_keys
-            .into_iter()
-            .map(|key| {
-                let enabled = s.feature_flags.get(&key).copied().unwrap_or(false);
+        let known_rows: Vec<El> = KNOWN_FEATURE_FLAGS
+            .iter()
+            .map(|meta| {
+                let overridden = !s.is_packaged && s.feature_flag_overrides.contains_key(meta.id);
+                let enabled = resolve_flag_enabled(s, meta);
+                let packaged_forced_off = s.is_packaged && meta.packaged_forced_off;
                 render_flag_row(
                     FlagRowSpec {
-                        id: key.clone(),
-                        label: &key,
-                        description: "Custom flag loaded from persisted desktop state.",
+                        id: meta.id.to_string(),
+                        label: meta.label,
+                        description: meta.description,
                         enabled,
-                        overridden: true,
-                        restart_required: false,
-                        disabled: false,
-                        packaged_forced_off: false,
+                        overridden,
+                        restart_required: meta.restart_required,
+                        disabled: packaged_forced_off || s.is_packaged,
+                        packaged_forced_off,
                     },
                     k,
                     t,
                 )
             })
             .collect();
-        sections.push(
-            Section::new()
-                .title("Custom flags")
-                .description("Additional feature keys present in local desktop configuration.")
-                .children(extra_rows)
-                .build(k, t),
-        );
-    } else {
-        sections.push(
-            rune::el().child(
-                text(format!(
-                    "{} experimental flags configured",
-                    KNOWN_FEATURE_FLAGS.len()
-                ))
-                .font(k.ty.small)
-                .color(t.text_faint),
-            ),
-        );
-    }
 
-    PageContent::simple(settings_page(sections))
+        let known_ids: BTreeSet<&str> = KNOWN_FEATURE_FLAGS.iter().map(|f| f.id).collect();
+        let extra_keys: BTreeSet<String> = s
+            .feature_flags
+            .keys()
+            .filter(|id| !known_ids.contains(id.as_str()))
+            .cloned()
+            .collect();
+
+        let mut sections = vec![
+            banner,
+            Section::new()
+                .title("Feature flags")
+                .description("Toggle pre-release capabilities for this local Cowork installation.")
+                .children(known_rows)
+                .build(k, t),
+        ];
+
+        if !extra_keys.is_empty() && !s.is_packaged {
+            let extra_rows: Vec<El> = extra_keys
+                .into_iter()
+                .map(|key| {
+                    let enabled = s.feature_flags.get(&key).copied().unwrap_or(false);
+                    render_flag_row(
+                        FlagRowSpec {
+                            id: key.clone(),
+                            label: &key,
+                            description: "Custom flag loaded from persisted desktop state.",
+                            enabled,
+                            overridden: true,
+                            restart_required: false,
+                            disabled: false,
+                            packaged_forced_off: false,
+                        },
+                        k,
+                        t,
+                    )
+                })
+                .collect();
+            sections.push(
+                Section::new()
+                    .title("Custom flags")
+                    .description("Additional feature keys present in local desktop configuration.")
+                    .children(extra_rows)
+                    .build(k, t),
+            );
+        } else {
+            sections.push(
+                rune::el().child(
+                    text(format!(
+                        "{} experimental flags configured",
+                        KNOWN_FEATURE_FLAGS.len()
+                    ))
+                    .font(k.ty.small)
+                    .color(t.text_faint),
+                ),
+            );
+        }
+
+        settings_page(sections)
+    });
+
+    PageContent::simple(body)
 }

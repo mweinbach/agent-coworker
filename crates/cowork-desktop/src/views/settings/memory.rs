@@ -3,6 +3,8 @@
 //! Ported from `apps/desktop/src/ui/settings/pages/WorkspacesPage.tsx` (`surface="profile"`),
 //! `MemoryPage.tsx`, and `AdvancedMemoryPanel.tsx`.
 
+use std::collections::{HashMap, HashSet};
+
 use rune::{El, ScrollSpec, TextEdit, col, row, text};
 use rune_kit::{
     Button, ButtonVariant, Checkbox, ControlSize, Dialog, Kit, Select, SelectAppearance, TextArea,
@@ -11,16 +13,16 @@ use rune_kit::{
 use serde_json::{Value, json};
 
 use crate::actions::{Action, NavAction, SettingsAction};
-use crate::state::{AppState, ScopedMemoryEntry, WorkspaceRecord};
+use crate::state::{AppState, ProviderStatusSummary, ScopedMemoryEntry, WorkspaceRecord};
 use crate::theme::ThemeTokens;
 use crate::views::settings::icons;
 use crate::views::settings::primitives::{
-    ConfirmDialogSpec, EmptyState, Section, SettingsRow, StatusTone, compact_tabs, confirm_dialog,
-    find_management_target, format_timestamp_friendly, management_targets, mini_switch,
-    search_input, settings_page, status_pill,
+    ConfirmDialogSpec, EmptyState, Section, SettingsRow, StatusTone, cmp_ascii_ci, compact_tabs,
+    confirm_dialog, contains_ascii_ci, find_management_target, format_timestamp_friendly,
+    management_targets, mini_switch, search_input, settings_page, status_pill,
 };
 use crate::views::settings::providers::is_provider_connected;
-use crate::views::settings::providers_utils::{model_display_name, sort_and_filter_providers};
+use crate::views::settings::providers_utils::{model_display_name, sort_and_filter_provider_refs};
 use crate::views::settings::shell::PageContent;
 
 /// Reserved id for always-included hot workspace memory.
@@ -180,9 +182,13 @@ fn build_model_choices(s: &AppState, ws: Option<&WorkspaceRecord>) -> Vec<(Strin
         .and_then(|w| s.workspace_runtime_by_id.get(&w.id))
         .map(|rt| rt.provider_statuses.as_slice())
         .unwrap_or(&[]);
+    let status_map: HashMap<&str, &ProviderStatusSummary> = statuses
+        .iter()
+        .map(|st| (st.provider.as_str(), st))
+        .collect();
     let mut out = Vec::new();
-    for p in sort_and_filter_providers(&s.provider_catalog, statuses, "") {
-        let status = statuses.iter().find(|st| st.provider == p.id);
+    for p in sort_and_filter_provider_refs(s.provider_catalog.iter(), &status_map, "") {
+        let status = status_map.get(p.id.as_str()).copied();
         if !is_provider_connected(p, status, ws) {
             continue;
         }
@@ -223,21 +229,21 @@ pub fn build_advanced_memory_payload(
     Value::Object(obj)
 }
 
-fn sync_profile_fields_if_needed(
-    s: &mut AppState,
-    ws_id: &str,
-    name: &str,
-    work: &str,
-    instructions: &str,
-    details: &str,
-) {
-    if s.settings_ui.profile_synced_workspace_id.as_deref() != Some(ws_id) {
-        s.settings_ui.profile_name_edit = TextEdit::new(name);
-        s.settings_ui.profile_work_edit = TextEdit::new(work);
-        s.settings_ui.profile_instructions_edit = TextEdit::new(instructions);
-        s.settings_ui.profile_details_edit = TextEdit::new(details);
-        s.settings_ui.profile_synced_workspace_id = Some(ws_id.to_string());
+fn sync_profile_fields_for_workspace_if_needed(s: &mut AppState, ws_id: &str) {
+    if s.settings_ui.profile_synced_workspace_id.as_deref() == Some(ws_id) {
+        return;
     }
+    let (name, work, instructions, details) = s
+        .workspaces
+        .iter()
+        .find(|w| w.id == ws_id)
+        .map(resolve_user_profile)
+        .unwrap_or_default();
+    s.settings_ui.profile_name_edit = TextEdit::new(name);
+    s.settings_ui.profile_work_edit = TextEdit::new(work);
+    s.settings_ui.profile_instructions_edit = TextEdit::new(instructions);
+    s.settings_ui.profile_details_edit = TextEdit::new(details);
+    s.settings_ui.profile_synced_workspace_id = Some(ws_id.to_string());
 }
 
 fn active_workspace(s: &AppState) -> Option<&WorkspaceRecord> {
@@ -360,35 +366,11 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
         || inst_edit.text != saved_instructions
         || det_edit.text != saved_details;
 
-    let sn_1 = saved_name.clone();
-    let sw_1 = saved_work.clone();
-    let si_1 = saved_instructions.clone();
-    let sd_1 = saved_details.clone();
     let ws_1 = ws_id.clone();
-
-    let sn_2 = saved_name.clone();
-    let sw_2 = saved_work.clone();
-    let si_2 = saved_instructions.clone();
-    let sd_2 = saved_details.clone();
     let ws_2 = ws_id.clone();
-
-    let sn_3 = saved_name.clone();
-    let sw_3 = saved_work.clone();
-    let si_3 = saved_instructions.clone();
-    let sd_3 = saved_details.clone();
     let ws_3 = ws_id.clone();
-
-    let sn_4 = saved_name;
-    let sw_4 = saved_work;
-    let si_4 = saved_instructions;
-    let sd_4 = saved_details;
     let ws_4 = ws_id.clone();
-
     let ws_save_profile = ws_id.clone();
-    let cur_name_text = name_edit.text.clone();
-    let cur_work_text = work_edit.text.clone();
-    let cur_inst_text = inst_edit.text.clone();
-    let cur_det_text = det_edit.text.clone();
 
     let mut save_row = row().items_center().gap(10.0).child(
         Button::new("Save changes")
@@ -408,12 +390,11 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                             s.settings_ui.profile_details_edit.text.clone(),
                         )
                     } else {
-                        (
-                            cur_name_text.clone(),
-                            cur_work_text.clone(),
-                            cur_inst_text.clone(),
-                            cur_det_text.clone(),
-                        )
+                        s.workspaces
+                            .iter()
+                            .find(|w| w.id == ws_save_profile)
+                            .map(resolve_user_profile)
+                            .unwrap_or_default()
                     };
                 s.settings_ui.profile_saved_banner = true;
                 s.dispatch(Action::Settings(SettingsAction::UpdateWorkspaceDefaults {
@@ -451,7 +432,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                         .width(None)
                         .on_edit(move |s: &mut AppState| {
                             s.settings_ui.profile_saved_banner = false;
-                            sync_profile_fields_if_needed(s, &ws_1, &sn_1, &sw_1, &si_1, &sd_1);
+                            sync_profile_fields_for_workspace_if_needed(s, &ws_1);
                             &mut s.settings_ui.profile_name_edit
                         })
                         .build(k),
@@ -474,7 +455,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                         .rows(3)
                         .on_edit(move |s: &mut AppState| {
                             s.settings_ui.profile_saved_banner = false;
-                            sync_profile_fields_if_needed(s, &ws_2, &sn_2, &sw_2, &si_2, &sd_2);
+                            sync_profile_fields_for_workspace_if_needed(s, &ws_2);
                             &mut s.settings_ui.profile_work_edit
                         })
                         .build(k),
@@ -493,7 +474,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                         .rows(3)
                         .on_edit(move |s: &mut AppState| {
                             s.settings_ui.profile_saved_banner = false;
-                            sync_profile_fields_if_needed(s, &ws_3, &sn_3, &sw_3, &si_3, &sd_3);
+                            sync_profile_fields_for_workspace_if_needed(s, &ws_3);
                             &mut s.settings_ui.profile_instructions_edit
                         })
                         .build(k),
@@ -516,7 +497,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                         .rows(3)
                         .on_edit(move |s: &mut AppState| {
                             s.settings_ui.profile_saved_banner = false;
-                            sync_profile_fields_if_needed(s, &ws_4, &sn_4, &sw_4, &si_4, &sd_4);
+                            sync_profile_fields_for_workspace_if_needed(s, &ws_4);
                             &mut s.settings_ui.profile_details_edit
                         })
                         .build(k),
@@ -534,7 +515,17 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
 
     // 2. Advanced memory section
     let adv_mem_enabled = is_advanced_memory_enabled(ws);
-    let model_choices = build_model_choices(s, Some(ws));
+    let si_enabled = default_bool_field(
+        ws,
+        "skillImprovementEnabled",
+        "defaultSkillImprovementEnabled",
+    );
+    let si_expanded = s.settings_ui.skill_improvement_expanded;
+    let model_choices = if adv_mem_enabled || (si_expanded && si_enabled) {
+        build_model_choices(s, Some(ws))
+    } else {
+        Vec::new()
+    };
     let ws_id_adv = ws_id.clone();
 
     let mut adv_mem_section = Section::new()
@@ -624,24 +615,6 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
     sections.push(adv_mem_section.build(k, t));
 
     // 3. Skill Improvement (Beta)
-    let si_enabled = default_bool_field(
-        ws,
-        "skillImprovementEnabled",
-        "defaultSkillImprovementEnabled",
-    );
-    let si_expanded = s.settings_ui.skill_improvement_expanded;
-    let si_event = s
-        .skill_improvement_status_for_workspace(&ws_id)
-        .and_then(|v| v.get("event").or(Some(v)));
-    let si_skills = extract_skill_improvement_skills(si_event);
-    let si_pending = si_event
-        .and_then(|e| e.get("pendingJobs"))
-        .and_then(Value::as_array);
-    let si_history = extract_skill_improvement_history(si_event);
-    let si_backups = si_event
-        .and_then(|e| e.get("backups"))
-        .and_then(Value::as_array);
-
     let ws_id_si_toggle = ws_id.clone();
     let mut si_section = Section::new()
         .title("Skill improvement (Beta)")
@@ -682,6 +655,17 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
         );
 
     if si_expanded {
+        let si_event = s
+            .skill_improvement_status_for_workspace(&ws_id)
+            .and_then(|v| v.get("event").or(Some(v)));
+        let si_skills = extract_skill_improvement_skills(si_event);
+        let si_pending = si_event
+            .and_then(|e| e.get("pendingJobs"))
+            .and_then(Value::as_array);
+        let si_history = extract_skill_improvement_history(si_event);
+        let si_backups = si_event
+            .and_then(|e| e.get("backups"))
+            .and_then(Value::as_array);
         let ws_si_en = ws_id.clone();
         si_section = si_section.child(
             SettingsRow::new("Enable skill improvement")
@@ -819,19 +803,27 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
 
             // Included skills checklist
             let excluded = effective_excluded_skills(ws, si_event);
+            let excluded_set: HashSet<&str> = excluded.iter().map(String::as_str).collect();
             let ws_si_refresh = ws_id.clone();
             let included_body: El = if !si_skills.is_empty() {
                 let checks: Vec<El> = si_skills
                     .iter()
                     .map(|skill_name| {
-                        let checked = !excluded.iter().any(|ex| ex == skill_name);
+                        let checked = !excluded_set.contains(skill_name.as_str());
                         let name_owned = skill_name.clone();
-                        let excluded_now = excluded.clone();
                         let ws_ex = ws_id.clone();
                         Checkbox::new(checked)
-                            .label(skill_name.clone())
+                            .label(skill_name.as_str())
                             .on_toggle(move |s: &mut AppState| {
-                                let mut next = excluded_now.clone();
+                                let si_evt = s
+                                    .skill_improvement_status_for_workspace(&ws_ex)
+                                    .and_then(|v| v.get("event").or(Some(v)));
+                                let mut next = s
+                                    .workspaces
+                                    .iter()
+                                    .find(|w| w.id == ws_ex)
+                                    .map(|w| effective_excluded_skills(w, si_evt))
+                                    .unwrap_or_default();
                                 if checked {
                                     if !next.iter().any(|e| e == &name_owned) {
                                         next.push(name_owned.clone());
@@ -1125,40 +1117,16 @@ fn build_advanced_memory_section(
         );
     } else {
         for entry in advanced_memories {
-            let slug = entry
-                .get("slug")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string();
-            let name = entry
-                .get("name")
-                .and_then(Value::as_str)
-                .unwrap_or(slug.as_str())
-                .to_string();
+            let slug = entry.get("slug").and_then(Value::as_str).unwrap_or("");
+            let name = entry.get("name").and_then(Value::as_str).unwrap_or(slug);
             let desc = entry
                 .get("description")
                 .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string();
-            let kind = entry
-                .get("type")
-                .and_then(Value::as_str)
-                .unwrap_or("note")
-                .to_string();
-            let body = entry
-                .get("body")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string();
+                .unwrap_or("");
+            let kind = entry.get("type").and_then(Value::as_str).unwrap_or("note");
 
-            let expanded = s.settings_ui.expanded_advanced_memory_slugs.contains(&slug);
-            let slug_toggle = slug.clone();
-            let slug_edit = slug.clone();
-            let name_edit = name.clone();
-            let desc_edit = desc.clone();
-            let kind_edit = kind.clone();
-            let body_edit = body.clone();
-            let slug_del = slug.clone();
+            let expanded = s.settings_ui.expanded_advanced_memory_slugs.contains(slug);
+            let slug_toggle = slug.to_string();
 
             let mut item = col().w_full().px(16.0).py(12.0).gap(8.0).child(
                 row()
@@ -1173,7 +1141,7 @@ fn build_advanced_memory_section(
                             .items_center()
                             .gap(8.0)
                             .child(
-                                Button::new(name.clone())
+                                Button::new(name)
                                     .variant(ButtonVariant::Ghost)
                                     .control_size(ControlSize::Small)
                                     .icon(if expanded {
@@ -1203,6 +1171,10 @@ fn build_advanced_memory_section(
             );
 
             if expanded {
+                let body = entry.get("body").and_then(Value::as_str).unwrap_or("");
+                let ws_edit = ws_id.to_string();
+                let slug_edit = slug.to_string();
+                let slug_del = slug.to_string();
                 item = item
                     .child(
                         col()
@@ -1222,15 +1194,51 @@ fn build_advanced_memory_section(
                                     .variant(ButtonVariant::Outline)
                                     .control_size(ControlSize::Small)
                                     .on_press(move |s: &mut AppState| {
+                                        let found = s
+                                            .advanced_memories_for_workspace(&ws_edit)
+                                            .iter()
+                                            .find(|e| {
+                                                e.get("slug").and_then(Value::as_str).unwrap_or("")
+                                                    == slug_edit
+                                            });
+                                        let (name_v, desc_v, kind_v, body_v) = found
+                                            .map(|e| {
+                                                (
+                                                    e.get("name")
+                                                        .and_then(Value::as_str)
+                                                        .unwrap_or(slug_edit.as_str())
+                                                        .to_string(),
+                                                    e.get("description")
+                                                        .and_then(Value::as_str)
+                                                        .unwrap_or("")
+                                                        .to_string(),
+                                                    e.get("type")
+                                                        .and_then(Value::as_str)
+                                                        .unwrap_or("note")
+                                                        .to_string(),
+                                                    e.get("body")
+                                                        .and_then(Value::as_str)
+                                                        .unwrap_or("")
+                                                        .to_string(),
+                                                )
+                                            })
+                                            .unwrap_or_else(|| {
+                                                (
+                                                    slug_edit.clone(),
+                                                    String::new(),
+                                                    "note".to_string(),
+                                                    String::new(),
+                                                )
+                                            });
                                         s.settings_ui.advanced_memory_editing_slug =
                                             Some(slug_edit.clone());
-                                        s.settings_ui.advanced_memory_type = kind_edit.clone();
+                                        s.settings_ui.advanced_memory_type = kind_v;
                                         s.settings_ui.advanced_memory_key_edit =
-                                            TextEdit::new(name_edit.as_str());
+                                            TextEdit::new(name_v);
                                         s.settings_ui.advanced_memory_desc_edit =
-                                            TextEdit::new(desc_edit.as_str());
+                                            TextEdit::new(desc_v);
                                         s.settings_ui.advanced_memory_content_edit =
-                                            TextEdit::new(body_edit.as_str());
+                                            TextEdit::new(body_v);
                                         s.settings_ui.advanced_memory_dialog_open = true;
                                     })
                                     .build(k),
@@ -1488,16 +1496,15 @@ fn build_legacy_memory_section(
         })
         .filter(|entry| {
             query.is_empty()
-                || entry.id.to_ascii_lowercase().contains(&query)
-                || entry.content.to_ascii_lowercase().contains(&query)
+                || contains_ascii_ci(&entry.id, &query)
+                || contains_ascii_ci(&entry.content, &query)
         })
         .collect();
-    filtered.sort_by_key(|e| {
-        (
-            e.id != HOT_MEMORY_ID,
-            e.scope != "user",
-            e.id.to_lowercase(),
-        )
+    filtered.sort_by(|a, b| {
+        (a.id != HOT_MEMORY_ID)
+            .cmp(&(b.id != HOT_MEMORY_ID))
+            .then_with(|| (a.scope != "user").cmp(&(b.scope != "user")))
+            .then_with(|| cmp_ascii_ci(&a.id, &b.id))
     });
 
     let scope_idx = match scope_filter {
@@ -1607,23 +1614,18 @@ fn build_legacy_memory_section(
     } else {
         for entry in filtered {
             let entry_scope = if entry.scope == "user" {
-                "user".to_string()
+                "user"
             } else {
-                "workspace".to_string()
+                "workspace"
             };
             let title = if entry.id == HOT_MEMORY_ID {
-                "Always include".to_string()
+                "Always include"
             } else {
-                entry.id.clone()
+                entry.id.as_str()
             };
             let compound_key = format!("{entry_scope}:{}", entry.id);
             let expanded = s.settings_ui.expanded_memory_keys.contains(&compound_key);
-            let key_toggle = compound_key.clone();
-            let id_edit = entry.id.clone();
-            let scope_edit = entry_scope.clone();
-            let content_edit = entry.content.clone();
-            let id_del = entry.id.clone();
-            let scope_del = entry_scope.clone();
+            let key_toggle = compound_key;
 
             let updated_label = entry
                 .updated_at_ms
@@ -1669,7 +1671,7 @@ fn build_legacy_memory_section(
                                     .build(k),
                             )
                             .child(status_pill(
-                                memory_scope_label(&entry_scope),
+                                memory_scope_label(entry_scope),
                                 StatusTone::Neutral,
                                 k,
                                 t,
@@ -1679,6 +1681,11 @@ fn build_legacy_memory_section(
             );
 
             if expanded {
+                let ws_edit = ws_id.to_string();
+                let id_edit = entry.id.clone();
+                let scope_edit = entry_scope.to_string();
+                let id_del = entry.id.clone();
+                let scope_del = entry_scope.to_string();
                 item = item
                     .child(
                         col()
@@ -1688,7 +1695,7 @@ fn build_legacy_memory_section(
                             .radius(k.radius.md)
                             .fill(t.elevated_bg)
                             .child(
-                                text(entry.content.clone())
+                                text(entry.content.as_str())
                                     .font(k.ty.ui)
                                     .color(t.text_base)
                                     .wrap(),
@@ -1703,13 +1710,24 @@ fn build_legacy_memory_section(
                                     .variant(ButtonVariant::Outline)
                                     .control_size(ControlSize::Small)
                                     .on_press(move |s: &mut AppState| {
+                                        let content = scoped_memory_entries(s, &ws_edit)
+                                            .into_iter()
+                                            .find(|e| {
+                                                let sc = if e.scope == "user" {
+                                                    "user"
+                                                } else {
+                                                    "workspace"
+                                                };
+                                                e.id == id_edit && sc == scope_edit
+                                            })
+                                            .map(|e| e.content)
+                                            .unwrap_or_default();
                                         s.settings_ui.memory_editing_key = Some(id_edit.clone());
                                         s.settings_ui.memory_editing_scope = scope_edit.clone();
                                         s.settings_ui.memory_draft_scope = scope_edit.clone();
                                         s.settings_ui.memory_key_edit =
                                             TextEdit::new(id_edit.as_str());
-                                        s.settings_ui.memory_content_edit =
-                                            TextEdit::new(content_edit.as_str());
+                                        s.settings_ui.memory_content_edit = TextEdit::new(content);
                                         s.settings_ui.memory_dialog_open = true;
                                     })
                                     .build(k),

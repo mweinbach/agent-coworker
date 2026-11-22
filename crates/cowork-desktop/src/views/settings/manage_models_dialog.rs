@@ -10,7 +10,9 @@ use crate::actions::{Action, SettingsAction};
 use crate::state::{AppState, ProviderModelSummary, ProviderSummary};
 use crate::theme::ThemeTokens;
 use crate::views::settings::icons;
-use crate::views::settings::primitives::{StatusTone, search_input, status_pill};
+use crate::views::settings::primitives::{
+    StatusTone, contains_ascii_ci, search_input, status_pill,
+};
 use crate::views::settings::providers_utils::model_display_name;
 
 /// Filters a provider's model list by case-insensitive ID or display name query.
@@ -24,10 +26,7 @@ pub fn filter_provider_models<'a>(
     }
     models
         .iter()
-        .filter(|m| {
-            m.id.to_ascii_lowercase().contains(&needle)
-                || m.name.to_ascii_lowercase().contains(&needle)
-        })
+        .filter(|m| contains_ascii_ci(&m.id, &needle) || contains_ascii_ci(&m.name, &needle))
         .collect()
 }
 

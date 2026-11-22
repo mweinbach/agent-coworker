@@ -1,8 +1,10 @@
 //! Desktop settings page (`apps/desktop/src/ui/settings/pages/DesktopPage.tsx`).
 
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::str::FromStr;
 
-use rune::{Shortcut, col, el, row, text};
+use rune::{Shortcut, col, el, memo, row, text};
 use rune_kit::{
     Button, ButtonVariant, ControlSize, Kit, SegmentedControl, ShortcutRecorder,
     ShortcutRecorderState,
@@ -13,7 +15,7 @@ use crate::state::AppState;
 use crate::theme::{self, AccentPalette, ThemePreference, ThemeTokens};
 use crate::views::settings::experiments::is_flag_enabled;
 use crate::views::settings::primitives::{
-    Section, SettingsRow, StatusTone, callout_banner, mini_switch, settings_page,
+    Section, SettingsRow, StatusTone, callout_banner, mini_switch, settings_page, theme_memo_sig,
     update_desktop_settings,
 };
 use crate::views::settings::shell::PageContent;
@@ -286,149 +288,162 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
         ThemePreference::Light => 1,
         ThemePreference::Dark => 2,
     };
-    let theme_picker = SegmentedControl::new(&["System", "Light", "Dark"], Some(theme_idx))
-        .label("Theme")
-        .fit()
-        .on_pick(|s: &mut AppState, idx, _tx| {
-            let next = match idx {
-                1 => ThemePreference::Light,
-                2 => ThemePreference::Dark,
-                _ => ThemePreference::System,
-            };
-            s.dispatch(Action::Shell(ShellAction::SetTheme(next)));
-        })
-        .build(k);
-
-    let accent_labels: Vec<&'static str> = AccentPalette::ALL.iter().map(|p| p.label()).collect();
     let accent_idx = AccentPalette::ALL
         .iter()
         .position(|p| *p == ds.accent_palette)
         .unwrap_or(2);
-    let accent_swatches =
-        row()
-            .items_center()
-            .gap(5.0)
-            .a11y_hidden()
-            .children(AccentPalette::ALL.iter().map(|&palette| {
-                let swatch = theme::resolve_tokens_with_accent(
-                    t.dark,
-                    ds.reduced_transparency,
-                    ds.high_contrast,
-                    palette,
-                )
-                .accent;
-                let active = palette == ds.accent_palette;
-                let dot_size = if active { 12.0 } else { 10.0 };
-                el().size(dot_size, dot_size)
-                    .radius(theme::layout::RADIUS_PILL)
-                    .fill(swatch)
-                    .border(1.0, if active { t.text_base } else { t.border_muted })
-            }));
-    let accent_picker = row().items_center().gap(10.0).child(accent_swatches).child(
-        SegmentedControl::new(&accent_labels, Some(accent_idx))
-            .label("Accent color")
+    let platform = s.effective_desktop_platform();
+    let show_menu_bar_row = platform.is_linux() || platform.is_windows();
+
+    let mut app_h = DefaultHasher::new();
+    (
+        theme_memo_sig(s, t),
+        theme_idx,
+        accent_idx,
+        show_menu_bar_row,
+        ds.show_menu_bar,
+        ds.reduced_transparency,
+        ds.high_contrast,
+        ds.reduce_motion,
+    )
+        .hash(&mut app_h);
+
+    let appearance_el = memo("settings-desktop-appearance", app_h.finish(), || {
+        let theme_picker = SegmentedControl::new(&["System", "Light", "Dark"], Some(theme_idx))
+            .label("Theme")
             .fit()
             .on_pick(|s: &mut AppState, idx, _tx| {
-                if let Some(&palette) = AccentPalette::ALL.get(idx) {
-                    s.dispatch(Action::Settings(SettingsAction::SetAccentPalette(palette)));
-                }
+                let next = match idx {
+                    1 => ThemePreference::Light,
+                    2 => ThemePreference::Dark,
+                    _ => ThemePreference::System,
+                };
+                s.dispatch(Action::Shell(ShellAction::SetTheme(next)));
             })
-            .build(k),
-    );
+            .build(k);
 
-    let mut appearance_section = Section::new()
-        .title("Appearance & motion")
-        .description("Customize window appearance, accent palette, contrast, and motion across desktop surfaces.")
-        .child(
-            SettingsRow::new("Theme")
-                .description("Follow your OS color scheme or force light or dark appearance.")
-                .control(theme_picker)
-                .build(k, t),
-        )
-        .child(
-            SettingsRow::new("Accent color")
-                .description(ds.accent_palette.description())
-                .control(accent_picker)
-                .build(k, t),
+        let accent_labels: Vec<&'static str> =
+            AccentPalette::ALL.iter().map(|p| p.label()).collect();
+        let accent_swatches =
+            row()
+                .items_center()
+                .gap(5.0)
+                .a11y_hidden()
+                .children(AccentPalette::ALL.iter().map(|&palette| {
+                    let swatch = theme::accent_tokens(palette, t.dark, ds.high_contrast).accent;
+                    let active = palette == ds.accent_palette;
+                    let dot_size = if active { 12.0 } else { 10.0 };
+                    el().size(dot_size, dot_size)
+                        .radius(theme::layout::RADIUS_PILL)
+                        .fill(swatch)
+                        .border(1.0, if active { t.text_base } else { t.border_muted })
+                }));
+        let accent_picker = row().items_center().gap(10.0).child(accent_swatches).child(
+            SegmentedControl::new(&accent_labels, Some(accent_idx))
+                .label("Accent color")
+                .fit()
+                .on_pick(|s: &mut AppState, idx, _tx| {
+                    if let Some(&palette) = AccentPalette::ALL.get(idx) {
+                        s.dispatch(Action::Settings(SettingsAction::SetAccentPalette(palette)));
+                    }
+                })
+                .build(k),
         );
 
-    let platform = s.effective_desktop_platform();
-    if platform.is_linux() || platform.is_windows() {
-        appearance_section = appearance_section.child(
-            SettingsRow::new("Show menu bar")
-                .description("When off, press Alt or F10 to show it.")
-                .control(mini_switch(
-                    ds.show_menu_bar,
-                    "Show menu bar",
-                    false,
-                    |s: &mut AppState| {
-                        let next = !s.desktop_settings.show_menu_bar;
-                        s.dispatch(Action::Shell(ShellAction::SetShowMenuBar(next)));
-                    },
-                    k,
-                ))
-                .build(k, t),
-        );
-    }
+        let mut appearance_section = Section::new()
+            .title("Appearance & motion")
+            .description("Customize window appearance, accent palette, contrast, and motion across desktop surfaces.")
+            .child(
+                SettingsRow::new("Theme")
+                    .description("Follow your OS color scheme or force light or dark appearance.")
+                    .control(theme_picker)
+                    .build(k, t),
+            )
+            .child(
+                SettingsRow::new("Accent color")
+                    .description(ds.accent_palette.description())
+                    .control(accent_picker)
+                    .build(k, t),
+            );
 
-    let appearance_section = appearance_section
-        .child(
-            SettingsRow::new("Reduce transparency")
-                .description(
-                    "Use solid opaque sidebar and overlay fills in place of translucent glass.",
-                )
-                .control(mini_switch(
-                    ds.reduced_transparency,
-                    "Reduce transparency",
-                    false,
-                    |s: &mut AppState| {
-                        update_desktop_settings(s, |next| {
-                            next.reduced_transparency = !next.reduced_transparency;
-                        });
-                    },
-                    k,
-                ))
-                .build(k, t),
-        )
-        .child(
-            SettingsRow::new("High contrast")
-                .description(
-                    "Increase borders and surface separation for stronger visual contrast.",
-                )
-                .control(mini_switch(
-                    ds.high_contrast,
-                    "High contrast",
-                    false,
-                    |s: &mut AppState| {
-                        update_desktop_settings(s, |next| {
-                            next.high_contrast = !next.high_contrast;
-                        });
-                    },
-                    k,
-                ))
-                .build(k, t),
-        )
-        .child(
-            SettingsRow::new("Reduce motion")
-                .description(
-                    "Minimize spring and layout transitions throughout the desktop interface.",
-                )
-                .control(mini_switch(
-                    ds.reduce_motion,
-                    "Reduce motion",
-                    false,
-                    |s: &mut AppState| {
-                        update_desktop_settings(s, |next| {
-                            next.reduce_motion = !next.reduce_motion;
-                        });
-                    },
-                    k,
-                ))
-                .build(k, t),
-        );
+        if show_menu_bar_row {
+            appearance_section = appearance_section.child(
+                SettingsRow::new("Show menu bar")
+                    .description("When off, press Alt or F10 to show it.")
+                    .control(mini_switch(
+                        ds.show_menu_bar,
+                        "Show menu bar",
+                        false,
+                        |s: &mut AppState| {
+                            let next = !s.desktop_settings.show_menu_bar;
+                            s.dispatch(Action::Shell(ShellAction::SetShowMenuBar(next)));
+                        },
+                        k,
+                    ))
+                    .build(k, t),
+            );
+        }
+
+        appearance_section
+            .child(
+                SettingsRow::new("Reduce transparency")
+                    .description(
+                        "Use solid opaque sidebar and overlay fills in place of translucent glass.",
+                    )
+                    .control(mini_switch(
+                        ds.reduced_transparency,
+                        "Reduce transparency",
+                        false,
+                        |s: &mut AppState| {
+                            update_desktop_settings(s, |next| {
+                                next.reduced_transparency = !next.reduced_transparency;
+                            });
+                        },
+                        k,
+                    ))
+                    .build(k, t),
+            )
+            .child(
+                SettingsRow::new("High contrast")
+                    .description(
+                        "Increase borders and surface separation for stronger visual contrast.",
+                    )
+                    .control(mini_switch(
+                        ds.high_contrast,
+                        "High contrast",
+                        false,
+                        |s: &mut AppState| {
+                            update_desktop_settings(s, |next| {
+                                next.high_contrast = !next.high_contrast;
+                            });
+                        },
+                        k,
+                    ))
+                    .build(k, t),
+            )
+            .child(
+                SettingsRow::new("Reduce motion")
+                    .description(
+                        "Minimize spring and layout transitions throughout the desktop interface.",
+                    )
+                    .control(mini_switch(
+                        ds.reduce_motion,
+                        "Reduce motion",
+                        false,
+                        |s: &mut AppState| {
+                            update_desktop_settings(s, |next| {
+                                next.reduce_motion = !next.reduce_motion;
+                            });
+                        },
+                        k,
+                    ))
+                    .build(k, t),
+            )
+            .build(k, t)
+    });
 
     PageContent::simple(settings_page(vec![
         quick_chat_section.build(k, t),
-        appearance_section.build(k, t),
+        appearance_el,
     ]))
 }

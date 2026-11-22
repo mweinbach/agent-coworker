@@ -1,5 +1,11 @@
 //! OpenAI native ChatGPT connectors tab (`apps/desktop/src/ui/settings/pages/OpenAiNativeConnectorsPage.tsx`).
 
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
+
 use rune::{El, col, el, row, text};
 use rune_kit::{Button, ButtonVariant, ControlSize, Kit};
 use serde_json::Value;
@@ -9,9 +15,55 @@ use crate::state::AppState;
 use crate::theme::ThemeTokens;
 use crate::views::settings::icons;
 use crate::views::settings::primitives::{
-    EmptyState, EntityIconSize, Section, StatusTone, entity_icon, mini_switch, search_input,
-    status_pill,
+    EmptyState, EntityIconSize, Section, StatusTone, contains_ascii_ci, entity_icon, mini_switch,
+    search_input, status_pill,
 };
+
+const MAX_URL_CACHE: usize = 256;
+
+type CachedConnectorsEntry = (u64, usize, Arc<Vec<ConnectorItem>>);
+
+thread_local! {
+    static SAFE_URL_CACHE: RefCell<HashMap<String, Option<String>>> = RefCell::new(HashMap::new());
+    static PARSED_CONNECTORS_CACHE: RefCell<Option<CachedConnectorsEntry>> =
+        const { RefCell::new(None) };
+}
+
+fn connectors_fingerprint(raw: &[Value]) -> u64 {
+    let mut h = DefaultHasher::new();
+    raw.len().hash(&mut h);
+    for v in raw {
+        (
+            v.get("id").and_then(Value::as_str),
+            v.get("name").and_then(Value::as_str),
+            v.get("description").and_then(Value::as_str),
+            v.get("logoUrl").and_then(Value::as_str),
+            v.get("installUrl").and_then(Value::as_str),
+            v.get("isAccessible").and_then(Value::as_bool),
+            v.get("isEnabled").and_then(Value::as_bool),
+            v.get("isWorkspaceConnector").and_then(Value::as_bool),
+        )
+            .hash(&mut h);
+    }
+    h.finish()
+}
+
+fn cached_connectors(raw: &[Value]) -> Arc<Vec<ConnectorItem>> {
+    let fp = connectors_fingerprint(raw);
+    let len = raw.len();
+    PARSED_CONNECTORS_CACHE.with(|slot| {
+        let mut cache = slot.borrow_mut();
+        if let Some((cached_fp, cached_len, items)) = cache.as_ref()
+            && *cached_fp == fp
+            && *cached_len == len
+        {
+            return Arc::clone(items);
+        }
+        let parsed = Arc::new(parse_connectors(raw));
+        *cache = Some((fp, len, Arc::clone(&parsed)));
+        parsed
+    })
+}
 
 /// Normalized connector record parsed from `AppState::openai_native_connectors`.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -32,12 +84,33 @@ pub fn safe_external_url(raw: Option<&str>) -> Option<String> {
     if trimmed.is_empty() {
         return None;
     }
-    let parsed = url::Url::parse(trimmed).ok()?;
-    if matches!(parsed.scheme(), "http" | "https") && parsed.host_str().is_some() {
-        Some(parsed.to_string())
-    } else {
-        None
+    if !(trimmed
+        .get(..7)
+        .is_some_and(|p| p.eq_ignore_ascii_case("http://"))
+        || trimmed
+            .get(..8)
+            .is_some_and(|p| p.eq_ignore_ascii_case("https://")))
+    {
+        return None;
     }
+    SAFE_URL_CACHE.with(|slot| {
+        let mut cache = slot.borrow_mut();
+        if let Some(cached) = cache.get(trimmed) {
+            return cached.clone();
+        }
+        let validated = url::Url::parse(trimmed).ok().and_then(|parsed| {
+            if matches!(parsed.scheme(), "http" | "https") && parsed.host_str().is_some() {
+                Some(parsed.to_string())
+            } else {
+                None
+            }
+        });
+        if cache.len() >= MAX_URL_CACHE {
+            cache.clear();
+        }
+        cache.insert(trimmed.to_string(), validated.clone());
+        validated
+    })
 }
 
 /// Parses `AppState::openai_native_connectors` JSON payloads into strongly typed items.
@@ -103,12 +176,12 @@ pub fn filter_connectors<'a>(
             if q.is_empty() {
                 return true;
             }
-            item.name.to_ascii_lowercase().contains(&q)
-                || item.id.to_ascii_lowercase().contains(&q)
+            contains_ascii_ci(&item.name, &q)
+                || contains_ascii_ci(&item.id, &q)
                 || item
                     .description
                     .as_deref()
-                    .is_some_and(|d| d.to_ascii_lowercase().contains(&q))
+                    .is_some_and(|d| contains_ascii_ci(d, &q))
         })
         .collect()
 }
@@ -133,7 +206,7 @@ pub fn is_codex_authenticated(s: &AppState, workspace_id: Option<&str>) -> bool 
 
 /// Renders the Apps (OpenAI native connectors) tab inside `ToolAccess`.
 pub fn view_tab(s: &AppState, workspace_id: Option<&str>, k: &Kit, t: &ThemeTokens) -> El {
-    let items = parse_connectors(&s.openai_native_connectors);
+    let items = cached_connectors(&s.openai_native_connectors);
     let enabled_count = items.iter().filter(|c| c.is_enabled).count();
     let accessible_count = items.iter().filter(|c| c.is_accessible).count();
     let authenticated = is_codex_authenticated(s, workspace_id);

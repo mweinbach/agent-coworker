@@ -1,7 +1,11 @@
 //! Chats & Archived Conversations page + Conversation Import dialog
 //! (`apps/desktop/src/ui/settings/pages/ArchivedChatsPage.tsx`, `import/ConversationImportDialog.tsx`).
 
-use rune::{El, row};
+use std::borrow::Cow;
+use std::collections::HashMap;
+use std::rc::Rc;
+
+use rune::{El, GrowthSpec, ScrollSpec, col, el, row};
 use rune_kit::{Button, ButtonVariant, ControlSize, Kit, Select, SelectAppearance};
 
 use crate::actions::{Action, ChatAction, SettingsAction};
@@ -9,8 +13,8 @@ use crate::state::AppState;
 use crate::theme::ThemeTokens;
 use crate::views::settings::primitives::{
     ConfirmDialogSpec, EmptyState, Section, SettingsRow, StatusTone, callout_banner,
-    confirm_dialog, format_timestamp_friendly, search_input, settings_page, status_pill,
-    update_desktop_settings,
+    confirm_dialog, contains_ascii_ci, format_timestamp_friendly, search_input, settings_page,
+    status_pill, update_desktop_settings,
 };
 use crate::views::settings::shell::PageContent;
 use crate::views::settings::{conversation_import, icons};
@@ -138,8 +142,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
             if query.is_empty() {
                 return true;
             }
-            thread.title.to_ascii_lowercase().contains(&query)
-                || thread.id.to_ascii_lowercase().contains(&query)
+            contains_ascii_ci(&thread.title, &query) || contains_ascii_ci(&thread.id, &query)
         })
         .collect();
     filtered.sort_by_key(|b| std::cmp::Reverse(b.archived_at));
@@ -208,103 +211,158 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
             .build(k, t),
         );
     } else {
-        for thread in filtered {
-            let ws_name = s
-                .workspaces
-                .iter()
-                .find(|w| w.id == thread.workspace_id)
-                .map(|w| {
-                    if w.one_off_chat {
-                        "Chats".to_string()
-                    } else if w.name.trim().is_empty() {
-                        w.path.clone()
-                    } else {
-                        w.name.clone()
-                    }
-                })
-                .unwrap_or_else(|| thread.workspace_id.clone());
+        let ws_name_by_id: HashMap<&str, &str> = s
+            .workspaces
+            .iter()
+            .map(|w| {
+                let label = if w.one_off_chat {
+                    "Chats"
+                } else if w.name.trim().is_empty() {
+                    w.path.as_str()
+                } else {
+                    w.name.as_str()
+                };
+                (w.id.as_str(), label)
+            })
+            .collect();
 
-            let title = if thread.title.trim().is_empty() {
-                "Untitled chat"
-            } else {
-                thread.title.trim()
-            };
-            let restore_id = thread.id.clone();
-            let delete_id = thread.id.clone();
+        let items: Vec<(String, String, String)> = filtered
+            .iter()
+            .map(|thread| {
+                let ws_name = ws_name_by_id
+                    .get(thread.workspace_id.as_str())
+                    .copied()
+                    .unwrap_or(thread.workspace_id.as_str());
+                let title = if thread.title.trim().is_empty() {
+                    "Untitled chat".to_string()
+                } else {
+                    thread.title.trim().to_string()
+                };
+                let desc = format!(
+                    "{ws_name} · Archived {}",
+                    format_timestamp_friendly(thread.archived_at)
+                );
+                (thread.id.clone(), title, desc)
+            })
+            .collect();
 
-            archived_section = archived_section.child(
-                SettingsRow::new(title)
-                    .description(format!(
-                        "{ws_name} · Archived {}",
-                        format_timestamp_friendly(thread.archived_at)
-                    ))
-                    .control(
-                        row()
-                            .items_center()
-                            .gap(8.0)
-                            .child(
-                                Button::new("Restore")
-                                    .variant(ButtonVariant::Outline)
-                                    .icon(&icons::REFRESH_CCW)
-                                    .control_size(ControlSize::Small)
-                                    .on_press(move |s: &mut AppState| {
-                                        s.dispatch(Action::Chat(ChatAction::RestoreThread(
-                                            restore_id.clone(),
-                                        )));
-                                    })
-                                    .build(k),
-                            )
-                            .child(
-                                Button::new("Delete")
-                                    .variant(ButtonVariant::Outline)
-                                    .icon(&icons::TRASH)
-                                    .control_size(ControlSize::Small)
-                                    .on_press(move |s: &mut AppState| {
-                                        s.settings_ui.chats_confirm_delete_id =
-                                            Some(delete_id.clone());
-                                    })
-                                    .build(k),
-                            ),
+        let count = items.len();
+        let list_h = ((count as f32) * 68.0).clamp(96.0, 480.0);
+        let rows_rc = Rc::new(items);
+        let keys_rc = Rc::clone(&rows_rc);
+        let kit_clone = k.clone();
+        let tokens = *t;
+        let rows_stack = col()
+            .key("chats-archived-rows")
+            .w_full()
+            .growth(GrowthSpec::default())
+            .virtual_rows(
+                count,
+                68.0,
+                move |_: &AppState, i| {
+                    Cow::Owned(
+                        keys_rc
+                            .get(i)
+                            .map(|(id, _, _)| format!("archived-chat-row-{id}"))
+                            .unwrap_or_else(|| format!("archived-chat-row-{i}")),
                     )
-                    .build(k, t),
+                },
+                move |_: &AppState, i| {
+                    let Some((thread_id, title, desc)) = rows_rc.get(i) else {
+                        return el().key(format!("archived-chat-row-{i}"));
+                    };
+                    let restore_id = thread_id.clone();
+                    let delete_id = thread_id.clone();
+                    let row_el = SettingsRow::new(title.as_str())
+                        .description(desc.as_str())
+                        .control(
+                            row()
+                                .items_center()
+                                .gap(8.0)
+                                .child(
+                                    Button::new("Restore")
+                                        .variant(ButtonVariant::Outline)
+                                        .icon(&icons::REFRESH_CCW)
+                                        .control_size(ControlSize::Small)
+                                        .on_press(move |s: &mut AppState| {
+                                            s.dispatch(Action::Chat(ChatAction::RestoreThread(
+                                                restore_id.clone(),
+                                            )));
+                                        })
+                                        .build(&kit_clone),
+                                )
+                                .child(
+                                    Button::new("Delete")
+                                        .variant(ButtonVariant::Outline)
+                                        .icon(&icons::TRASH)
+                                        .control_size(ControlSize::Small)
+                                        .on_press(move |s: &mut AppState| {
+                                            s.settings_ui.chats_confirm_delete_id =
+                                                Some(delete_id.clone());
+                                        })
+                                        .build(&kit_clone),
+                                ),
+                        )
+                        .build(&kit_clone, &tokens)
+                        .key(format!("archived-chat-row-{thread_id}"));
+                    if i > 0 {
+                        row_el.border_sides([1.0, 0.0, 0.0, 0.0], tokens.border_muted)
+                    } else {
+                        row_el
+                    }
+                },
             );
-        }
+        archived_section = archived_section.child(
+            k.scroll_bar(
+                col()
+                    .key("chats-archived-scroll")
+                    .w_full()
+                    .h(list_h)
+                    .min_h(0.0)
+                    .scroll(ScrollSpec {
+                        stick_bottom: false,
+                    })
+                    .child(rows_stack),
+            )
+            .w_full(),
+        );
     }
     blocks.push(archived_section.build(k, t));
 
     conversation_import::render(s, k, t, &mut overlays);
 
-    let confirm_delete_id = s.settings_ui.chats_confirm_delete_id.clone();
-    let delete_title = confirm_delete_id
-        .as_deref()
-        .and_then(|id| s.archived_threads.iter().find(|t| t.id == id))
-        .map(|t| t.title.as_str())
-        .filter(|title| !title.trim().is_empty())
-        .unwrap_or("this archived chat")
-        .to_string();
+    if let Some(confirm_delete_id) = s.settings_ui.chats_confirm_delete_id.as_deref() {
+        let delete_title = s
+            .archived_threads
+            .iter()
+            .find(|t| t.id == confirm_delete_id)
+            .map(|t| t.title.as_str())
+            .filter(|title| !title.trim().is_empty())
+            .unwrap_or("this archived chat");
 
-    confirm_dialog(
-        ConfirmDialogSpec {
-            key: "chats-confirm-delete-dialog",
-            open: confirm_delete_id.is_some(),
-            title: "Delete archived chat permanently?",
-            description: format!(
-                "Permanently deletes \"{delete_title}\" and its transcript from this workspace. This cannot be undone."
-            ),
-            confirm_label: "Delete chat",
-            danger: true,
-        },
-        |s| {
-            s.settings_ui.chats_confirm_delete_id = None;
-        },
-        |s| {
-            if let Some(thread_id) = s.settings_ui.chats_confirm_delete_id.take() {
-                s.dispatch(Action::Chat(ChatAction::DeleteThread(thread_id)));
-            }
-        },
-        k,
-        &mut overlays,
-    );
+        confirm_dialog(
+            ConfirmDialogSpec {
+                key: "chats-confirm-delete-dialog",
+                open: true,
+                title: "Delete archived chat permanently?",
+                description: format!(
+                    "Permanently deletes \"{delete_title}\" and its transcript from this workspace. This cannot be undone."
+                ),
+                confirm_label: "Delete chat",
+                danger: true,
+            },
+            |s| {
+                s.settings_ui.chats_confirm_delete_id = None;
+            },
+            |s| {
+                if let Some(thread_id) = s.settings_ui.chats_confirm_delete_id.take() {
+                    s.dispatch(Action::Chat(ChatAction::DeleteThread(thread_id)));
+                }
+            },
+            k,
+            &mut overlays,
+        );
+    }
 
     PageContent::simple(settings_page(blocks))
         .with_header_actions(header_actions)

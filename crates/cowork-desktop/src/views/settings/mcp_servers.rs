@@ -16,7 +16,8 @@ use crate::views::settings::mcp_server_draft::{
 };
 use crate::views::settings::primitives::{
     ConfirmDialogSpec, EmptyState, EntityIconSize, Section, StatusTone, callout_banner,
-    compact_tabs, confirm_dialog, entity_icon, mini_switch, search_input, status_pill,
+    cmp_ascii_ci, compact_tabs, confirm_dialog, contains_ascii_ci, entity_icon, mini_switch,
+    search_input, status_pill,
 };
 
 fn source_rank(source: Option<&str>) -> u8 {
@@ -33,7 +34,7 @@ fn source_rank(source: Option<&str>) -> u8 {
 pub fn compare_mcp_servers(a: &McpServerSummary, b: &McpServerSummary) -> Ordering {
     source_rank(Some(effective_source(a)))
         .cmp(&source_rank(Some(effective_source(b))))
-        .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+        .then_with(|| cmp_ascii_ci(&a.name, &b.name))
 }
 
 /// Human-friendly source badge matching `McpServersPage.tsx`.
@@ -314,14 +315,10 @@ pub fn view_tab(
             if query.is_empty() {
                 true
             } else {
-                srv.name.to_ascii_lowercase().contains(&query)
+                contains_ascii_ci(&srv.name, &query)
+                    || contains_ascii_ci(source_label(Some(effective_source(srv))), &query)
                     || transport_kind_of(srv).contains(&query)
-                    || format_connection_line(srv)
-                        .to_ascii_lowercase()
-                        .contains(&query)
-                    || source_label(Some(effective_source(srv)))
-                        .to_ascii_lowercase()
-                        .contains(&query)
+                    || contains_ascii_ci(&format_connection_line(srv), &query)
             }
         })
         .collect();
@@ -528,13 +525,29 @@ fn render_server_row(
     ));
 
     if can_edit {
-        let srv_snapshot = srv.clone();
+        let ws_edit = ws_id.to_string();
+        let name_edit = srv.name.clone();
+        let src_edit = source_str.clone();
         controls = controls.child(
             Button::new("Edit")
                 .variant(ButtonVariant::Ghost)
                 .control_size(ControlSize::Small)
                 .on_press(move |s: &mut AppState| {
-                    open_edit_editor(s, &srv_snapshot);
+                    let found = s
+                        .mcp_servers_for_workspace(&ws_edit)
+                        .iter()
+                        .find(|entry| {
+                            entry.name == name_edit && effective_source(entry) == src_edit
+                        })
+                        .or_else(|| {
+                            s.mcp_servers_for_workspace(&ws_edit)
+                                .iter()
+                                .find(|entry| entry.name == name_edit)
+                        })
+                        .cloned();
+                    if let Some(summary) = found {
+                        open_edit_editor(s, &summary);
+                    }
                 })
                 .build(k),
         );

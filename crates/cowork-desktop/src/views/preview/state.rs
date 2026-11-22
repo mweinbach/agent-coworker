@@ -242,6 +242,7 @@ pub struct PreviewUiState {
     pub active_sheet: usize,
     pub raw_csv_mode: bool,
     pub table: TableState,
+    pub(crate) table_rev: u64,
     pub active_slide: usize,
     pub presentation_layout: PresentationLayoutMode,
 }
@@ -253,6 +254,7 @@ impl Default for PreviewUiState {
             active_sheet: 0,
             raw_csv_mode: false,
             table: TableState::new().key("spreadsheet-preview-table-s0"),
+            table_rev: 0,
             active_slide: 0,
             presentation_layout: PresentationLayoutMode::Deck,
         }
@@ -265,6 +267,7 @@ impl std::fmt::Debug for PreviewUiState {
             .field("active_path", &self.active_path)
             .field("active_sheet", &self.active_sheet)
             .field("raw_csv_mode", &self.raw_csv_mode)
+            .field("table_rev", &self.table_rev)
             .field("active_slide", &self.active_slide)
             .field("presentation_layout", &self.presentation_layout)
             .finish()
@@ -272,12 +275,20 @@ impl std::fmt::Debug for PreviewUiState {
 }
 
 impl PreviewUiState {
+    /// Mutable accessor for `Table` callbacks that bumps `table_rev` so spreadsheet memoization
+    /// invalidates whenever table selection, sorting, or column widths change.
+    pub(crate) fn table_mut(&mut self) -> &mut TableState {
+        self.table_rev = self.table_rev.wrapping_add(1);
+        &mut self.table
+    }
+
     fn reset_for_path(&mut self, path: Option<&str>) {
         let Some(path) = path else {
             self.active_path.clear();
             self.active_sheet = 0;
             self.raw_csv_mode = false;
             self.table = TableState::new().key("spreadsheet-preview-table-s0");
+            self.table_rev = self.table_rev.wrapping_add(1);
             self.active_slide = 0;
             self.presentation_layout = PresentationLayoutMode::Deck;
             return;
@@ -288,6 +299,7 @@ impl PreviewUiState {
             self.active_sheet = 0;
             self.raw_csv_mode = false;
             self.table = TableState::new().key("spreadsheet-preview-table-s0");
+            self.table_rev = self.table_rev.wrapping_add(1);
             self.active_slide = 0;
             self.presentation_layout = PresentationLayoutMode::Deck;
         }
@@ -305,6 +317,7 @@ impl PreviewUiState {
         }
 
         if let Some(sp) = data {
+            self.table_rev = self.table_rev.wrapping_add(1);
             if sp.sheets.is_empty() {
                 self.active_sheet = 0;
             } else if self.active_sheet >= sp.sheets.len() {
@@ -349,6 +362,7 @@ impl PreviewUiState {
         self.active_sheet = index;
         self.raw_csv_mode = false;
         self.table = TableState::new().key(format!("spreadsheet-preview-table-s{index}"));
+        self.table_rev = self.table_rev.wrapping_add(1);
     }
 
     /// Selects a slide index clamped within `0..total_slides`.

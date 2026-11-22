@@ -1,6 +1,10 @@
 //! Shared layout primitives ported from `apps/desktop/src/ui/settings/SettingsPrimitives.tsx`.
 
 use std::cell::RefCell;
+use std::cmp::Ordering;
+use std::collections::HashMap;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -514,41 +518,209 @@ pub fn name_initials(name: &str) -> String {
     }
 }
 
-thread_local! {
-    static ENTITY_IMAGE_CACHE: RefCell<Option<ImageCache>> = const { RefCell::new(None) };
+const MAX_ENTITY_DECODED_CACHE: usize = 256;
+const MAX_ENTITY_PIXELS_CACHE: usize = 256;
+const MAX_TIMESTAMP_CACHE: usize = 512;
+
+type DecodedEntityPayload = Arc<(String, Arc<[u8]>)>;
+type DecodedEntityCache = HashMap<(u64, usize), Option<DecodedEntityPayload>>;
+
+#[derive(Default)]
+struct EntityImageCacheState {
+    cache: Option<ImageCache>,
+    has_real_waker: bool,
+    decoded_data: DecodedEntityCache,
+    remote_arcs: HashMap<(u64, u64, usize), Arc<[u8]>>,
+    pixels: HashMap<(u64, usize, u32), Pixels>,
 }
 
-fn cached_image_pixels(s: &AppState, bytes: Arc<[u8]>, mime: &str, size_pt: f32) -> Option<Pixels> {
-    ENTITY_IMAGE_CACHE.with(|slot| {
-        let mut guard = slot.borrow_mut();
-        let cache = guard.get_or_insert_with(|| {
-            let waker = s.services.waker.clone().unwrap_or_else(|| Arc::new(|| {}));
-            ImageCache::new(waker)
-        });
-        let img = cache.load_mime(bytes, mime, size_pt, 2.0);
-        if img.error().is_some() {
-            return None;
+thread_local! {
+    static ENTITY_IMAGE_CACHE: RefCell<EntityImageCacheState> =
+        RefCell::new(EntityImageCacheState::default());
+    static TIMESTAMP_FORMAT_CACHE: RefCell<HashMap<(i64, i32), String>> =
+        RefCell::new(HashMap::new());
+}
+
+fn fast_bytes_hash(bytes: &[u8]) -> u64 {
+    let mut h = DefaultHasher::new();
+    bytes.len().hash(&mut h);
+    if bytes.len() <= 4096 {
+        bytes.hash(&mut h);
+    } else {
+        bytes[..512].hash(&mut h);
+        let mid = bytes.len() / 2;
+        bytes[mid.saturating_sub(128)..(mid + 128).min(bytes.len())].hash(&mut h);
+        bytes[bytes.len() - 512..].hash(&mut h);
+    }
+    h.finish()
+}
+
+fn hex_nibble(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn decode_percent_encoded_bytes(raw: &str) -> Vec<u8> {
+    let bytes = raw.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && let (Some(hi), Some(lo)) = (hex_nibble(bytes[i + 1]), hex_nibble(bytes[i + 2]))
+        {
+            out.push((hi << 4) | lo);
+            i += 3;
+            continue;
         }
-        Some(img.pixels().clone())
+        out.push(bytes[i]);
+        i += 1;
+    }
+    out
+}
+
+fn ensure_entity_image_cache<'a>(
+    state: &'a mut EntityImageCacheState,
+    s: &AppState,
+) -> &'a mut ImageCache {
+    if !state.has_real_waker
+        && let Some(waker) = s.services.waker.clone()
+    {
+        state.cache = Some(ImageCache::new(waker));
+        state.has_real_waker = true;
+        state.pixels.clear();
+    }
+    state.cache.get_or_insert_with(|| {
+        let waker = s.services.waker.clone().unwrap_or_else(|| Arc::new(|| {}));
+        ImageCache::new(waker)
     })
 }
 
 fn decode_data_image(s: &AppState, src: &str, size_pt: f32) -> Option<Pixels> {
-    let payload = src.strip_prefix("data:")?;
-    let (meta, raw) = payload.split_once(',')?;
-    let mime = meta.split(';').next().unwrap_or("image/png");
-    let bytes = if meta.ends_with(";base64") {
-        base64::engine::general_purpose::STANDARD.decode(raw).ok()?
-    } else {
-        raw.as_bytes().to_vec()
-    };
-    cached_image_pixels(s, Arc::from(bytes), mime, size_pt)
+    let key = (fast_bytes_hash(src.as_bytes()), src.len());
+    let px_key = (key.0, key.1, size_pt.to_bits());
+    let sync_wait = s.services.waker.is_none();
+
+    ENTITY_IMAGE_CACHE.with(|slot| {
+        let mut state = slot.borrow_mut();
+        let _ = ensure_entity_image_cache(&mut state, s);
+
+        if let Some(px) = state.pixels.get(&px_key) {
+            return Some(px.clone());
+        }
+
+        let decoded = if let Some(cached) = state.decoded_data.get(&key) {
+            cached.clone()
+        } else {
+            let parsed = (|| {
+                let payload = src
+                    .get(..5)
+                    .filter(|prefix| prefix.eq_ignore_ascii_case("data:"))
+                    .and_then(|_| src.get(5..))?;
+                let (meta, raw) = payload.split_once(',')?;
+                let mime = meta.split(';').next().unwrap_or("image/png").trim();
+                let is_base64 = meta
+                    .split(';')
+                    .skip(1)
+                    .any(|p| p.trim().eq_ignore_ascii_case("base64"));
+                let bytes = if is_base64 {
+                    if raw.as_bytes().iter().any(u8::is_ascii_whitespace) {
+                        let mut compact = Vec::with_capacity(raw.len());
+                        for &b in raw.as_bytes() {
+                            if !b.is_ascii_whitespace() {
+                                compact.push(b);
+                            }
+                        }
+                        base64::engine::general_purpose::STANDARD
+                            .decode(&compact)
+                            .ok()?
+                    } else {
+                        base64::engine::general_purpose::STANDARD
+                            .decode(raw.as_bytes())
+                            .ok()?
+                    }
+                } else if raw.contains('%') {
+                    decode_percent_encoded_bytes(raw)
+                } else {
+                    raw.as_bytes().to_vec()
+                };
+                if bytes.is_empty() {
+                    return None;
+                }
+                Some(Arc::new((mime.to_string(), Arc::<[u8]>::from(bytes))))
+            })();
+            if state.decoded_data.len() >= MAX_ENTITY_DECODED_CACHE {
+                state.decoded_data.clear();
+            }
+            state.decoded_data.insert(key, parsed.clone());
+            parsed
+        }?;
+
+        let cache = ensure_entity_image_cache(&mut state, s);
+        let img = cache.load_mime(Arc::clone(&decoded.1), &decoded.0, size_pt, 2.0);
+        if sync_wait && !img.is_ready() {
+            let _ = img.wait();
+        }
+        if img.error().is_some() || !img.is_ready() {
+            return None;
+        }
+        let px = img.pixels().clone();
+        if state.pixels.len() >= MAX_ENTITY_PIXELS_CACHE {
+            state.pixels.clear();
+        }
+        state.pixels.insert(px_key, px.clone());
+        Some(px)
+    })
 }
 
 fn lookup_cached_remote_image(s: &AppState, url: &str, size_pt: f32) -> Option<Pixels> {
     let (mime, bytes) = s.image_bytes_by_request.get(url)?;
     let mime = mime.as_deref().unwrap_or("image/png");
-    cached_image_pixels(s, Arc::from(bytes.as_slice()), mime, size_pt)
+    let url_hash = fast_bytes_hash(url.as_bytes());
+    let bytes_hash = fast_bytes_hash(bytes.as_slice());
+    let combined_hash = url_hash ^ bytes_hash.rotate_left(17);
+    let px_key = (combined_hash, bytes.len(), size_pt.to_bits());
+    let arc_key = (url_hash, bytes_hash, bytes.len());
+    let sync_wait = s.services.waker.is_none();
+
+    ENTITY_IMAGE_CACHE.with(|slot| {
+        let mut state = slot.borrow_mut();
+        let _ = ensure_entity_image_cache(&mut state, s);
+
+        if let Some(px) = state.pixels.get(&px_key) {
+            return Some(px.clone());
+        }
+
+        let arc_bytes = if let Some(cached) = state.remote_arcs.get(&arc_key) {
+            Arc::clone(cached)
+        } else {
+            if state.remote_arcs.len() >= MAX_ENTITY_DECODED_CACHE {
+                state.remote_arcs.clear();
+            }
+            let shared = Arc::<[u8]>::from(bytes.as_slice());
+            state.remote_arcs.insert(arc_key, Arc::clone(&shared));
+            shared
+        };
+
+        let cache = ensure_entity_image_cache(&mut state, s);
+        let img = cache.load_mime(arc_bytes, mime, size_pt, 2.0);
+        if sync_wait && !img.is_ready() {
+            let _ = img.wait();
+        }
+        if img.error().is_some() || !img.is_ready() {
+            return None;
+        }
+        let px = img.pixels().clone();
+        if state.pixels.len() >= MAX_ENTITY_PIXELS_CACHE {
+            state.pixels.clear();
+        }
+        state.pixels.insert(px_key, px.clone());
+        Some(px)
+    })
 }
 
 /// Icon badge for providers, plugins, skills, and MCP servers: decodes `data:`
@@ -564,7 +736,9 @@ pub fn entity_icon(
 ) -> El {
     let dim = size.points();
     let trimmed = src.map(str::trim).unwrap_or("");
-    if trimmed.starts_with("data:image/")
+    if trimmed
+        .get(..11)
+        .is_some_and(|p| p.eq_ignore_ascii_case("data:image/"))
         && let Some(px) = decode_data_image(s, trimmed, dim)
     {
         return el()
@@ -576,7 +750,12 @@ pub fn entity_icon(
             .pixels(&px)
             .shrink();
     }
-    if (trimmed.starts_with("http://") || trimmed.starts_with("https://"))
+    if (trimmed
+        .get(..7)
+        .is_some_and(|p| p.eq_ignore_ascii_case("http://"))
+        || trimmed
+            .get(..8)
+            .is_some_and(|p| p.eq_ignore_ascii_case("https://")))
         && let Some(px) = lookup_cached_remote_image(s, trimmed, dim)
     {
         return el()
@@ -759,6 +938,9 @@ pub fn confirm_dialog(
     k: &Kit,
     overlays: &mut Vec<El>,
 ) {
+    if !spec.open {
+        return;
+    }
     let cancel_cb = Rc::new(on_cancel);
     let cancel_for_btn = cancel_cb.clone();
     let confirm_cb = Rc::new(on_confirm);
@@ -899,21 +1081,96 @@ pub fn format_byte_size(bytes: u64) -> String {
     }
 }
 
+/// Zero-allocation ASCII case-insensitive substring check matching
+/// `haystack.to_ascii_lowercase().contains(needle_lower)` where `needle_lower`
+/// is already ASCII-lowercased.
+#[inline]
+pub(crate) fn contains_ascii_ci(haystack: &str, needle_lower: &str) -> bool {
+    if needle_lower.is_empty() {
+        return true;
+    }
+    let hb = haystack.as_bytes();
+    let nb = needle_lower.as_bytes();
+    if nb.len() > hb.len() {
+        return false;
+    }
+    let first = nb[0];
+    let first_upper = first.to_ascii_uppercase();
+    let limit = hb.len() - nb.len();
+    let mut i = 0;
+    while i <= limit {
+        let b = hb[i];
+        if (b == first || b == first_upper) && hb[i..i + nb.len()].eq_ignore_ascii_case(nb) {
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
+
+/// Zero-allocation ASCII case-insensitive lexicographical comparison for sort comparators.
+#[inline]
+pub(crate) fn cmp_ascii_ci(a: &str, b: &str) -> Ordering {
+    for (&ab, &bb) in a.as_bytes().iter().zip(b.as_bytes().iter()) {
+        let ord = ab.to_ascii_lowercase().cmp(&bb.to_ascii_lowercase());
+        if ord != Ordering::Equal {
+            return ord;
+        }
+    }
+    a.len().cmp(&b.len())
+}
+
+/// Stable hash of visual theme tokens + scale for `rune::memo` keys in Settings views.
+pub(crate) fn theme_memo_sig(s: &AppState, t: &ThemeTokens) -> u64 {
+    let mut h = DefaultHasher::new();
+    (
+        t.dark,
+        t.accent.r.to_bits(),
+        t.accent.g.to_bits(),
+        t.accent.b.to_bits(),
+        t.panel_bg.r.to_bits(),
+        t.card_bg.r.to_bits(),
+        t.border_muted.a.to_bits(),
+        s.desktop_settings.reduced_transparency,
+        s.desktop_settings.high_contrast,
+        s.ui_scale.to_bits(),
+    )
+        .hash(&mut h);
+    h.finish()
+}
+
 /// Formats a Unix timestamp in seconds or milliseconds into local `YYYY-MM-DD HH:MM`.
+///
+/// Results are cached per minute bucket in thread-local storage to avoid repeated
+/// `chrono::Local` conversions across table/list rows every frame.
 pub fn format_timestamp_friendly(ts: i64) -> String {
     if ts <= 0 {
         return "—".to_string();
     }
-    let dt = if ts > 1_000_000_000_000 {
-        chrono::DateTime::from_timestamp_millis(ts)
+    let secs = if ts > 1_000_000_000_000 {
+        ts / 1000
     } else {
-        chrono::DateTime::from_timestamp(ts, 0)
+        ts
     };
-    match dt {
-        Some(utc) => utc
-            .with_timezone(&chrono::Local)
-            .format("%Y-%m-%d %H:%M")
-            .to_string(),
-        None => "—".to_string(),
-    }
+    let minute_bucket = secs.div_euclid(60);
+    let tz_offset_secs = chrono::Local::now().offset().local_minus_utc();
+    let cache_key = (minute_bucket, tz_offset_secs);
+    TIMESTAMP_FORMAT_CACHE.with(|slot| {
+        let mut cache = slot.borrow_mut();
+        if let Some(existing) = cache.get(&cache_key) {
+            return existing.clone();
+        }
+        let formatted = match chrono::DateTime::from_timestamp(minute_bucket * 60, 0) {
+            Some(utc) => utc
+                .with_timezone(&chrono::Local)
+                .format("%Y-%m-%d %H:%M")
+                .to_string(),
+            None => return "—".to_string(),
+        };
+        if cache.len() >= MAX_TIMESTAMP_CACHE {
+            cache.clear();
+        }
+        cache.insert(cache_key, formatted.clone());
+        formatted
+    })
 }

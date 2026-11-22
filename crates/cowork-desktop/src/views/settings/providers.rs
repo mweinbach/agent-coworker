@@ -1,8 +1,11 @@
 //! Models & Providers settings page (`apps/desktop/src/ui/settings/pages/ProvidersPage.tsx`).
 
-use std::collections::HashSet;
+use std::collections::HashMap;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+use std::sync::OnceLock;
 
-use rune::{El, ScrollSpec, col, el, icon, row, text};
+use rune::{El, ScrollSpec, col, el, icon, memo, row, text};
 use rune_kit::{
     Button, ButtonVariant, ControlSize, Dialog, IconButton, IconButtonVariant, Kit, TextInput,
 };
@@ -18,29 +21,36 @@ use crate::views::settings::manage_models_dialog;
 use crate::views::settings::primitives::{
     ConfirmDialogSpec, EmptyState, EntityIconSize, Section, StatusTone, callout_banner,
     confirm_dialog, entity_icon, find_management_target, management_targets, mini_switch,
-    search_input, settings_page, status_pill,
+    search_input, settings_page, status_pill, theme_memo_sig,
 };
 use crate::views::settings::providers_utils::{
     extract_rate_limit_hint, format_auth_method_label, model_display_name, provider_status_badge,
-    sort_and_filter_providers,
+    sort_and_filter_provider_refs,
 };
 use crate::views::settings::shell::PageContent;
+
+fn fallback_providers_slice() -> &'static [ProviderSummary] {
+    static FALLBACK: OnceLock<Vec<ProviderSummary>> = OnceLock::new();
+    FALLBACK.get_or_init(|| {
+        cowork_config::provider_specs()
+            .iter()
+            .filter(|spec| spec.user_facing)
+            .map(|spec| ProviderSummary {
+                id: spec.id.clone(),
+                name: spec.display_name.clone(),
+                configured: false,
+                models: Vec::new(),
+                config: Value::Null,
+                capabilities: Value::Null,
+            })
+            .collect()
+    })
+}
 
 /// Returns static user-facing provider placeholders from `config/providers.json` when the
 /// server catalog has not hydrated yet.
 pub fn fallback_providers() -> Vec<ProviderSummary> {
-    cowork_config::provider_specs()
-        .iter()
-        .filter(|spec| spec.user_facing)
-        .map(|spec| ProviderSummary {
-            id: spec.id.clone(),
-            name: spec.display_name.clone(),
-            configured: false,
-            models: Vec::new(),
-            config: Value::Null,
-            capabilities: Value::Null,
-        })
-        .collect()
+    fallback_providers_slice().to_vec()
 }
 
 fn is_user_facing_provider(id: &str) -> bool {
@@ -1108,11 +1118,13 @@ fn expanded_provider_body(
     body
 }
 
+#[allow(clippy::too_many_arguments)]
 fn provider_card(
     s: &AppState,
     summary: &ProviderSummary,
     status: Option<&ProviderStatusSummary>,
     active_ws: Option<&WorkspaceRecord>,
+    theme_sig: u64,
     k: &Kit,
     t: &ThemeTokens,
 ) -> El {
@@ -1122,87 +1134,108 @@ fn provider_card(
     let title = provider_display_title(summary);
     let subtitle = provider_subtitle(summary, status, connected);
 
-    let pid_toggle = summary.id.clone();
-    let initial_base = existing_base_url(summary);
-    let header_row = row()
-        .key(format!("provider-toggle-{}", summary.id))
-        .w_full()
-        .justify_between()
-        .items_center()
-        .gap(12.0)
-        .px(16.0)
-        .py(12.0)
-        .hover(t.hover)
-        .role("button")
-        .label(format!("Toggle {title} settings"))
-        .on_press(move |s: &mut AppState| {
-            if s.settings_ui.expanded_provider_id.as_deref() == Some(pid_toggle.as_str()) {
-                s.settings_ui.expanded_provider_id = None;
-            } else {
-                s.settings_ui.expanded_provider_id = Some(pid_toggle.clone());
-                if s.settings_ui.provider_draft_for.as_deref() != Some(pid_toggle.as_str()) {
-                    s.settings_ui.provider_draft_for = Some(pid_toggle.clone());
-                    s.settings_ui.api_key_edit = rune::TextEdit::new("");
-                    s.settings_ui.api_key_revealed = false;
-                    s.settings_ui.base_url_edit = rune::TextEdit::new(initial_base.as_str());
-                    s.settings_ui.oauth_code_edit = rune::TextEdit::new("");
+    let build_header_row = || {
+        let pid_toggle = summary.id.clone();
+        row()
+            .key(format!("provider-toggle-{}", summary.id))
+            .w_full()
+            .justify_between()
+            .items_center()
+            .gap(12.0)
+            .px(16.0)
+            .py(12.0)
+            .hover(t.hover)
+            .role("button")
+            .label(format!("Toggle {title} settings"))
+            .on_press(move |s: &mut AppState| {
+                if s.settings_ui.expanded_provider_id.as_deref() == Some(pid_toggle.as_str()) {
+                    s.settings_ui.expanded_provider_id = None;
+                } else {
+                    s.settings_ui.expanded_provider_id = Some(pid_toggle.clone());
+                    if s.settings_ui.provider_draft_for.as_deref() != Some(pid_toggle.as_str()) {
+                        let initial_base = s
+                            .provider_catalog
+                            .iter()
+                            .find(|entry| entry.id == pid_toggle)
+                            .map(existing_base_url)
+                            .unwrap_or_default();
+                        s.settings_ui.provider_draft_for = Some(pid_toggle.clone());
+                        s.settings_ui.api_key_edit = rune::TextEdit::new("");
+                        s.settings_ui.api_key_revealed = false;
+                        s.settings_ui.base_url_edit = rune::TextEdit::new(initial_base.as_str());
+                        s.settings_ui.oauth_code_edit = rune::TextEdit::new("");
+                    }
                 }
-            }
-        })
-        .child(
-            row()
-                .grow(1.0)
-                .min_w(0.0)
-                .items_center()
-                .gap(12.0)
-                .child(entity_icon(s, None, title, EntityIconSize::Md, k, t))
-                .child(
-                    col()
-                        .grow(1.0)
-                        .min_w(0.0)
-                        .gap(2.0)
-                        .child(
-                            text(title)
-                                .font(k.ty.ui_medium)
-                                .color(t.text_base)
-                                .truncate(),
+            })
+            .child(
+                row()
+                    .grow(1.0)
+                    .min_w(0.0)
+                    .items_center()
+                    .gap(12.0)
+                    .child(entity_icon(s, None, title, EntityIconSize::Md, k, t))
+                    .child(
+                        col()
+                            .grow(1.0)
+                            .min_w(0.0)
+                            .gap(2.0)
+                            .child(
+                                text(title)
+                                    .font(k.ty.ui_medium)
+                                    .color(t.text_base)
+                                    .truncate(),
+                            )
+                            .child(
+                                text(subtitle.as_str())
+                                    .font(k.ty.small)
+                                    .color(t.text_muted)
+                                    .truncate(),
+                            ),
+                    ),
+            )
+            .child(
+                row()
+                    .shrink()
+                    .items_center()
+                    .gap(8.0)
+                    .child(status_pill(badge_label, badge_tone, k, t))
+                    .child(
+                        icon(
+                            if expanded {
+                                &icons::CHEVRON_DOWN
+                            } else {
+                                &icons::CHEVRON_RIGHT
+                            },
+                            16.0,
                         )
-                        .child(
-                            text(subtitle)
-                                .font(k.ty.small)
-                                .color(t.text_muted)
-                                .truncate(),
-                        ),
-                ),
-        )
-        .child(
-            row()
-                .shrink()
-                .items_center()
-                .gap(8.0)
-                .child(status_pill(badge_label, badge_tone, k, t))
-                .child(
-                    icon(
-                        if expanded {
-                            &icons::CHEVRON_DOWN
-                        } else {
-                            &icons::CHEVRON_RIGHT
-                        },
-                        16.0,
-                    )
-                    .color(t.text_muted),
-                ),
-        );
+                        .color(t.text_muted),
+                    ),
+            )
+    };
 
-    let mut card = col().key(format!("provider-card-{}", summary.id)).w_full();
-    if expanded {
-        card = card.fill(t.elevated_bg);
+    if !expanded {
+        let mut h = DefaultHasher::new();
+        (
+            theme_sig,
+            summary.id.as_str(),
+            title,
+            subtitle.as_str(),
+            badge_label,
+            badge_tone as u8,
+        )
+            .hash(&mut h);
+        let key = format!("provider-card-{}", summary.id);
+        return memo(key.as_str(), h.finish(), || {
+            col().w_full().child(build_header_row())
+        });
     }
-    card = card.child(header_row);
-    if expanded {
-        card = card.child(expanded_provider_body(s, summary, status, active_ws, k, t));
-    }
-    card
+
+    col()
+        .key(format!("provider-card-{}", summary.id))
+        .w_full()
+        .fill(t.elevated_bg)
+        .child(build_header_row())
+        .child(expanded_provider_body(s, summary, status, active_ws, k, t))
 }
 
 /// Renders the Models & Providers settings page.
@@ -1217,28 +1250,49 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
         .map(|rt| rt.provider_statuses.as_slice())
         .unwrap_or(&[]);
 
-    let fallback = fallback_providers();
-    let visible_catalog: Vec<ProviderSummary> = if s.provider_catalog.is_empty() {
-        fallback
+    let status_map: HashMap<&str, &ProviderStatusSummary> = statuses
+        .iter()
+        .map(|st| (st.provider.as_str(), st))
+        .collect();
+
+    let raw_catalog: &[ProviderSummary] = if s.provider_catalog.is_empty() {
+        fallback_providers_slice()
     } else {
-        s.provider_catalog
+        &s.provider_catalog
+    };
+    let visible_catalog: Vec<&ProviderSummary> = if s.provider_catalog.is_empty() {
+        raw_catalog.iter().collect()
+    } else {
+        raw_catalog
             .iter()
             .filter(|entry| is_user_facing_provider(&entry.id))
-            .cloned()
             .collect()
     };
-    let catalog: &[ProviderSummary] = &visible_catalog;
 
-    let filtered =
-        sort_and_filter_providers(catalog, statuses, &s.settings_ui.provider_search_edit.text);
+    let filtered = sort_and_filter_provider_refs(
+        visible_catalog.iter().copied(),
+        &status_map,
+        &s.settings_ui.provider_search_edit.text,
+    );
     let mut connected_list = Vec::new();
     let mut available_list = Vec::new();
     for entry in filtered {
-        let status = statuses.iter().find(|st| st.provider == entry.id);
+        let status = status_map.get(entry.id.as_str()).copied();
         if is_provider_connected(entry, status, active_ws) {
             connected_list.push((entry, status));
         } else {
             available_list.push((entry, status));
+        }
+    }
+
+    let mut disconnected_all: Vec<&ProviderSummary> = Vec::new();
+    let mut connected_total_count: usize = 0;
+    for &p in &visible_catalog {
+        let st = status_map.get(p.id.as_str()).copied();
+        if is_provider_connected(p, st, active_ws) {
+            connected_total_count += 1;
+        } else {
+            disconnected_all.push(p);
         }
     }
 
@@ -1262,13 +1316,6 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
         );
     }
 
-    let disconnected_all: Vec<&ProviderSummary> = catalog
-        .iter()
-        .filter(|p| {
-            let st = statuses.iter().find(|st| st.provider == p.id);
-            !is_provider_connected(p, st, active_ws)
-        })
-        .collect();
     if !disconnected_all.is_empty() {
         header_actions.push(
             Button::new("New provider")
@@ -1295,15 +1342,6 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
         blocks.push(callout_banner(StatusTone::Danger, err, k, t));
     }
 
-    let connected_total: HashSet<&str> = catalog
-        .iter()
-        .filter(|p| {
-            let st = statuses.iter().find(|st| st.provider == p.id);
-            is_provider_connected(p, st, active_ws)
-        })
-        .map(|p| p.id.as_str())
-        .collect();
-
     let search_bar = row()
         .w_full()
         .items_center()
@@ -1324,8 +1362,11 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
             k,
         ))
         .child(status_pill(
-            format!("{} of {} connected", connected_total.len(), catalog.len()),
-            if connected_total.is_empty() {
+            format!(
+                "{connected_total_count} of {} connected",
+                visible_catalog.len()
+            ),
+            if connected_total_count == 0 {
                 StatusTone::Neutral
             } else {
                 StatusTone::Success
@@ -1339,6 +1380,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
         .description("Accounts and API keys active for chat and agent turns.")
         .child(search_bar);
 
+    let theme_sig = theme_memo_sig(s, t);
     if connected_list.is_empty() {
         let query_empty = s.settings_ui.provider_search_edit.text.trim().is_empty();
         let mut empty = EmptyState::new(if query_empty {
@@ -1367,8 +1409,8 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
         connected_section = connected_section.child(empty.build(k, t));
     } else {
         for (entry, status) in connected_list {
-            connected_section =
-                connected_section.child(provider_card(s, entry, status, active_ws, k, t));
+            connected_section = connected_section
+                .child(provider_card(s, entry, status, active_ws, theme_sig, k, t));
         }
     }
     blocks.push(connected_section.build(k, t));
@@ -1378,8 +1420,8 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
             .title("Available providers")
             .description("Expand any provider to enter an API key, OAuth flow, or local runtime.");
         for (entry, status) in available_list {
-            available_section =
-                available_section.child(provider_card(s, entry, status, active_ws, k, t));
+            available_section = available_section
+                .child(provider_card(s, entry, status, active_ws, theme_sig, k, t));
         }
         blocks.push(available_section.build(k, t));
     }
@@ -1476,41 +1518,48 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
             .build(k, &mut overlays);
     }
 
-    manage_models_dialog::push_overlay(s, active_ws_id, catalog, k, t, &mut overlays);
+    manage_models_dialog::push_overlay(s, active_ws_id, raw_catalog, k, t, &mut overlays);
 
-    let logout_id = s.settings_ui.provider_logout_confirm_id.clone();
-    let ws_logout = active_ws_id.map(str::to_owned);
-    confirm_dialog(
-        ConfirmDialogSpec {
-            key: "provider-logout-confirm",
-            open: logout_id.is_some(),
-            title: "Disconnect provider?",
-            description: format!(
-                "Removes stored authentication credentials for {} in this workspace.",
-                logout_id.as_deref().unwrap_or("this provider")
-            ),
-            confirm_label: "Disconnect",
-            danger: true,
-        },
-        |s| {
-            s.settings_ui.provider_logout_confirm_id = None;
-        },
-        move |s| {
-            if let (Some(ws_id), Some(pid)) =
-                (&ws_logout, s.settings_ui.provider_logout_confirm_id.take())
-            {
-                s.dispatch(Action::Settings(SettingsAction::LogoutProvider {
-                    workspace_id: ws_id.clone(),
-                    provider: pid,
-                }));
-            }
-        },
-        k,
-        &mut overlays,
-    );
+    if let Some(logout_id) = s.settings_ui.provider_logout_confirm_id.as_deref() {
+        let ws_logout = active_ws_id.map(str::to_owned);
+        confirm_dialog(
+            ConfirmDialogSpec {
+                key: "provider-logout-confirm",
+                open: true,
+                title: "Disconnect provider?",
+                description: format!(
+                    "Removes stored authentication credentials for {logout_id} in this workspace."
+                ),
+                confirm_label: "Disconnect",
+                danger: true,
+            },
+            |s| {
+                s.settings_ui.provider_logout_confirm_id = None;
+            },
+            move |s| {
+                if let (Some(ws_id), Some(pid)) =
+                    (&ws_logout, s.settings_ui.provider_logout_confirm_id.take())
+                {
+                    s.dispatch(Action::Settings(SettingsAction::LogoutProvider {
+                        workspace_id: ws_id.clone(),
+                        provider: pid,
+                    }));
+                }
+            },
+            k,
+            &mut overlays,
+        );
+    }
 
     blocks.extend(
-        crate::views::settings::workspaces::models_defaults_sections(s, k, t, &mut overlays),
+        crate::views::settings::workspaces::models_defaults_sections_with_status_map(
+            s,
+            active_ws_id,
+            &status_map,
+            k,
+            t,
+            &mut overlays,
+        ),
     );
 
     PageContent::simple(settings_page(blocks))

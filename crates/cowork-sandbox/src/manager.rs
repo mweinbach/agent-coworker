@@ -191,7 +191,7 @@ impl SandboxManager {
                     platform: Some("win32"),
                     ..Default::default()
                 });
-                if !probe.ready || !probe.integrity {
+                if !probe.ready || !probe.integrity || !probe.supports_deny_paths {
                     return SandboxCapabilities::none(probe.warning.unwrap_or_else(|| {
                         "Windows ProcessContainer (MXC/PSEC) sandbox is unavailable — commands run unsandboxed."
                             .to_owned()
@@ -262,7 +262,20 @@ impl SandboxManager {
             }
         };
 
-        if caps.backend == SandboxType::None || !caps.enforcement.integrity {
+        let windows_missing_deny_paths =
+            caps.backend == SandboxType::Windows && !caps.windows_supports_deny_paths;
+        if caps.backend == SandboxType::None
+            || !caps.enforcement.integrity
+            || windows_missing_deny_paths
+        {
+            let warning = if windows_missing_deny_paths {
+                Some(caps.warning.clone().unwrap_or_else(|| {
+                    "Windows ProcessContainer (MXC/PSEC) sandbox is unavailable: host PSEC runtime does not support deniedPaths required to protect credential stores."
+                        .to_owned()
+                }))
+            } else {
+                caps.warning.clone()
+            };
             return (
                 TransformedCommand {
                     file: inner.file.clone(),
@@ -272,7 +285,7 @@ impl SandboxManager {
                     unsandboxed: true,
                 },
                 SandboxEnforcement::NONE,
-                caps.warning.clone(),
+                warning,
             );
         }
 

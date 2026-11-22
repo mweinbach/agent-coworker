@@ -54,8 +54,8 @@ pub struct WindowsMxcBuildOptions<'a> {
     /// Credential directories/files the contained process must never read or write.
     pub read_denied_roots: &'a [PathBuf],
     /// Whether the host PSEC runtime advertises `base_container_supports_deny_paths`.
-    /// When `false`, `denied_paths` is omitted from the MXC request so startup is not rejected,
-    /// while overlapping grants are still stripped from `readwrite_paths` and `readonly_paths`.
+    /// Must be `true` to build an enforcing MXC request; when `false`, spec construction fails
+    /// closed rather than dropping credential denies inside writable/readable workspaces.
     pub supports_deny_paths: bool,
     /// Additional read-only tool/profile paths (populated on Windows from MXC's
     /// `available_tools_policy` and `user_profile_policy` `.readonly_paths`).
@@ -397,6 +397,9 @@ fn normalize_mxc_windows_path_with(
 
 /// Builds the complete cross-platform Windows MXC `ProcessContainer` request specification for
 /// `inner`, `policy`, `cwd`, and `child_env`.
+///
+/// Fails closed when `opts.supports_deny_paths` is `false` so credential directories inside
+/// readable or writable trees can never be exposed by dropping `denied_paths`.
 pub fn build_windows_mxc_spec(
     inner: &SandboxCommand,
     policy: &SandboxPolicy,
@@ -404,7 +407,7 @@ pub fn build_windows_mxc_spec(
     child_env: &HashMap<String, String>,
     host_env: &HashMap<String, String>,
     opts: &WindowsMxcBuildOptions<'_>,
-) -> WindowsMxcRequestSpec {
+) -> Result<WindowsMxcRequestSpec, String> {
     build_windows_mxc_spec_with(
         inner,
         policy,
@@ -427,7 +430,7 @@ fn build_windows_mxc_spec_with(
     opts: &WindowsMxcBuildOptions<'_>,
     raw_scratch: &[PathBuf],
     canon: &dyn Fn(&Path) -> PathBuf,
-) -> WindowsMxcRequestSpec {
+) -> Result<WindowsMxcRequestSpec, String> {
     let cwd_abs = if host_platform() == "win32" {
         absolutize_host_path(cwd)
     } else {
@@ -599,24 +602,26 @@ fn build_windows_mxc_spec_with(
         push_general_ro(extra);
     }
 
+    if !opts.supports_deny_paths {
+        return Err(
+            "Windows ProcessContainer (MXC/PSEC) sandbox requires deniedPaths support to protect credential stores; refusing to launch without deny-path enforcement."
+                .to_owned(),
+        );
+    }
+
     let working_directory = normalize_mxc_windows_path_with(&cwd_abs, canon, true)
         .unwrap_or_else(|| cwd_abs.to_string_lossy().into_owned());
-    let denied_paths = if opts.supports_deny_paths {
-        normalized_denied
-    } else {
-        Vec::new()
-    };
 
-    WindowsMxcRequestSpec {
+    Ok(WindowsMxcRequestSpec {
         command_line: format_windows_command_line(&inner.file, &inner.args),
         working_directory,
         readwrite_paths,
         readonly_paths,
         protected_readonly_paths,
-        denied_paths,
+        denied_paths: normalized_denied,
         allow_network: policy_allows_network(policy),
         environment: ensure_required_mxc_child_env(child_env, host_env),
-    }
+    })
 }
 
 fn join_win_child(parent: &Path, child: &str) -> PathBuf {
@@ -1137,7 +1142,7 @@ mod native_mxc {
             supports_deny_paths: opts.supports_deny_paths,
             extra_tool_readonly_paths: &discovered,
         };
-        let spec = build_windows_mxc_spec(inner, policy, cwd, child_env, host_env, &merged_opts);
+        let spec = build_windows_mxc_spec(inner, policy, cwd, child_env, host_env, &merged_opts)?;
         build_mxc_container_request(&spec)
     }
 
@@ -1278,11 +1283,16 @@ mod native_mxc {
             match build_request_for_host(inner, policy, cwd, child_env, host_env, &opts) {
                 Ok(built) => built,
                 Err(err) => {
+                    let error_code = if !opts.supports_deny_paths {
+                        SandboxErrorCode::SandboxRequired
+                    } else {
+                        SandboxErrorCode::BackendFailed
+                    };
                     return RawProcessOutcome {
                         stdout: String::new(),
                         stderr: format!("Windows MXC ProcessContainer policy error: {err}"),
                         exit_code: 1,
-                        error_code: Some(SandboxErrorCode::BackendFailed),
+                        error_code: Some(error_code),
                     };
                 }
             };
@@ -1819,7 +1829,8 @@ mod tests {
             },
             &scratch,
             &fake_8dot3_canon,
-        );
+        )
+        .expect("spec with deny-path support must succeed");
 
         assert!(!spec.allow_network);
         assert!(spec.readwrite_paths.contains(&r"C:\work\repo".to_owned()));
@@ -1923,13 +1934,14 @@ mod tests {
             &child_env,
             &host_env,
             &WindowsMxcBuildOptions {
-                read_denied_roots: &[ssh_dir],
-                supports_deny_paths: false,
+                read_denied_roots: std::slice::from_ref(&ssh_dir),
+                supports_deny_paths: true,
                 ..Default::default()
             },
             &scratch,
             &fake_8dot3_canon,
-        );
+        )
+        .expect("scoped spec with deny-path support must succeed");
         assert!(scoped.allow_network);
         assert!(
             scoped
@@ -1937,9 +1949,40 @@ mod tests {
                 .contains(&r"C:\work\repo\src".to_owned())
         );
         assert!(scoped.readonly_paths.contains(&r"C:\work\repo".to_owned()));
+        assert_eq!(scoped.denied_paths, vec![r"C:\Users\Alice\.ssh".to_owned()]);
+
+        // 2b. Hosts without `deniedPaths` support MUST fail closed instead of dropping denies
+        //     (preventing reads of `<workspace>\.cowork\auth\mcp-credentials.json` inside a
+        //     writable workspace whose `.cowork` carveout is only read-only).
+        let no_deny_err = build_windows_mxc_spec_with(
+            &SandboxCommand::new(
+                "pwsh.exe",
+                [
+                    "-NoProfile",
+                    "-Command",
+                    "Get-Content .cowork/auth/mcp-credentials.json",
+                ],
+            ),
+            &SandboxPolicy::WorkspaceWrite {
+                writable_roots: vec![repo.clone()],
+                writable_root_kinds: HashMap::new(),
+                network: true,
+            },
+            &repo,
+            &child_env,
+            &host_env,
+            &WindowsMxcBuildOptions {
+                read_denied_roots: &[PathBuf::from(r"C:\work\repo\.cowork\auth"), ssh_dir],
+                supports_deny_paths: false,
+                ..Default::default()
+            },
+            &scratch,
+            &fake_8dot3_canon,
+        )
+        .expect_err("MXC spec must fail closed when host PSEC lacks deny-path support");
         assert!(
-            scoped.denied_paths.is_empty(),
-            "denied_paths must be omitted when host PSEC lacks deny-path support"
+            no_deny_err.contains("deniedPaths"),
+            "unexpected error: {no_deny_err}"
         );
 
         // 3. Host existence filter keeps existing entries and drops nonexistent ones

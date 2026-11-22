@@ -367,7 +367,10 @@ pub fn interpret_windows_mxc_probe(
 ) -> WindowsSandboxProbeResult {
     match raw {
         Ok(snap)
-            if snap.base_container_api_present && snap.tier.is_some() && snap.error.is_none() =>
+            if snap.base_container_api_present
+                && snap.tier.is_some()
+                && snap.supports_deny_paths
+                && snap.error.is_none() =>
         {
             WindowsSandboxProbeResult {
                 ready: true,
@@ -375,7 +378,7 @@ pub fn interpret_windows_mxc_probe(
                 network: true,
                 process: true,
                 integrity: true,
-                supports_deny_paths: snap.supports_deny_paths,
+                supports_deny_paths: true,
                 supports_ingress_host_loopback_allow: snap.supports_ingress_host_loopback_allow,
                 tier: snap.tier,
                 warning: None,
@@ -391,6 +394,10 @@ pub fn interpret_windows_mxc_probe(
                 .unwrap_or_else(|| {
                     if !snap.base_container_api_present {
                         "native Windows PSEC ProcessContainer API (processmodel.dll) is not present on this Windows build".to_owned()
+                    } else if snap.tier.is_none() {
+                        "ProcessContainer tier is unavailable".to_owned()
+                    } else if !snap.supports_deny_paths {
+                        "host PSEC runtime does not support deniedPaths required to protect credential stores".to_owned()
                     } else {
                         "ProcessContainer tier is unavailable".to_owned()
                     }
@@ -561,6 +568,33 @@ mod tests {
             error: None,
         }));
         assert!(!missing_tier.ready);
+
+        // Hosts lacking `deniedPaths` support must fail closed so workspace credential
+        // stores (e.g. `.cowork/auth/mcp-credentials.json`) cannot be exposed inside a
+        // sandbox reported as enforcing.
+        let missing_deny_paths = interpret_windows_mxc_probe(Ok(WindowsMxcProbeSnapshot {
+            tier: Some("base_container".to_owned()),
+            base_container_api_present: true,
+            supports_deny_paths: false,
+            supports_ingress_host_loopback_allow: true,
+            warnings: Vec::new(),
+            error: None,
+        }));
+        assert!(!missing_deny_paths.ready);
+        assert!(
+            !missing_deny_paths.filesystem
+                && !missing_deny_paths.network
+                && !missing_deny_paths.process
+                && !missing_deny_paths.integrity
+        );
+        assert!(!missing_deny_paths.supports_deny_paths);
+        assert!(
+            missing_deny_paths
+                .warning
+                .as_deref()
+                .unwrap_or("")
+                .contains("deniedPaths")
+        );
 
         let err_res = interpret_windows_mxc_probe(Err("probe failed".to_owned()));
         assert!(!err_res.ready);

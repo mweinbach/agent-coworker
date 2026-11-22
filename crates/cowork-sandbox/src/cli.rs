@@ -731,6 +731,16 @@ fn run_transparent_cli_command(
         let host_env = sanitized_process_env();
         let manager = SandboxManager::new();
         let caps = manager.detect_capabilities(Some("win32"), Some(&host_env));
+        if caps.backend != SandboxType::Windows
+            || !caps.enforcement.integrity
+            || !caps.windows_supports_deny_paths
+        {
+            let reason = caps.warning.as_deref().unwrap_or(
+                "Windows ProcessContainer (MXC/PSEC) sandbox requires deniedPaths support",
+            );
+            let _ = writeln!(std::io::stderr(), "SANDBOX_REQUIRED: {reason}");
+            return 125;
+        }
         return crate::windows::run_windows_mxc_inherited(
             inner,
             policy,
@@ -880,7 +890,10 @@ fn exec_windows_mxc_stage(
     let host_env = sanitized_process_env();
     let manager = SandboxManager::new();
     let caps = manager.detect_capabilities(Some("win32"), Some(&host_env));
-    if caps.backend != SandboxType::Windows || !caps.enforcement.integrity {
+    if caps.backend != SandboxType::Windows
+        || !caps.enforcement.integrity
+        || !caps.windows_supports_deny_paths
+    {
         let reason = caps
             .warning
             .as_deref()

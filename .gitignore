@@ -1,53 +1,96 @@
+# Dependencies
 node_modules/
-dist/
-/target/
 
-# Build output
+# Rust / Cargo
+/target/
+**/*.rs.bk
+*.pdb
+*.profraw
+*.profdata
+
+# Build & test output
 dist/
 coverage/
 .nyc_output/
 *.tsbuildinfo
+*.tsbuildinfo.*
 .tsbuildinfo-*
+*.tgz
+/apps/mobile/dist-export/
 
-# Frontend tooling caches
+# Tooling & runtime caches
 .turbo/
 .cache/
+cowork-bun-transpiler-cache/
+__pycache__/
+*.py[cod]
 
-# Agent runtime dirs
-output/
-uploads/
-.ModelScratchpad/
+# Cowork runtime & local state
+.cowork/
 .agent/
 .agent-user
-.cowork/
+.ModelScratchpad/
+output/
+uploads/
+/logs/
+/native/
 /windows-sandbox/
 
-# Env / misc
+# Environment & secrets
 .env
 .env.*
 !.env.example
 !.env.template
-*.log
-.DS_Store
 
-# Local editor / tool state
+# Signing & local certificates
+*.jks
+*.p8
+*.p12
+*.mobileprovision
+
+# Logs & OS metadata
+*.log
+*.log.*
+.DS_Store
+._*
+Thumbs.db
+Desktop.ini
+
+# Editors & IDEs
 .vscode/
 .idea/
 *.swp
+*.swo
 *~
-__pycache__/
+
+# Local AI / dev tool state
 .claude/.supermemory-claude/
 .claude/scheduled_tasks.lock
+.claude/scheduled_tasks.json
 .claude/settings.local.json
+.claude/worktrees/
+.claude/checkpoints/
+.claude/mailbox/
+.claude/routines/.state/
+.claude/agent-registry.json
+.claude/agent-memory-local/
+.claude/first-run
+.claude/assistant-daemon-state.json
 .codex/config.toml
 .cursor/hooks/state/
 .cursor/plans/
-/native
-# heroui-agents-md
+.opencode/node_modules/
+.opencode/memory/
+.opencode/package.json
+.opencode/package-lock.json
+.opencode/bun.lock
+.opencode/.gitignore
+.conductor/settings.local.json
+.conductor/settings.local.toml
+.delta/worktrees/
+.delta/clones/
+.impeccable/
 .heroui-docs/
-/apps/mobile/dist-export
-/.omx
-
-# Additional caches
-cowork-bun-transpiler-cache/
 .antigravitycli/
+.sc/
+/.omx/

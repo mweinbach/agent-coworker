@@ -403,6 +403,7 @@ mod tests {
                 cwd: None,
                 reason: None,
                 risk_code: None,
+                dangerous: false,
             });
         assert!(matches!(
             thread_row_status(&s, "t1"),

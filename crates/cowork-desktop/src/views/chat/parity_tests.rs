@@ -300,6 +300,7 @@ fn build_populated_thread_state(dark: bool) -> AppState {
             cwd: Some("/tmp/agent-coworker".into()),
             reason: Some("Run unit tests after editing composer.rs".into()),
             risk_code: Some("workspace_command".into()),
+            dangerous: false,
         }],
         ..Default::default()
     };
@@ -2492,6 +2493,7 @@ fn approval_and_escalation_code_blocks_wrap_inside_padded_rounded_frame() {
                         .to_string(),
                 ),
                 risk_code: Some(risk_code.to_string()),
+                dangerous: risk_code.contains("dangerous"),
             },
             ChatInteraction::FileChangeApproval {
                 request_id: JsonRpcLiteId::String(format!("req-file-{name}")),

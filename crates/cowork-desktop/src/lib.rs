@@ -368,6 +368,7 @@ fn scene_chat_demo(state: &mut AppState) {
             cwd: Some("/tmp/cowork-demo".to_string()),
             reason: Some("Verify updated theme and reducer tests".to_string()),
             risk_code: Some("low".to_string()),
+            dangerous: false,
         });
     rt.agents.push(state::ThreadAgentSummary {
         agent_id: "sub-rev-1".to_string(),

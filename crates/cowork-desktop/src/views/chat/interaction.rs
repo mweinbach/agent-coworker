@@ -233,6 +233,7 @@ pub fn build_interaction_card(
             cwd,
             reason,
             risk_code,
+            dangerous,
         } => build_command_approval_card(
             k,
             t,
@@ -244,6 +245,7 @@ pub fn build_interaction_card(
             cwd.as_deref(),
             reason.as_deref(),
             risk_code.as_deref(),
+            *dangerous,
             position,
             total,
             lookup_interaction_error(interaction_errors, request_id, item_id),
@@ -374,6 +376,7 @@ fn build_command_approval_card(
     cwd: Option<&str>,
     reason: Option<&str>,
     risk_code: Option<&str>,
+    dangerous_flag: bool,
     position: usize,
     total: usize,
     error_msg: Option<&str>,
@@ -381,7 +384,9 @@ fn build_command_approval_card(
     let req_key = request_id_key(request_id);
     let sandbox = risk_code.is_some_and(|r| r.contains("sandbox"))
         || reason.is_some_and(|r| r.to_ascii_lowercase().contains("sandbox"));
-    let dangerous = risk_code.is_some_and(|r| r.contains("dangerous"));
+    let dangerous = dangerous_flag
+        || risk_code.is_some_and(|r| r.to_ascii_lowercase().contains("dangerous"))
+        || reason.is_some_and(|r| r.to_ascii_lowercase().contains("dangerous"));
 
     let (heading, badge, tone) = command_approval_title_and_badge(sandbox, dangerous, risk_code);
     let is_danger = matches!(tone, StatusPillTone::Danger);
@@ -1240,5 +1245,13 @@ mod tests {
         let fallback = parse_ask_prompt_spec(&Value::Null);
         assert!(!fallback.is_multi_structured);
         assert_eq!(fallback.questions[0].question, ASK_QUESTION_FALLBACK);
+    }
+
+    #[test]
+    fn canonical_dangerous_flag_renders_high_risk_command_approval_header() {
+        let (heading, badge, tone) = command_approval_title_and_badge(false, true, None);
+        assert_eq!(heading, "Run potentially dangerous command?");
+        assert_eq!(badge, "High risk");
+        assert!(matches!(tone, StatusPillTone::Danger));
     }
 }

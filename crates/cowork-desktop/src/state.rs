@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use base64::Engine as _;
 use cowork_protocol::{
-    CommandInfo, CommandListParams, ConnectorsOpenAiNativeListParams,
+    CommandExecuteParams, CommandInfo, CommandListParams, ConnectorsOpenAiNativeListParams,
     ConnectorsOpenAiNativeRefreshParams, ConnectorsOpenAiNativeSetEnabledParams,
     CreationPreflightParams, CreationPreflightResult, CreationRepairAction, InitializeResult,
     JsonRpcLiteId, MemoryAdvancedDeleteParams, MemoryAdvancedListParams, MemoryDeleteParams,
@@ -574,6 +574,8 @@ pub enum ChatInteraction {
         cwd: Option<String>,
         reason: Option<String>,
         risk_code: Option<String>,
+        #[serde(default)]
+        dangerous: bool,
     },
     FileChangeApproval {
         request_id: JsonRpcLiteId,
@@ -7496,24 +7498,44 @@ impl AppState {
             .client_message_id
             .get_or_insert_with(|| uuid::Uuid::new_v4().to_string())
             .clone();
-        let input = build_turn_input(&pending.text, &pending.attachments);
-        let references = (!pending.references.is_empty()).then(|| {
-            pending
-                .references
-                .iter()
-                .filter_map(|r| serde_json::to_value(r).ok())
-                .collect()
-        });
-        let params = TurnStartParams {
-            thread_id: thread_id.to_string(),
-            client_message_id: pending.client_message_id.clone(),
-            input,
-            references,
-            retry: None,
-            tools: None,
+        let slash_command = if pending.attachments.is_empty() && pending.references.is_empty() {
+            parse_recognized_slash_command(
+                &pending.text,
+                self.commands_by_workspace
+                    .get(workspace_id)
+                    .map(Vec::as_slice),
+            )
+        } else {
+            None
         };
-        let Some(request_id) = self.send_ws_typed(workspace_id, "turn/start", &params, false)
-        else {
+        let request_id = if let Some((command_name, command_args)) = slash_command {
+            let params = CommandExecuteParams {
+                thread_id: thread_id.to_string(),
+                name: command_name,
+                arguments: Some(command_args),
+                client_message_id: Some(client_id.clone()),
+            };
+            self.send_ws_typed(workspace_id, "command/execute", &params, false)
+        } else {
+            let input = build_turn_input(&pending.text, &pending.attachments);
+            let references = (!pending.references.is_empty()).then(|| {
+                pending
+                    .references
+                    .iter()
+                    .filter_map(|r| serde_json::to_value(r).ok())
+                    .collect()
+            });
+            let params = TurnStartParams {
+                thread_id: thread_id.to_string(),
+                client_message_id: pending.client_message_id.clone(),
+                input,
+                references,
+                retry: None,
+                tools: None,
+            };
+            self.send_ws_typed(workspace_id, "turn/start", &params, false)
+        };
+        let Some(request_id) = request_id else {
             return;
         };
         let timestamp_ms = self.wall_clock_ms();
@@ -10930,6 +10952,10 @@ impl AppState {
                             .get("riskCode")
                             .and_then(|v| v.as_str())
                             .map(str::to_string),
+                        dangerous: params
+                            .get("dangerous")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false),
                     }
                 };
                 upsert_pending_interaction(&mut rt.pending_interactions, interaction);
@@ -10969,7 +10995,7 @@ impl AppState {
             conversation_import::receive(self, workspace_id, request_id, method, result);
             return;
         }
-        if method == "turn/start" {
+        if matches!(method, "turn/start" | "command/execute") {
             self.finish_composer_turn(request_id, &result);
         } else if method == "turn/steer" {
             self.finish_composer_steer(request_id, &result);
@@ -13732,6 +13758,38 @@ fn inject_cwd(params: &mut Value, cwd: Option<String>) {
     if let (Some(c), Some(obj)) = (cwd, params.as_object_mut()) {
         obj.entry("cwd".to_string()).or_insert(Value::String(c));
     }
+}
+
+fn parse_recognized_slash_command(
+    text: &str,
+    commands: Option<&[CommandInfo]>,
+) -> Option<(String, String)> {
+    let trimmed = text.trim();
+    let rest = trimmed.strip_prefix('/')?;
+    let (raw_name, raw_args) = match rest.find(char::is_whitespace) {
+        Some(idx) => (&rest[..idx], rest[idx..].trim()),
+        None => (rest, ""),
+    };
+    if raw_name.is_empty() || raw_name.contains('/') || raw_name.contains('\\') {
+        return None;
+    }
+    if let Some(catalog) = commands {
+        if let Some(exact) = catalog.iter().find(|cmd| cmd.name == raw_name) {
+            return Some((exact.name.clone(), raw_args.to_string()));
+        }
+        if let Some(ci) = catalog
+            .iter()
+            .find(|cmd| cmd.name.eq_ignore_ascii_case(raw_name))
+        {
+            return Some((ci.name.clone(), raw_args.to_string()));
+        }
+    }
+    for builtin in ["task", "init", "review"] {
+        if raw_name.eq_ignore_ascii_case(builtin) {
+            return Some((builtin.to_string(), raw_args.to_string()));
+        }
+    }
+    None
 }
 
 fn build_turn_input(text: &str, attachments: &[TurnAttachmentInputPart]) -> TurnInput {
@@ -25124,5 +25182,158 @@ mod tests {
         let art_after = &state.active_task.as_ref().unwrap().artifacts[0];
         assert_eq!(art_after.latest_version_id.as_deref(), Some("ver-2"));
         assert_eq!(art_after.accepted_version_id.as_deref(), Some("ver-2"));
+    }
+
+    #[test]
+    fn command_approval_server_request_preserves_canonical_dangerous_flag() {
+        let mut state = AppState::default();
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-1", "App", "/tmp/app", 1));
+        state.threads.push(ThreadRecord {
+            id: "th-1".to_string(),
+            workspace_id: "ws-1".to_string(),
+            title: "Chat".to_string(),
+            ..ThreadRecord::default()
+        });
+
+        state.apply_store_event(StoreEvent::WsServerRequest {
+            workspace_id: "ws-1".to_string(),
+            id: JsonRpcLiteId::String("req-cmd-1".to_string()),
+            method: "item/commandExecution/requestApproval".to_string(),
+            params: json!({
+                "threadId": "th-1",
+                "itemId": "commandExecution:req-cmd-1",
+                "command": "rm -rf build",
+                "dangerous": true,
+                "reason": "matches_dangerous_pattern"
+            }),
+        });
+
+        let rt = state.thread_runtime_by_id.get("th-1").unwrap();
+        assert_eq!(rt.pending_interactions.len(), 1);
+        match &rt.pending_interactions[0] {
+            ChatInteraction::CommandApproval {
+                command,
+                reason,
+                risk_code,
+                dangerous,
+                ..
+            } => {
+                assert_eq!(command.as_deref(), Some("rm -rf build"));
+                assert_eq!(reason.as_deref(), Some("matches_dangerous_pattern"));
+                assert_eq!(*risk_code, None);
+                assert!(*dangerous);
+            }
+            other => panic!("expected CommandApproval, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn recognized_slash_commands_route_through_command_execute_preserving_client_message_id() {
+        let mut state = AppState::default();
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-1", "App", "/tmp/app", 1));
+        state.threads.push(ThreadRecord {
+            id: "th-1".to_string(),
+            workspace_id: "ws-1".to_string(),
+            title: "Chat".to_string(),
+            ..ThreadRecord::default()
+        });
+        state.commands_by_workspace.insert(
+            "ws-1".to_string(),
+            vec![CommandInfo {
+                name: "deploy".to_string(),
+                description: Some("Deploy service".to_string()),
+                source: "command".to_string(),
+                hints: vec!["$ARGUMENTS".to_string()],
+            }],
+        );
+        state.services.emitted_ws_commands.clear();
+
+        // 1. Built-in `/task` routes through `command/execute` even if absent from `commands_by_workspace`.
+        state.send_composer_turn(
+            "ws-1",
+            "th-1",
+            PendingThreadMessage {
+                text: "/task Build release notes".to_string(),
+                attachments: Vec::new(),
+                references: Vec::new(),
+                client_message_id: Some("cid-task-1".to_string()),
+                draft_submission: None,
+            },
+        );
+        let sent_task = match state.services.emitted_ws_commands.pop().unwrap() {
+            WsCommand::SendRequest {
+                request_id,
+                method,
+                params,
+                ..
+            } => (request_id, method, params),
+            other => panic!("expected WsCommand::SendRequest, got {other:?}"),
+        };
+        assert_eq!(sent_task.1, "command/execute");
+        assert_eq!(sent_task.2["threadId"], json!("th-1"));
+        assert_eq!(sent_task.2["name"], json!("task"));
+        assert_eq!(sent_task.2["arguments"], json!("Build release notes"));
+        assert_eq!(sent_task.2["clientMessageId"], json!("cid-task-1"));
+
+        // Completing `command/execute` reconciles `composer_submission` via `finish_composer_turn`.
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-1".to_string(),
+            request_id: sent_task.0,
+            method: "command/execute".to_string(),
+            result: Ok(json!({ "turn": { "id": "turn-1" } })),
+        });
+        assert!(
+            state
+                .thread_runtime_by_id
+                .get("th-1")
+                .unwrap()
+                .composer_submission
+                .is_none()
+        );
+
+        // 2. Workspace catalog command `/deploy` routes through `command/execute`.
+        state.services.emitted_ws_commands.clear();
+        state.send_composer_turn(
+            "ws-1",
+            "th-1",
+            PendingThreadMessage {
+                text: "/DEPLOY staging".to_string(),
+                attachments: Vec::new(),
+                references: Vec::new(),
+                client_message_id: Some("cid-deploy-1".to_string()),
+                draft_submission: None,
+            },
+        );
+        let sent_deploy = match state.services.emitted_ws_commands.pop().unwrap() {
+            WsCommand::SendRequest { method, params, .. } => (method, params),
+            other => panic!("expected WsCommand::SendRequest, got {other:?}"),
+        };
+        assert_eq!(sent_deploy.0, "command/execute");
+        assert_eq!(sent_deploy.1["name"], json!("deploy"));
+        assert_eq!(sent_deploy.1["arguments"], json!("staging"));
+        assert_eq!(sent_deploy.1["clientMessageId"], json!("cid-deploy-1"));
+
+        // 3. Unrecognized slash text / file path stays on `turn/start`.
+        state.services.emitted_ws_commands.clear();
+        state.send_composer_turn(
+            "ws-1",
+            "th-1",
+            PendingThreadMessage {
+                text: "/usr/bin/env check this path".to_string(),
+                attachments: Vec::new(),
+                references: Vec::new(),
+                client_message_id: Some("cid-path-1".to_string()),
+                draft_submission: None,
+            },
+        );
+        let sent_plain = match state.services.emitted_ws_commands.pop().unwrap() {
+            WsCommand::SendRequest { method, .. } => method,
+            other => panic!("expected WsCommand::SendRequest, got {other:?}"),
+        };
+        assert_eq!(sent_plain, "turn/start");
     }
 }

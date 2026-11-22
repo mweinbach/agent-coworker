@@ -228,13 +228,39 @@ pub fn any_background_unread(s: &AppState) -> bool {
         .any(|rt| rt.unread || !rt.pending_interactions.is_empty())
 }
 
+/// Zero-allocation ASCII case-insensitive substring check when `needle_lower` is ASCII,
+/// falling back to Unicode lowercasing only for non-ASCII queries.
+pub(crate) fn contains_case_insensitive(haystack: &str, needle_lower: &str) -> bool {
+    if needle_lower.is_empty() {
+        return true;
+    }
+    if needle_lower.is_ascii() {
+        let nb = needle_lower.as_bytes();
+        let hb = haystack.as_bytes();
+        if nb.len() > hb.len() {
+            return false;
+        }
+        return hb
+            .windows(nb.len())
+            .any(|w| w.iter().zip(nb).all(|(a, b)| a.to_ascii_lowercase() == *b));
+    }
+    haystack.to_lowercase().contains(needle_lower)
+}
+
 /// Returns non-archived threads sorted newest-first, matching `sidebarSearch` query if non-empty.
 pub fn filtered_threads<'a>(
     s: &'a AppState,
     query: &str,
     needs_input_only: bool,
 ) -> Vec<&'a ThreadRecord> {
-    let q = query.trim().to_lowercase();
+    let trimmed = query.trim();
+    let q = if trimmed.is_empty() {
+        String::new()
+    } else if trimmed.is_ascii() {
+        trimmed.to_ascii_lowercase()
+    } else {
+        trimmed.to_lowercase()
+    };
     let mut threads: Vec<&ThreadRecord> = s
         .threads
         .iter()
@@ -250,10 +276,10 @@ pub fn filtered_threads<'a>(
         })
         .filter(|t| {
             q.is_empty()
-                || t.title.to_lowercase().contains(&q)
+                || contains_case_insensitive(&t.title, &q)
                 || t.preview
                     .as_deref()
-                    .is_some_and(|p| p.to_lowercase().contains(&q))
+                    .is_some_and(|p| contains_case_insensitive(p, &q))
         })
         .collect();
     threads.sort_by_key(|b| std::cmp::Reverse(b.updated_at));

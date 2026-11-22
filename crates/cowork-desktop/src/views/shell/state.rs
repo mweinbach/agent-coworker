@@ -29,6 +29,36 @@ pub struct PendingTrashEntry {
     pub is_dir: bool,
 }
 
+/// Duration window keeping split pane spring motion and closing pane content mounted.
+pub(crate) const PANE_ANIM_DURATION_SECS: f64 = 0.35;
+
+/// Deadline tracking an active split pane open/collapse spring using simulated `app_elapsed_secs`
+/// when available (live app & benchmarks) or wall-clock `Instant` in headless `Runtime` tests.
+#[derive(Clone, Copy, Debug)]
+pub enum PaneAnimDeadline {
+    ElapsedSecs(f64),
+    WallClock(std::time::Instant),
+}
+
+impl PaneAnimDeadline {
+    pub(crate) fn after(app_elapsed_secs: f64, duration_secs: f64) -> Self {
+        if app_elapsed_secs > 0.0 {
+            Self::ElapsedSecs(app_elapsed_secs + duration_secs)
+        } else {
+            Self::WallClock(
+                std::time::Instant::now() + std::time::Duration::from_secs_f64(duration_secs),
+            )
+        }
+    }
+
+    pub(crate) fn is_active(self, app_elapsed_secs: f64) -> bool {
+        match self {
+            Self::ElapsedSecs(until) => app_elapsed_secs < until,
+            Self::WallClock(until) => std::time::Instant::now() < until,
+        }
+    }
+}
+
 /// Ephemeral UI state owned by `views/shell` (wired onto `AppState` when Step 2 integrates it).
 #[derive(Clone)]
 pub struct ShellUiState {
@@ -86,6 +116,12 @@ pub struct ShellUiState {
     pub last_canvas_key: Option<String>,
     pub sidebar_resize_start_width: Option<f32>,
     pub inspector_resize_start_width: Option<f32>,
+    pub sidebar_last_rendered_open: bool,
+    pub inspector_last_rendered_open: bool,
+    pub sidebar_anim_until: Option<PaneAnimDeadline>,
+    pub inspector_anim_until: Option<PaneAnimDeadline>,
+    pub last_route_view: Option<ViewId>,
+    pub sidebar_reorder_rev: u64,
     pub menu_bar: super::menu_bar::MenuBarUiState,
 }
 
@@ -257,47 +293,167 @@ impl Default for ShellUiState {
             last_canvas_key: None,
             sidebar_resize_start_width: None,
             inspector_resize_start_width: None,
+            sidebar_last_rendered_open: true,
+            inspector_last_rendered_open: false,
+            sidebar_anim_until: None,
+            inspector_anim_until: None,
+            last_route_view: None,
+            sidebar_reorder_rev: 0,
             menu_bar: super::menu_bar::MenuBarUiState::default(),
         }
     }
 }
 
-/// Returns a stable key for the active Canvas session when Canvas handles the right rail.
-pub(crate) fn active_canvas_target_key(s: &AppState) -> Option<String> {
+/// Zero-allocation reference to the active Canvas target key for hot layout and view paths.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ActiveCanvasKeyRef<'a> {
+    Fixture {
+        workspace_id: &'a str,
+        path: &'a str,
+    },
+    Session {
+        workspace_id: &'a str,
+        document_id: &'a str,
+        generation: u64,
+    },
+    Preview {
+        workspace_id: &'a str,
+        path: &'a str,
+    },
+}
+
+impl ActiveCanvasKeyRef<'_> {
+    pub(crate) fn matches_stored(self, stored: Option<&str>) -> bool {
+        let Some(stored) = stored else {
+            return false;
+        };
+        match self {
+            Self::Fixture { workspace_id, path } => {
+                stored
+                    .strip_prefix("fixture:")
+                    .and_then(|rest| rest.strip_prefix(workspace_id))
+                    .and_then(|rest| rest.strip_prefix(':'))
+                    == Some(path)
+            }
+            Self::Preview { workspace_id, path } => {
+                stored
+                    .strip_prefix("preview:")
+                    .and_then(|rest| rest.strip_prefix(workspace_id))
+                    .and_then(|rest| rest.strip_prefix(':'))
+                    == Some(path)
+            }
+            Self::Session {
+                workspace_id,
+                document_id,
+                generation,
+            } => {
+                stored
+                    .strip_prefix("session:")
+                    .and_then(|rest| rest.strip_prefix(workspace_id))
+                    .and_then(|rest| rest.strip_prefix(':'))
+                    .and_then(|rest| rest.strip_prefix(document_id))
+                    .and_then(|rest| rest.strip_prefix(':'))
+                    .and_then(|gen_str| gen_str.parse::<u64>().ok())
+                    == Some(generation)
+            }
+        }
+    }
+
+    pub(crate) fn to_owned_key(self) -> String {
+        match self {
+            Self::Fixture { workspace_id, path } => format!("fixture:{workspace_id}:{path}"),
+            Self::Session {
+                workspace_id,
+                document_id,
+                generation,
+            } => format!("session:{workspace_id}:{document_id}:{generation}"),
+            Self::Preview { workspace_id, path } => format!("preview:{workspace_id}:{path}"),
+        }
+    }
+}
+
+/// Returns a borrowed key for the active Canvas session without allocating.
+pub(crate) fn active_canvas_target_key_ref(s: &AppState) -> Option<ActiveCanvasKeyRef<'_>> {
     if let Some(ref fx) = s.chat_ui.canvas.fixture {
-        return Some(format!("fixture:{}:{}", fx.workspace_id, fx.path));
+        return Some(ActiveCanvasKeyRef::Fixture {
+            workspace_id: fx.workspace_id.as_str(),
+            path: fx.path.as_str(),
+        });
     }
     if !s.feature_flags.get("canvas").copied().unwrap_or(false) {
         return None;
     }
     if let Some(ref doc) = s.canvas_document {
-        return Some(format!(
-            "session:{}:{}:{}",
-            doc.workspace_id, doc.document_id, doc.generation
-        ));
+        return Some(ActiveCanvasKeyRef::Session {
+            workspace_id: doc.workspace_id.as_str(),
+            document_id: doc.document_id.as_str(),
+            generation: doc.generation,
+        });
     }
     let preview = s.active_file_preview.as_ref()?;
     if preview.is_binary {
         return None;
     }
     crate::views::chat::canvas::classify_canvas_path(&preview.path)?;
-    Some(format!("preview:{}:{}", preview.workspace_id, preview.path))
+    Some(ActiveCanvasKeyRef::Preview {
+        workspace_id: preview.workspace_id.as_str(),
+        path: preview.path.as_str(),
+    })
+}
+
+/// Returns `true` when Canvas currently handles the right rail (zero allocations).
+pub(crate) fn has_active_canvas_target(s: &AppState) -> bool {
+    active_canvas_target_key_ref(s).is_some()
+}
+
+/// Returns a stable key for the active Canvas session when Canvas handles the right rail.
+pub(crate) fn active_canvas_target_key(s: &AppState) -> Option<String> {
+    active_canvas_target_key_ref(s).map(ActiveCanvasKeyRef::to_owned_key)
 }
 
 /// True when the active right rail (`Context`, `Task`, or `Canvas`) renders as an overlay drawer.
 pub(crate) fn right_rail_uses_overlay(s: &AppState) -> bool {
-    let uses_wide_overlay = active_canvas_target_key(s).is_some() || s.route().view == ViewId::Task;
+    let uses_wide_overlay = has_active_canvas_target(s) || s.route().view == ViewId::Task;
     s.shell_ui.viewport_width < super::helpers::NARROW_BREAKPOINT
         || (uses_wide_overlay && s.shell_ui.viewport_width < super::helpers::FULL_BREAKPOINT)
 }
 
 /// True when the compact/narrow right overlay drawer should be visible.
 pub(crate) fn is_right_overlay_visible(s: &AppState) -> bool {
-    if let Some(key) = active_canvas_target_key(s) {
+    if let Some(key_ref) = active_canvas_target_key_ref(s) {
         s.shell_ui.right_overlay_open
-            || s.shell_ui.canvas_overlay_dismissed_key.as_deref() != Some(key.as_str())
+            || !key_ref.matches_stored(s.shell_ui.canvas_overlay_dismissed_key.as_deref())
     } else {
         s.shell_ui.right_overlay_open
+    }
+}
+
+/// Toggles the right inspector / Canvas rail, exiting Canvas maximized mode cleanly when active.
+pub(crate) fn toggle_right_inspector(s: &mut AppState) {
+    let canvas_active = has_active_canvas_target(s);
+    if canvas_active && s.chat_ui.canvas.maximized {
+        s.chat_ui.canvas.maximized = false;
+        if right_rail_uses_overlay(s) {
+            s.shell_ui.right_overlay_open = false;
+            s.shell_ui.canvas_overlay_dismissed_key = active_canvas_target_key(s);
+        } else {
+            s.shell_ui.canvas_pane.set_open(false);
+        }
+        return;
+    }
+    if right_rail_uses_overlay(s) {
+        let next_open = !is_right_overlay_visible(s);
+        s.shell_ui.right_overlay_open = next_open;
+        if next_open {
+            s.shell_ui.left_overlay_open = false;
+            s.shell_ui.canvas_overlay_dismissed_key = None;
+        } else {
+            s.shell_ui.canvas_overlay_dismissed_key = active_canvas_target_key(s);
+        }
+    } else if canvas_active {
+        s.shell_ui.canvas_pane.toggle();
+    } else {
+        s.dispatch(Action::Shell(ShellAction::ToggleContextSidebar));
     }
 }
 
@@ -398,9 +554,6 @@ fn handle_key_inner(s: &mut AppState, ev: &KeyEvent, tx: &mut Tx) -> bool {
     }
 
     if s.command_palette_open {
-        let query = s.command_palette_query.trim().to_ascii_lowercase();
-        let items = super::palette::collect_palette_items(s, &query);
-        let max_idx = items.len().saturating_sub(1);
         match ev.key {
             Key::Up => {
                 s.shell_ui.command_palette_selected =
@@ -408,13 +561,19 @@ fn handle_key_inner(s: &mut AppState, ev: &KeyEvent, tx: &mut Tx) -> bool {
                 return true;
             }
             Key::Down => {
+                let query = s.command_palette_query.trim().to_lowercase();
+                let items = super::palette::collect_palette_items(s, &query);
                 if !items.is_empty() {
+                    let max_idx = items.len().saturating_sub(1);
                     s.shell_ui.command_palette_selected =
                         (s.shell_ui.command_palette_selected + 1).min(max_idx);
                 }
                 return true;
             }
             Key::Enter => {
+                let query = s.command_palette_query.trim().to_lowercase();
+                let items = super::palette::collect_palette_items(s, &query);
+                let max_idx = items.len().saturating_sub(1);
                 if let Some(item) = items.get(s.shell_ui.command_palette_selected.min(max_idx)) {
                     let act = item.action.clone();
                     super::palette::close_command_palette(s);
@@ -427,17 +586,16 @@ fn handle_key_inner(s: &mut AppState, ev: &KeyEvent, tx: &mut Tx) -> bool {
     }
 
     if s.shell_ui.search_overlay_open {
-        let items = super::overlays::collect_search_overlay_items(s);
-        let max_idx = items.len().saturating_sub(1);
-        for (slot, digit) in ['1', '2', '3', '4', '5', '6', '7', '8', '9']
-            .into_iter()
-            .enumerate()
-        {
-            if ev.is_command(digit)
-                && !ev.mods.alt
-                && !ev.mods.shift
-                && let Some(item) = items.get(slot)
-            {
+        let quick_slot = if !ev.mods.alt && !ev.mods.shift {
+            ['1', '2', '3', '4', '5', '6', '7', '8', '9']
+                .into_iter()
+                .position(|digit| ev.is_command(digit))
+        } else {
+            None
+        };
+        if let Some(slot) = quick_slot {
+            let items = super::overlays::collect_search_overlay_items(s);
+            if let Some(item) = items.get(slot) {
                 s.shell_ui.search_overlay_open = false;
                 s.shell_ui.search_selected = 0;
                 s.dispatch(item.action.clone());
@@ -450,12 +608,16 @@ fn handle_key_inner(s: &mut AppState, ev: &KeyEvent, tx: &mut Tx) -> bool {
                 return true;
             }
             Key::Down => {
+                let items = super::overlays::collect_search_overlay_items(s);
                 if !items.is_empty() {
+                    let max_idx = items.len().saturating_sub(1);
                     s.shell_ui.search_selected = (s.shell_ui.search_selected + 1).min(max_idx);
                 }
                 return true;
             }
             Key::Enter => {
+                let items = super::overlays::collect_search_overlay_items(s);
+                let max_idx = items.len().saturating_sub(1);
                 if let Some(item) = items.get(s.shell_ui.search_selected.min(max_idx)) {
                     s.shell_ui.search_overlay_open = false;
                     s.shell_ui.search_selected = 0;
@@ -468,20 +630,7 @@ fn handle_key_inner(s: &mut AppState, ev: &KeyEvent, tx: &mut Tx) -> bool {
     }
 
     if ev.is_command('i') && ev.mods.alt {
-        if right_rail_uses_overlay(s) {
-            let next_open = !is_right_overlay_visible(s);
-            s.shell_ui.right_overlay_open = next_open;
-            if next_open {
-                s.shell_ui.left_overlay_open = false;
-                s.shell_ui.canvas_overlay_dismissed_key = None;
-            } else {
-                s.shell_ui.canvas_overlay_dismissed_key = active_canvas_target_key(s);
-            }
-        } else if active_canvas_target_key(s).is_some() {
-            s.shell_ui.canvas_pane.toggle();
-        } else {
-            s.dispatch(Action::Shell(ShellAction::ToggleContextSidebar));
-        }
+        toggle_right_inspector(s);
         return true;
     }
 
@@ -612,7 +761,7 @@ fn is_inline_presentation_preview_visible(s: &AppState) -> bool {
     {
         return false;
     }
-    active_canvas_target_key(s).is_none()
+    !has_active_canvas_target(s)
 }
 
 fn route_active_presentation_key(s: &mut AppState, ev: &KeyEvent, tx: &Tx) -> bool {

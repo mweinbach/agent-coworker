@@ -33,6 +33,50 @@ use super::state::any_non_menu_overlay_open;
 /// Maximum number of top-level menus in non-macOS mode (`File`, `Edit`, `View`, `Window`, `Help`).
 pub const MENU_BAR_COUNT: usize = 5;
 
+#[derive(Clone, Copy)]
+struct StaticTopMenu {
+    label: &'static str,
+    title: &'static str,
+    mnemonic: char,
+}
+
+/// Static non-macOS top-level menu headers matching `crate::native::menu::build_application_menu`,
+/// so rendering the strip and fast-pathing key events avoid rebuilding all menu items every frame.
+const STATIC_TOP_MENUS: [StaticTopMenu; MENU_BAR_COUNT] = [
+    StaticTopMenu {
+        label: "&File",
+        title: "File",
+        mnemonic: 'F',
+    },
+    StaticTopMenu {
+        label: "&Edit",
+        title: "Edit",
+        mnemonic: 'E',
+    },
+    StaticTopMenu {
+        label: "&View",
+        title: "View",
+        mnemonic: 'V',
+    },
+    StaticTopMenu {
+        label: "&Window",
+        title: "Window",
+        mnemonic: 'W',
+    },
+    StaticTopMenu {
+        label: "&Help",
+        title: "Help",
+        mnemonic: 'H',
+    },
+];
+
+fn find_static_top_menu_by_mnemonic(ch: char) -> Option<usize> {
+    let target = ch.to_ascii_uppercase();
+    STATIC_TOP_MENUS
+        .iter()
+        .position(|menu| menu.mnemonic == target)
+}
+
 const MENU_STRIP_KEY: &str = "menu-bar-strip";
 const MENU_HAMBURGER_KEY: &str = "menu-bar-hamburger";
 const MENU_DROPDOWN_MODAL_KEY: &str = "menu-bar-dropdown-modal";
@@ -168,10 +212,7 @@ pub fn is_compact_menu_bar(
     if vw < NARROW_BREAKPOINT {
         return true;
     }
-    let layout = super::resolve_shell_adaptive_layout(
-        s,
-        super::state::active_canvas_target_key(s).is_some(),
-    );
+    let layout = super::resolve_shell_adaptive_layout(s, super::state::has_active_canvas_target(s));
     let primary_width = primary_width_override.unwrap_or(layout.primary_width);
     let sidebar_docked_open =
         s.route().view != ViewId::Settings && !layout.left_overlay && s.sidebar.is_open();
@@ -352,10 +393,7 @@ fn open_top_menu_dropdown(
     tx.focus(MENU_DROPDOWN_MODAL_KEY, true);
 }
 
-fn activate_bar_focus(s: &mut AppState, tx: &mut Tx, menus: &[ApplicationMenu]) {
-    if menus.is_empty() {
-        return;
-    }
+fn activate_bar_focus(s: &mut AppState, tx: &mut Tx) {
     capture_focus_before_menu(s, tx);
     let compact = estimated_compact_for_keys(s);
     if !s.desktop_settings.show_menu_bar {
@@ -377,19 +415,11 @@ fn activate_bar_focus(s: &mut AppState, tx: &mut Tx, menus: &[ApplicationMenu]) 
     }
 }
 
-fn handle_bar_focus_key(
-    s: &mut AppState,
-    ev: &KeyEvent,
-    tx: &mut Tx,
-    menus: &[ApplicationMenu],
-) -> bool {
+fn handle_bar_focus_key(s: &mut AppState, ev: &KeyEvent, tx: &mut Tx) -> bool {
     let Some(cur) = s.shell_ui.menu_bar.focused_top_idx else {
         return false;
     };
-    let len = menus.len();
-    if len == 0 {
-        return false;
-    }
+    let len = STATIC_TOP_MENUS.len();
     match &ev.key {
         Key::Left => {
             let next = (cur + len - 1) % len;
@@ -404,11 +434,13 @@ fn handle_bar_focus_key(
             true
         }
         Key::Down | Key::Enter => {
-            open_top_menu_dropdown(s, tx, cur, menus, true, true);
+            let menus = build_application_menu(s);
+            open_top_menu_dropdown(s, tx, cur, &menus, true, true);
             true
         }
         Key::Text(t) if t == " " && !ev.mods.ctrl && !ev.mods.cmd => {
-            open_top_menu_dropdown(s, tx, cur, menus, true, true);
+            let menus = build_application_menu(s);
+            open_top_menu_dropdown(s, tx, cur, &menus, true, true);
             true
         }
         Key::Escape => {
@@ -421,9 +453,10 @@ fn handle_bar_focus_key(
         }
         Key::Text(_) if !ev.mods.ctrl && !ev.mods.cmd => {
             if let Some(ch) = mnemonic_char_from_event(ev, tx)
-                && let Some(idx) = find_top_menu_by_mnemonic(menus, ch)
+                && let Some(idx) = find_static_top_menu_by_mnemonic(ch)
             {
-                open_top_menu_dropdown(s, tx, idx, menus, true, true);
+                let menus = build_application_menu(s);
+                open_top_menu_dropdown(s, tx, idx, &menus, true, true);
                 return true;
             }
             false
@@ -641,8 +674,7 @@ pub fn handle_key(s: &mut AppState, ev: &KeyEvent, tx: &mut Tx) -> bool {
             if s.shell_ui.menu_bar.is_active() || s.shell_ui.menu_bar.temp_revealed {
                 dismiss_menu_bar(s, tx, true);
             } else {
-                let menus = build_application_menu(s);
-                activate_bar_focus(s, tx, &menus);
+                activate_bar_focus(s, tx);
             }
             return true;
         }
@@ -664,8 +696,6 @@ pub fn handle_key(s: &mut AppState, ev: &KeyEvent, tx: &mut Tx) -> bool {
         return false;
     }
 
-    let menus = build_application_menu(s);
-
     // Plain F10 (never Shift+F10, which Rune reserves for context menus) toggles bar focus.
     if matches!(ev.key, Key::Function(10))
         && !ev.mods.shift
@@ -676,7 +706,7 @@ pub fn handle_key(s: &mut AppState, ev: &KeyEvent, tx: &mut Tx) -> bool {
         if s.shell_ui.menu_bar.is_active() || s.shell_ui.menu_bar.temp_revealed {
             dismiss_menu_bar(s, tx, true);
         } else {
-            activate_bar_focus(s, tx, &menus);
+            activate_bar_focus(s, tx);
         }
         return true;
     }
@@ -687,18 +717,20 @@ pub fn handle_key(s: &mut AppState, ev: &KeyEvent, tx: &mut Tx) -> bool {
         && !ev.mods.cmd
         && !ev.mods.shift
         && let Some(ch) = mnemonic_char_from_event(ev, tx)
-        && let Some(idx) = find_top_menu_by_mnemonic(&menus, ch)
+        && let Some(idx) = find_static_top_menu_by_mnemonic(ch)
     {
+        let menus = build_application_menu(s);
         open_top_menu_dropdown(s, tx, idx, &menus, false, true);
         return true;
     }
 
     if s.shell_ui.menu_bar.open_menu_idx.is_some() || s.shell_ui.menu_bar.narrow_menu_open {
+        let menus = build_application_menu(s);
         return handle_dropdown_key(s, ev, tx, &menus);
     }
 
     if s.shell_ui.menu_bar.focused_top_idx.is_some() {
-        return handle_bar_focus_key(s, ev, tx, &menus);
+        return handle_bar_focus_key(s, ev, tx);
     }
 
     false
@@ -741,7 +773,8 @@ pub fn build_menu_bar_strip(
 
     let compact = is_compact_menu_bar(s, primary_width, chrome_trailing);
     if compact {
-        let open = s.shell_ui.menu_bar.narrow_menu_open;
+        let open =
+            s.shell_ui.menu_bar.narrow_menu_open || s.shell_ui.menu_bar.open_menu_idx.is_some();
         let btn = el()
             .key(MENU_HAMBURGER_KEY)
             .role("button")
@@ -767,7 +800,9 @@ pub fn build_menu_bar_strip(
                 },
             )
             .on_press_tx(|s: &mut AppState, tx: &mut Tx| {
-                if s.shell_ui.menu_bar.narrow_menu_open {
+                if s.shell_ui.menu_bar.narrow_menu_open
+                    || s.shell_ui.menu_bar.open_menu_idx.is_some()
+                {
                     dismiss_menu_bar(s, tx, true);
                 } else {
                     capture_focus_before_menu(s, tx);
@@ -786,7 +821,6 @@ pub fn build_menu_bar_strip(
         return Some(btn);
     }
 
-    let menus = build_application_menu(s);
     let show_mnemonics = s.shell_ui.menu_bar.show_mnemonics || s.shell_ui.menu_bar.alt_held;
     let open_idx = s.shell_ui.menu_bar.open_menu_idx;
     let focused_idx = s.shell_ui.menu_bar.focused_top_idx;
@@ -799,7 +833,7 @@ pub fn build_menu_bar_strip(
         .gap(1.0)
         .center_y();
 
-    for (idx, menu) in menus.iter().enumerate() {
+    for (idx, menu) in STATIC_TOP_MENUS.iter().enumerate() {
         let is_open = open_idx == Some(idx);
         let is_bar_focused = focused_idx == Some(idx) && open_idx.is_none();
         let fg = if is_open || is_bar_focused {
@@ -862,13 +896,10 @@ pub fn build_menu_bar_strip(
                     s.shell_ui.menu_bar.switch_open_menu(idx, None);
                 }
             })
-            .on_key(|s: &mut AppState, ev: &KeyEvent, tx: &mut Tx| {
-                let menus = build_application_menu(s);
-                handle_bar_focus_key(s, ev, tx, &menus)
-            })
+            .on_key(|s: &mut AppState, ev: &KeyEvent, tx: &mut Tx| handle_bar_focus_key(s, ev, tx))
             .child(render_mnemonic_text(
                 menu.label,
-                menu.mnemonic,
+                Some(menu.mnemonic),
                 show_mnemonics,
                 label_style,
                 fg,
@@ -1029,18 +1060,16 @@ pub fn push_menu_bar_overlay(
         return;
     }
 
-    let menus = build_application_menu(s);
-    if menus.is_empty() {
-        return;
-    }
-
-    let compact = narrow_open || is_compact_menu_bar(s, primary_width, chrome_trailing);
+    let compact = is_compact_menu_bar(s, primary_width, chrome_trailing);
 
     // When `F10` / `Alt`-tap focused or temporarily revealed the inline menu bar without an open
     // dropdown, mount a non-modal transparent click-outside backdrop so outside clicks dismiss
     // focus/reveal without trapping Tab or stealing keyboard focus from the strip button, and keep
     // top-item click bridges above it so clicking `File`..`Help` still opens directly.
-    if open_idx.is_none() && !narrow_open {
+    if open_idx.is_none() && (!narrow_open || !compact) {
+        if !bar_focused && !temp_revealed {
+            return;
+        }
         overlays.push(
             el().key(MENU_FOCUS_BACKDROP_KEY)
                 .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
@@ -1054,15 +1083,20 @@ pub fn push_menu_bar_overlay(
                 }),
         );
         if !compact {
-            push_top_item_bridges(s, menus.len(), false, overlays);
+            push_top_item_bridges(s, MENU_BAR_COUNT, false, overlays);
         }
         return;
     }
 
     let show_mnemonics = s.shell_ui.menu_bar.show_mnemonics || s.shell_ui.menu_bar.alt_held;
+    let mut bridge_count = MENU_BAR_COUNT;
 
-    let (anchor_key, card_width, list) = if let Some(idx) = open_idx.filter(|&i| i < menus.len()) {
-        let menu = &menus[idx];
+    let (anchor_key, card_width, list) = if let Some(idx) = open_idx {
+        let menus = build_application_menu(s);
+        bridge_count = menus.len();
+        let Some(menu) = menus.get(idx) else {
+            return;
+        };
         let anchor = if compact {
             MENU_HAMBURGER_KEY.to_string()
         } else {
@@ -1084,6 +1118,7 @@ pub fn push_menu_bar_overlay(
                 .hover(t.hover)
                 .keeps_text_selection()
                 .on_press(move |s: &mut AppState| {
+                    s.shell_ui.menu_bar.narrow_menu_open = true;
                     s.shell_ui.menu_bar.open_menu_idx = None;
                     s.shell_ui.menu_bar.active_item_idx = None;
                     s.shell_ui.menu_bar.narrow_root_idx = idx;
@@ -1117,8 +1152,12 @@ pub fn push_menu_bar_overlay(
     } else {
         // Narrow root menu selector (`"☰"` -> File, Edit, View, Window, Help).
         let mut root_col = col().w_full().items_stretch().padding(4.0);
-        let active_root = s.shell_ui.menu_bar.narrow_root_idx.min(menus.len() - 1);
-        for (idx, menu) in menus.iter().enumerate() {
+        let active_root = s
+            .shell_ui
+            .menu_bar
+            .narrow_root_idx
+            .min(STATIC_TOP_MENUS.len() - 1);
+        for (idx, menu) in STATIC_TOP_MENUS.iter().enumerate() {
             let active = idx == active_root;
             let item_row = row()
                 .key(format!("menu-bar-narrow-cat-{idx}"))
@@ -1144,7 +1183,7 @@ pub fn push_menu_bar_overlay(
                 })
                 .child(el().grow(1.0).child(render_mnemonic_text(
                     menu.label,
-                    menu.mnemonic,
+                    Some(menu.mnemonic),
                     show_mnemonics,
                     TextStyle::new(13.0, 500.0),
                     t.text_base,
@@ -1181,7 +1220,7 @@ pub fn push_menu_bar_overlay(
     // Mount transparent hover-to-switch / click-toggle bridges over the inline menu strip buttons
     // AFTER the `.modal_tx` element so Rune's `modal_scope` includes them in allowed hit targets.
     if !compact && open_idx.is_some() {
-        push_top_item_bridges(s, menus.len(), true, overlays);
+        push_top_item_bridges(s, bridge_count, true, overlays);
     }
 }
 

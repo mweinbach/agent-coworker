@@ -40,6 +40,7 @@ pub fn build_primary_content(
                     &ws.id,
                     stage.as_str(),
                     message.as_str(),
+                    s.desktop_settings.reduce_motion,
                     k,
                     t,
                 );
@@ -82,57 +83,25 @@ pub fn build_primary_content(
         top_banners.push(updater_banner);
     }
 
-    let body = if !suppress_file_preview && let Some(preview) = s.active_file_preview.as_ref() {
-        if s.shell_ui.preview_maximized {
-            el().key("primary-preview-maximized")
-                .w_full()
-                .h_full()
-                .grow(1.0)
-                .shrink()
-                .min_h(0.0)
-                .child(build_inline_file_preview(s, preview, k, t))
-        } else {
-            row()
-                .key("primary-split-with-preview")
-                .w_full()
-                .h_full()
-                .grow(1.0)
-                .shrink()
-                .min_h(0.0)
-                .child(
-                    el().key("primary-subview-pane")
-                        .grow(1.0)
-                        .shrink()
-                        .min_w(240.0)
-                        .min_h(0.0)
-                        .h_full()
-                        .child(main_subview),
-                )
-                .child(el().w(1.0).h_full().fill(t.border_muted))
-                .child(build_inline_file_preview(s, preview, k, t))
-        }
-    } else {
-        el().key("primary-subview-only")
-            .w_full()
-            .h_full()
-            .grow(1.0)
-            .shrink()
-            .min_h(0.0)
-            .child(main_subview)
-    };
+    // Keep a single stable outer column (`primary-content-stack`) -> body row
+    // (`primary-body-row`) -> subview wrapper (`primary-subview-pane`) so appearing/disappearing
+    // banners or toggling inline file preview never change `main_subview`'s tree depth/parent
+    // key or unmount/remount `chat-view`.
+    let active_preview = (!suppress_file_preview)
+        .then_some(s.active_file_preview.as_ref())
+        .flatten();
+    let preview_maximized = active_preview.is_some() && s.shell_ui.preview_maximized;
 
-    if top_banners.is_empty() {
-        return body;
-    }
-
-    col()
+    let mut stack = col()
         .key("primary-content-stack")
         .w_full()
         .h_full()
         .grow(1.0)
         .shrink()
-        .min_h(0.0)
-        .child(
+        .min_h(0.0);
+
+    if !top_banners.is_empty() {
+        stack = stack.child(
             col()
                 .key("primary-top-banners")
                 .w_full()
@@ -140,8 +109,53 @@ pub fn build_primary_content(
                 .py(10.0)
                 .gap(8.0)
                 .children(top_banners),
-        )
-        .child(body)
+        );
+    }
+
+    let body = if let Some(preview) = active_preview
+        && preview_maximized
+    {
+        el().key("primary-preview-maximized")
+            .w_full()
+            .h_full()
+            .grow(1.0)
+            .shrink()
+            .min_h(0.0)
+            .child(build_inline_file_preview(s, preview, k, t))
+    } else {
+        let mut body_row = row()
+            .key("primary-body-row")
+            .w_full()
+            .h_full()
+            .grow(1.0)
+            .shrink()
+            .min_h(0.0)
+            .child(
+                el().key("primary-subview-pane")
+                    .grow(1.0)
+                    .shrink()
+                    .min_w(if active_preview.is_some() { 240.0 } else { 0.0 })
+                    .min_h(0.0)
+                    .h_full()
+                    .child(main_subview),
+            );
+        if let Some(preview) = active_preview {
+            body_row = body_row.child(
+                row()
+                    .key("primary-split-with-preview")
+                    .grow(1.65)
+                    .shrink()
+                    .min_w(261.0)
+                    .min_h(0.0)
+                    .h_full()
+                    .child(el().w(1.0).h_full().fill(t.border_muted))
+                    .child(build_inline_file_preview(s, preview, k, t)),
+            );
+        }
+        body_row
+    };
+
+    stack.child(body)
 }
 
 fn workspace_runtime_progress_view(
@@ -149,6 +163,7 @@ fn workspace_runtime_progress_view(
     ws_id: &str,
     stage: &str,
     message: &str,
+    reduce_motion: bool,
     k: &Kit,
     t: &ThemeTokens,
 ) -> El {
@@ -164,10 +179,15 @@ fn workspace_runtime_progress_view(
         message.to_owned()
     };
 
+    let progress_indicator = if reduce_motion {
+        icon(&icons::CLOCK, 15.0).color(t.accent)
+    } else {
+        Spinner::new().size(15.0).color(t.accent).build(k)
+    };
     let progress_row = row()
         .gap(8.0)
         .center_y()
-        .child(Spinner::new().size(15.0).color(t.accent).build(k))
+        .child(progress_indicator)
         .child(text(status_label).font(t.body).color(t.text_base));
 
     let ws_id_owned = ws_id.to_owned();
@@ -540,7 +560,11 @@ fn build_updater_banner(s: &AppState, k: &Kit, t: &ThemeTokens) -> Option<El> {
                     .border(1.0, t.accent)
                     .gap(10.0)
                     .center_y()
-                    .child(Spinner::new().size(14.0).color(t.accent).build(k))
+                    .child(if s.desktop_settings.reduce_motion {
+                        icon(&icons::CLOCK, 14.0).color(t.accent)
+                    } else {
+                        Spinner::new().size(14.0).color(t.accent).build(k)
+                    })
                     .child(
                         col()
                             .grow(1.0)
@@ -745,15 +769,20 @@ fn build_inline_file_preview(
         el().w_full()
             .h_full()
             .center()
-            .child(Spinner::new().size(18.0).color(t.accent).build(k))
+            .child(if s.desktop_settings.reduce_motion {
+                text("Loading preview…").font(t.body).color(t.text_muted)
+            } else {
+                Spinner::new().size(18.0).color(t.accent).build(k)
+            })
     };
 
     col()
         .key("inline-file-preview")
-        .grow(1.65)
+        .grow(1.0)
         .shrink()
         .min_w(260.0)
         .min_h(0.0)
+        .w_full()
         .h_full()
         .fill(t.panel_bg)
         .child(header)

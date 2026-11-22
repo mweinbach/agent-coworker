@@ -3,14 +3,19 @@
 //! Ported from `apps/desktop/src/ui/ContextSidebar.tsx`, `WorkflowRunsPanel.tsx`, and
 //! workspace file explorer integration.
 
-use rune::{El, Key, ScrollSpec, col, el, row, spacer, text, text_input};
+use std::collections::HashSet;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+
+use rune::{El, Key, ScrollSpec, col, el, memo, row, spacer, text, text_input};
 use rune_kit::{
     Badge, BadgeVariant, Button, ButtonVariant, ControlSize, Divider, IconButton,
     IconButtonVariant, Kit, Menu, MenuItem, Placement, glyphs,
 };
 
 use crate::actions::{Action, ChatAction, NativeAction, ShellAction};
-use crate::state::{AppState, ThreadRuntime};
+use crate::router::ViewId;
+use crate::state::{AppState, ThreadRuntime, WorkflowRunView};
 use crate::theme::ThemeTokens;
 use crate::views::shell::helpers::{format_bytes, format_cost_usd, format_tokens};
 use crate::views::shell::icons;
@@ -32,8 +37,7 @@ fn open_agent_run_from_context(s: &mut AppState, agent_id: String, title: String
 }
 
 /// Renders a flat inspector section without a left accent stripe or drop shadow.
-fn context_section(
-    key: &'static str,
+fn context_section_unkeyed(
     title: impl Into<String>,
     glyph: &'static rune::Icon,
     trailing: Option<El>,
@@ -57,7 +61,6 @@ fn context_section(
         header = header.child(action);
     }
     col()
-        .key(key)
         .role("group")
         .w_full()
         .gap(8.0)
@@ -70,8 +73,273 @@ fn context_section(
         .child(body)
 }
 
+fn context_section(
+    key: &'static str,
+    title: impl Into<String>,
+    glyph: &'static rune::Icon,
+    trailing: Option<El>,
+    body: El,
+    k: &Kit,
+    t: &ThemeTokens,
+) -> El {
+    context_section_unkeyed(title, glyph, trailing, body, k, t).key(key)
+}
+
+fn hash_theme_fp(s: &AppState, t: &ThemeTokens, h: &mut DefaultHasher) {
+    (
+        t.dark,
+        s.desktop_settings.reduced_transparency,
+        s.desktop_settings.high_contrast,
+        std::mem::discriminant(&s.desktop_settings.accent_palette),
+        s.ui_scale.to_bits(),
+    )
+        .hash(h);
+}
+
+fn hash_explorer_tree_entries(
+    s: &AppState,
+    ws_id: &str,
+    dir: &str,
+    depth: usize,
+    budget: &mut usize,
+    key_buf: &mut String,
+    h: &mut DefaultHasher,
+) {
+    if depth >= 12 || *budget == 0 {
+        return;
+    }
+    let Some(entries) = lookup_explorer_entries(s, dir) else {
+        0u8.hash(h);
+        return;
+    };
+    1u8.hash(h);
+    entries.len().hash(h);
+    for entry in entries {
+        if *budget == 0 {
+            break;
+        }
+        *budget -= 1;
+        let expanded = if entry.is_dir && !s.explorer_expanded_dirs.is_empty() {
+            key_buf.clear();
+            key_buf.push_str(ws_id);
+            key_buf.push_str("::");
+            key_buf.push_str(&entry.path);
+            s.explorer_expanded_dirs.contains(key_buf.as_str())
+        } else {
+            false
+        };
+        (
+            &entry.name,
+            &entry.path,
+            entry.is_dir,
+            entry.size_bytes,
+            &entry.git_status,
+            expanded,
+        )
+            .hash(h);
+        if expanded {
+            match lookup_explorer_entries(s, &entry.path) {
+                Some([]) => {
+                    if *budget > 0 {
+                        *budget -= 1;
+                        2u8.hash(h);
+                    }
+                }
+                Some(_) => {
+                    hash_explorer_tree_entries(
+                        s,
+                        ws_id,
+                        &entry.path,
+                        depth + 1,
+                        budget,
+                        key_buf,
+                        h,
+                    );
+                }
+                None => {
+                    if *budget > 0 {
+                        *budget -= 1;
+                        3u8.hash(h);
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn hash_string_set(set: &HashSet<String>, h: &mut DefaultHasher) {
+    set.len().hash(h);
+    if set.is_empty() {
+        return;
+    }
+    let mut xor_acc: u64 = 0;
+    let mut sum_acc: u64 = 0;
+    for item in set {
+        let mut item_h = DefaultHasher::new();
+        item.hash(&mut item_h);
+        let v = item_h.finish();
+        xor_acc ^= v;
+        sum_acc = sum_acc.wrapping_add(v);
+    }
+    (xor_acc, sum_acc).hash(h);
+}
+
+fn workspace_files_version(s: &AppState, t: &ThemeTokens) -> u64 {
+    let mut h = DefaultHasher::new();
+    hash_theme_fp(s, t, &mut h);
+    if let Some(ws) = s.active_workspace() {
+        1u8.hash(&mut h);
+        (&ws.id, &ws.name).hash(&mut h);
+        if s.explorer_rev != 0 {
+            let root_len = lookup_explorer_entries(s, ".").map(<[_]>::len);
+            (
+                1u8,
+                s.explorer_rev,
+                s.explorer_entries_by_dir.len(),
+                root_len,
+            )
+                .hash(&mut h);
+            hash_string_set(&s.explorer_expanded_dirs, &mut h);
+        } else {
+            0u8.hash(&mut h);
+            let mut budget = 120usize;
+            let mut key_buf = String::new();
+            hash_explorer_tree_entries(s, &ws.id, ".", 0, &mut budget, &mut key_buf, &mut h);
+        }
+    } else {
+        0u8.hash(&mut h);
+    }
+    h.finish()
+}
+
+fn hash_workflow_run(run: &WorkflowRunView, h: &mut DefaultHasher) {
+    (
+        &run.id,
+        &run.workspace_id,
+        &run.workflow_name,
+        &run.status,
+        &run.summary,
+        run.started_at,
+    )
+        .hash(h);
+}
+
+fn hash_active_context_workflow_runs(s: &AppState, h: &mut DefaultHasher) {
+    if s.route().view == ViewId::Task {
+        1u8.hash(h);
+        if let Some(task) = s.active_task.as_ref() {
+            (
+                &task.summary.id,
+                &task.summary.workspace_id,
+                task.runs.len(),
+            )
+                .hash(h);
+            for run in &task.runs {
+                hash_workflow_run(run, h);
+            }
+            for linked in &task.threads {
+                linked.session_id.hash(h);
+                if let Some(rt) = s.thread_runtime_by_id.get(&linked.session_id) {
+                    for run in &rt.workflow_runs {
+                        hash_workflow_run(run, h);
+                    }
+                }
+                for run in &s.workflow_runs {
+                    if run.session_id.as_deref() == Some(linked.session_id.as_str()) {
+                        hash_workflow_run(run, h);
+                    }
+                }
+            }
+        }
+        return;
+    }
+    2u8.hash(h);
+    if let Some(tid) = s.route().active_thread_id.as_deref() {
+        if let Some(rt) = s.thread_runtime_by_id.get(tid) {
+            rt.workflow_runs.len().hash(h);
+            for run in &rt.workflow_runs {
+                hash_workflow_run(run, h);
+            }
+        }
+        for run in &s.workflow_runs {
+            if run.session_id.as_deref() == Some(tid) {
+                hash_workflow_run(run, h);
+            }
+        }
+    }
+}
+
+fn context_sidebar_version(s: &AppState, t: &ThemeTokens, files_ver: u64) -> u64 {
+    let mut h = DefaultHasher::new();
+    hash_theme_fp(s, t, &mut h);
+    files_ver.hash(&mut h);
+    let route = s.route();
+    (
+        std::mem::discriminant(&route.view),
+        &route.active_thread_id,
+        &route.active_task_id,
+        &s.active_workspace_id,
+    )
+        .hash(&mut h);
+
+    if let Some(rt) = s.active_thread_runtime() {
+        1u8.hash(&mut h);
+        if let Some(usage) = &rt.usage {
+            (
+                1u8,
+                usage.input_tokens,
+                usage.output_tokens,
+                usage.cached_tokens,
+                usage.estimated_cost_usd.to_bits(),
+            )
+                .hash(&mut h);
+        } else {
+            0u8.hash(&mut h);
+        }
+        (
+            rt.usage_hard_cap.map(f64::to_bits),
+            rt.usage_hard_cap_reached,
+        )
+            .hash(&mut h);
+        rt.todos.len().hash(&mut h);
+        for todo in &rt.todos {
+            (&todo.id, &todo.status, &todo.content).hash(&mut h);
+        }
+        rt.agents.len().hash(&mut h);
+        for agent in &rt.agents {
+            (&agent.agent_id, &agent.name, &agent.role, &agent.status).hash(&mut h);
+        }
+    } else {
+        0u8.hash(&mut h);
+    }
+
+    hash_active_context_workflow_runs(s, &mut h);
+    h.finish()
+}
+
 /// Renders the right inspector sidebar panel for the active chat or task route.
 pub fn build_context_sidebar(s: &AppState, k: &Kit, t: &ThemeTokens, layer: &mut Vec<El>) -> El {
+    // Bypass memo while an interactive file context menu (which pushes to `layer`) or inline
+    // file rename TextEdit is active so popup anchors and text edits stay live.
+    if s.shell_ui.file_context_menu.is_some() || s.shell_ui.renaming_file_key.is_some() {
+        return build_context_sidebar_inner(s, k, t, layer, None).key("context-sidebar");
+    }
+
+    let files_ver = workspace_files_version(s, t);
+    let ctx_ver = context_sidebar_version(s, t, files_ver);
+    memo("context-sidebar", ctx_ver, || {
+        let mut empty_layer = Vec::new();
+        build_context_sidebar_inner(s, k, t, &mut empty_layer, Some(files_ver))
+    })
+}
+
+fn build_context_sidebar_inner(
+    s: &AppState,
+    k: &Kit,
+    t: &ThemeTokens,
+    layer: &mut Vec<El>,
+    files_memo_ver: Option<u64>,
+) -> El {
     let header = row()
         .key("context-sidebar-header")
         .w_full()
@@ -110,7 +378,21 @@ pub fn build_context_sidebar(s: &AppState, k: &Kit, t: &ThemeTokens, layer: &mut
         sections.push(build_workflow_runs_card(context_runs, k, t));
     }
 
-    sections.push(build_workspace_files_card(s, k, t, layer));
+    let files_card = match files_memo_ver {
+        Some(ver) => {
+            let memo_key = if s.active_workspace().is_some() {
+                "context-files-card"
+            } else {
+                "context-files-empty"
+            };
+            memo(memo_key, ver, || {
+                let mut empty_layer = Vec::new();
+                build_workspace_files_card(s, k, t, &mut empty_layer, false)
+            })
+        }
+        None => build_workspace_files_card(s, k, t, layer, true),
+    };
+    sections.push(files_card);
 
     if sections.is_empty() {
         sections.push(context_section(
@@ -129,7 +411,6 @@ pub fn build_context_sidebar(s: &AppState, k: &Kit, t: &ThemeTokens, layer: &mut
     }
 
     col()
-        .key("context-sidebar")
         .w_full()
         .h_full()
         .min_h(0.0)
@@ -818,6 +1099,7 @@ fn push_explorer_tree(
     dir: &str,
     depth: usize,
     budget: &mut usize,
+    dir_key_buf: &mut String,
     k: &Kit,
     t: &ThemeTokens,
     layer: &mut Vec<El>,
@@ -839,8 +1121,15 @@ fn push_explorer_tree(
         let ws_id_owned = ws_id.to_owned();
         let path = entry.path.clone();
         let is_dir = entry.is_dir;
-        let dir_key = explorer_dir_state_key(ws_id, &entry.path);
-        let expanded = is_dir && s.explorer_expanded_dirs.contains(&dir_key);
+        let expanded = if is_dir && !s.explorer_expanded_dirs.is_empty() {
+            dir_key_buf.clear();
+            dir_key_buf.push_str(ws_id);
+            dir_key_buf.push_str("::");
+            dir_key_buf.push_str(&entry.path);
+            s.explorer_expanded_dirs.contains(dir_key_buf.as_str())
+        } else {
+            false
+        };
         let file_glyph = if is_dir {
             &glyphs::FOLDER
         } else {
@@ -974,7 +1263,18 @@ fn push_explorer_tree(
                     }
                 }
                 Some(_) => {
-                    push_explorer_tree(rows, s, ws_id, &entry.path, depth + 1, budget, k, t, layer);
+                    push_explorer_tree(
+                        rows,
+                        s,
+                        ws_id,
+                        &entry.path,
+                        depth + 1,
+                        budget,
+                        dir_key_buf,
+                        k,
+                        t,
+                        layer,
+                    );
                 }
                 None => {
                     if *budget > 0 {
@@ -995,10 +1295,15 @@ fn push_explorer_tree(
     }
 }
 
-fn build_workspace_files_card(s: &AppState, k: &Kit, t: &ThemeTokens, layer: &mut Vec<El>) -> El {
+fn build_workspace_files_card(
+    s: &AppState,
+    k: &Kit,
+    t: &ThemeTokens,
+    layer: &mut Vec<El>,
+    apply_root_key: bool,
+) -> El {
     let Some(ws) = s.active_workspace() else {
-        return context_section(
-            "context-files-empty",
+        let card = context_section_unkeyed(
             "Workspace files",
             &icons::FOLDER,
             None,
@@ -1008,6 +1313,11 @@ fn build_workspace_files_card(s: &AppState, k: &Kit, t: &ThemeTokens, layer: &mu
             k,
             t,
         );
+        return if apply_root_key {
+            card.key("context-files-empty")
+        } else {
+            card
+        };
     };
 
     let ws_id_refresh = ws.id.clone();
@@ -1047,20 +1357,36 @@ fn build_workspace_files_card(s: &AppState, k: &Kit, t: &ThemeTokens, layer: &mu
         Some(_) => {
             let mut rows = Vec::new();
             let mut budget = 120usize;
-            push_explorer_tree(&mut rows, s, &ws.id, ".", 0, &mut budget, k, t, layer);
+            let mut dir_key_buf = String::new();
+            push_explorer_tree(
+                &mut rows,
+                s,
+                &ws.id,
+                ".",
+                0,
+                &mut budget,
+                &mut dir_key_buf,
+                k,
+                t,
+                layer,
+            );
             col().w_full().gap(2.0).children(rows)
         }
     };
 
-    context_section(
-        "context-files-card",
+    let card = context_section_unkeyed(
         format!("Files · {}", ws.name),
         &icons::FOLDER,
         Some(refresh_btn),
         body,
         k,
         t,
-    )
+    );
+    if apply_root_key {
+        card.key("context-files-card")
+    } else {
+        card
+    }
 }
 
 #[cfg(test)]

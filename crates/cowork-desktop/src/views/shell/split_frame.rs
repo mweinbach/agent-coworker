@@ -88,6 +88,7 @@ struct SplitPaneSpec {
     content: El,
     padding: [f32; 2],
     dragging: bool,
+    settled_closed: bool,
     access: fn(&mut AppState) -> &mut PaneState,
     drag_start: fn(&mut AppState) -> &mut Option<f32>,
 }
@@ -163,9 +164,19 @@ impl FullBleedSplit {
             content,
             padding: [0.0; 2],
             dragging,
+            settled_closed: false,
             access,
             drag_start,
         });
+        self
+    }
+
+    /// Marks the leading sidebar as settled closed so its inner content stays unmounted
+    /// while preserving the `"sidebar-pane"` slot key for future expand animations.
+    pub(crate) fn sidebar_settled_closed(mut self, settled: bool) -> Self {
+        if let Some(sb) = &mut self.sidebar {
+            sb.settled_closed = settled;
+        }
         self
     }
 
@@ -191,9 +202,19 @@ impl FullBleedSplit {
             content,
             padding: [0.0; 2],
             dragging,
+            settled_closed: false,
             access,
             drag_start,
         });
+        self
+    }
+
+    /// Marks the trailing inspector as settled closed so its inner content stays unmounted
+    /// while preserving the `"inspector-pane"` slot key for future expand animations.
+    pub(crate) fn inspector_settled_closed(mut self, settled: bool) -> Self {
+        if let Some(insp) = &mut self.inspector {
+            insp.settled_closed = settled;
+        }
         self
     }
 
@@ -285,6 +306,10 @@ impl FullBleedSplit {
         };
 
         let vibrancy = self.sidebar_vibrancy;
+        let inspector_animating = self
+            .inspector
+            .as_ref()
+            .is_some_and(|insp| !insp.settled_closed || insp.state.is_open() || insp.dragging);
         let sidebar_el = self.sidebar.map(|sb| {
             build_pane_slot(
                 "sidebar-pane",
@@ -323,7 +348,11 @@ impl FullBleedSplit {
             .w_full()
             .grow(1.0)
             .min_h(0.0)
-            .motion(width_spring)
+            .motion(if inspector_animating {
+                width_spring
+            } else {
+                Spring::NONE
+            })
             .child(main_pane);
         if let Some(insp) = inspector_el {
             below = below.child(insp);
@@ -339,7 +368,8 @@ impl FullBleedSplit {
             .child(toolbar_el)
             .child(below);
 
-        let mut split = row().key("split").w_full().h_full().motion(width_spring);
+        // `split` always spans the full viewport; omit `width_spring` so OS window resizes never lag.
+        let mut split = row().key("split").w_full().h_full();
         if let Some(sb) = sidebar_el {
             split = split.child(sb);
         }
@@ -432,6 +462,34 @@ fn build_pane_slot(
     let w = s.width();
     let sign = if leading { 1.0 } else { -1.0 };
 
+    if !open && !pane.dragging && pane.settled_closed {
+        let mut slot = el()
+            .key(key)
+            .role("region")
+            .label(if leading { "Sidebar" } else { "Inspector" })
+            .w(0.0)
+            .h_full()
+            .motion(width_spring)
+            .clip_soft(0.0)
+            .a11y_hidden()
+            .inert();
+        if !leading {
+            slot = slot.transition(Transition::none());
+        } else {
+            slot = slot.fill(k.c.bg_deep);
+            if let Some(alpha) = vibrancy {
+                slot = slot.system_material(rune::SystemMaterial::Popover).child(
+                    el().key("sidebar-vibrancy-tint")
+                        .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
+                        .motion(width_spring)
+                        .fill(k.c.bg_deep.alpha(alpha))
+                        .a11y_hidden(),
+                );
+            }
+        }
+        return slot;
+    }
+
     let mut content_col = col()
         .key("pane-content")
         .w(w)
@@ -462,6 +520,9 @@ fn build_pane_slot(
             .opacity_motion(fade_anim)
             .fill(k.c.bg_base)
             .pin(Some(0.0), Some(0.0), None, Some(0.0));
+        if !open && !pane.dragging {
+            content_col = content_col.inert();
+        }
     }
 
     let mut body = content_col.child(
@@ -698,7 +759,7 @@ mod tests {
         let open_back_x = back_rect[0];
 
         // Collapse: the toggle/nav cluster stays put while the sidebar slides away.
-        rt.state.sidebar.set_open(false);
+        rt.update(|s, _| s.sidebar.set_open(false));
         rt.frame(0.0);
         for _ in 0..15 {
             rt.frame(1.0 / 60.0);

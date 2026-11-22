@@ -260,17 +260,12 @@ pub(crate) fn push_onboarding_overlays(
 
     let elevated_card = k.elevate(card, &k.elevation.overlay);
 
-    let blur_sigma = if s.desktop_settings.reduced_transparency {
-        0.0
-    } else {
-        5.0
-    };
-
+    // Avoid full-viewport `backdrop_blur` so typing in onboarding form inputs never triggers
+    // a full-window GPU blur pass per keystroke; use the standard modal scrim matching overlays.
     layer.push(
         col()
             .key("desktop-onboarding-backdrop")
             .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
-            .backdrop_blur(blur_sigma)
             .fill(t.scrim)
             .center()
             .padding(24.0)

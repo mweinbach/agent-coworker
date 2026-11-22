@@ -1,10 +1,17 @@
 //! Tasks & Workflow Runs views (`TaskView`, `NewTaskLanding`, `TaskQuestionsCard`,
 //! `ArtifactReviewCard`, `TaskContextSidebar`, `WorkflowRunsPanel`).
 
+use std::cell::RefCell;
 use std::collections::HashMap;
-use std::sync::LazyLock;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+use std::sync::{Arc, LazyLock};
 
-use rune::{Cx, El, ScrollSpec, SurfaceFit, TextEdit, col, el, icon, row, spacer, text};
+use base64::Engine as _;
+use rune::{
+    Cx, El, Image, ImageCache, Pixels, ScrollSpec, SurfaceFit, TextEdit, col, el, icon, memo, row,
+    spacer, text,
+};
 use rune_kit::shell::{TabItem, TabOrientation, TabStrip};
 use rune_kit::{Badge, BadgeVariant, Button, ButtonVariant, Card, ControlSize, Kit, TextInput};
 use serde_json::Value;
@@ -17,6 +24,199 @@ use crate::theme::ThemeTokens;
 use super::{helpers, icons};
 
 static EMPTY_TASK_QUESTION_REPLY_EDIT: LazyLock<TextEdit> = LazyLock::new(TextEdit::default);
+
+struct CachedArtifactImage {
+    url: String,
+    image: Option<Image>,
+}
+
+struct TaskArtifactImageStore {
+    cache: Option<ImageCache>,
+    has_real_waker: bool,
+    images: HashMap<(u64, usize), CachedArtifactImage>,
+}
+
+impl TaskArtifactImageStore {
+    fn new() -> Self {
+        Self {
+            cache: None,
+            has_real_waker: false,
+            images: HashMap::new(),
+        }
+    }
+}
+
+struct CachedTaskQuestions {
+    key: (String, i64, u64),
+    items: Vec<TaskQuestionItem>,
+}
+
+thread_local! {
+    static TASK_ARTIFACT_IMAGE_STORE: RefCell<TaskArtifactImageStore> =
+        RefCell::new(TaskArtifactImageStore::new());
+    static CACHED_TASK_QUESTIONS: RefCell<Option<CachedTaskQuestions>> = const { RefCell::new(None) };
+}
+
+/// Hashes a `serde_json::Value` completely for memoization without truncating string contents.
+fn hash_json_value(value: &Value, h: &mut DefaultHasher) {
+    std::mem::discriminant(value).hash(h);
+    match value {
+        Value::Null => {}
+        Value::Bool(b) => b.hash(h),
+        Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                (0u8, i).hash(h);
+            } else if let Some(u) = n.as_u64() {
+                (1u8, u).hash(h);
+            } else if let Some(f) = n.as_f64() {
+                (2u8, f.to_bits()).hash(h);
+            }
+        }
+        Value::String(s) => {
+            s.hash(h);
+        }
+        Value::Array(arr) => {
+            arr.len().hash(h);
+            for item in arr {
+                hash_json_value(item, h);
+            }
+        }
+        Value::Object(map) => {
+            map.len().hash(h);
+            for (k, v) in map {
+                k.hash(h);
+                hash_json_value(v, h);
+            }
+        }
+    }
+}
+
+fn is_data_image_url(trimmed: &str) -> bool {
+    let Some(rest) = trimmed.strip_prefix("data:") else {
+        return false;
+    };
+    let Some((meta, _)) = rest.split_once(',') else {
+        return false;
+    };
+    let mime = meta.split(';').next().unwrap_or("").trim();
+    mime.as_bytes()
+        .get(..6)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(b"image/"))
+}
+
+fn url_fingerprint(url: &str) -> (u64, usize) {
+    let mut h = DefaultHasher::new();
+    url.as_bytes().hash(&mut h);
+    (h.finish(), url.len())
+}
+
+/// Decodes a task artifact `data:image/...` URL at most once per unique URL using a waker-backed
+/// `ImageCache`, avoiding per-frame base64 decoding and UI-thread `img.wait()` stalls.
+fn decode_cached_task_artifact_image(s: &AppState, url: &str) -> Option<Pixels> {
+    let trimmed = url.trim();
+    if !is_data_image_url(trimmed) {
+        return None;
+    }
+    let fp = url_fingerprint(trimmed);
+    let has_waker = s.services.waker.is_some();
+
+    TASK_ARTIFACT_IMAGE_STORE.with(|slot| {
+        let mut store = slot.borrow_mut();
+        if store.cache.is_none() || (has_waker && !store.has_real_waker) {
+            let waker = s.services.waker.clone().unwrap_or_else(|| Arc::new(|| {}));
+            store.cache = Some(ImageCache::new(waker));
+            store.has_real_waker = has_waker;
+            store.images.clear();
+        }
+        if let Some(cached) = store.images.get(&fp)
+            && cached.url == trimmed
+        {
+            return cached
+                .image
+                .as_ref()
+                .filter(|img| img.is_ready() && img.error().is_none())
+                .map(|img| img.pixels().clone());
+        }
+        if store.images.len() >= 16 {
+            store.images.clear();
+        }
+        let decoded = decode_data_image_into_cache(
+            trimmed,
+            store.cache.as_ref().expect("image cache initialized"),
+            !has_waker,
+        );
+        let ready = decoded
+            .as_ref()
+            .filter(|img| img.is_ready() && img.error().is_none())
+            .map(|img| img.pixels().clone());
+        store.images.insert(
+            fp,
+            CachedArtifactImage {
+                url: trimmed.to_owned(),
+                image: decoded,
+            },
+        );
+        ready
+    })
+}
+
+fn decode_data_image_into_cache(
+    trimmed: &str,
+    cache: &ImageCache,
+    sync_wait: bool,
+) -> Option<Image> {
+    let rest = trimmed.strip_prefix("data:")?;
+    let (meta, payload) = rest.split_once(',')?;
+    let mime = meta.split(';').next().unwrap_or("").trim();
+    if !mime
+        .as_bytes()
+        .get(..6)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(b"image/"))
+    {
+        return None;
+    }
+    let is_base64 = meta
+        .split(';')
+        .skip(1)
+        .any(|param| param.trim().eq_ignore_ascii_case("base64"));
+    let bytes: Vec<u8> = if is_base64 {
+        let raw = payload.trim();
+        base64::engine::general_purpose::STANDARD
+            .decode(raw)
+            .or_else(|_| {
+                let compact: String = raw.chars().filter(|c| !c.is_whitespace()).collect();
+                base64::engine::general_purpose::STANDARD.decode(compact)
+            })
+            .ok()?
+    } else {
+        payload.as_bytes().to_vec()
+    };
+    let img = cache.load_mime(bytes, mime, 420.0, 2.0);
+    if sync_wait && !img.is_ready() {
+        let _ = img.wait();
+    }
+    Some(img)
+}
+
+fn cached_task_questions(task: &TaskRecordView) -> Vec<TaskQuestionItem> {
+    let mut h = DefaultHasher::new();
+    hash_json_value(&task.questions, &mut h);
+    let key = (task.summary.id.clone(), task.summary.revision, h.finish());
+    CACHED_TASK_QUESTIONS.with(|slot| {
+        let mut guard = slot.borrow_mut();
+        if let Some(entry) = guard.as_ref()
+            && entry.key == key
+        {
+            return entry.items.clone();
+        }
+        let items = extract_task_questions(&task.questions);
+        *guard = Some(CachedTaskQuestions {
+            key,
+            items: items.clone(),
+        });
+        items
+    })
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct TaskQuestionOption {
@@ -805,13 +1005,13 @@ fn build_task_details(s: &AppState, task: &TaskRecordView, k: &Kit, t: &ThemeTok
             ),
     );
 
-    let questions = extract_task_questions(&task.questions);
+    let questions = cached_task_questions(task);
     if !questions.is_empty() {
         main_pane = main_pane.child(build_task_questions_card(s, task, &questions, k, t));
     }
 
     if !task.artifacts.is_empty() || task.active_artifact_detail.is_some() {
-        main_pane = main_pane.child(build_artifact_review_card(task, k, t));
+        main_pane = main_pane.child(build_artifact_review_card(s, task, k, t));
     }
 
     if let Some(work_graph) = build_work_graph_card(s, task, k, t) {
@@ -1067,40 +1267,118 @@ fn resolve_task_question_answers(
     answers
 }
 
-fn build_artifact_review_card(task: &TaskRecordView, k: &Kit, t: &ThemeTokens) -> El {
-    let ws_id = task.summary.workspace_id.clone();
-    let task_id = task.summary.id.clone();
-    let rev = task.summary.revision;
-
-    let mut card = col()
-        .key("task-artifact-review-card")
-        .w_full()
-        .padding(14.0)
-        .radius(10.0)
-        .fill(t.card_bg)
-        .border(1.0, t.border)
-        .gap(8.0)
-        .child(
-            row()
-                .w_full()
-                .gap(8.0)
-                .center_y()
-                .child(text("Artifacts").font(t.label).color(t.text_base))
-                .child(Badge::new(task.artifacts.len().to_string()).build(k)),
-        );
-
+fn artifact_review_card_version(s: &AppState, task: &TaskRecordView, t: &ThemeTokens) -> u64 {
+    let mut h = DefaultHasher::new();
+    (
+        t.dark,
+        s.desktop_settings.reduced_transparency,
+        s.desktop_settings.high_contrast,
+        std::mem::discriminant(&s.desktop_settings.accent_palette),
+        s.ui_scale.to_bits(),
+        &task.summary.workspace_id,
+        &task.summary.id,
+        task.summary.revision,
+        &task.selected_artifact_version_id,
+        task.artifacts.len(),
+    )
+        .hash(&mut h);
     for art in &task.artifacts {
-        let detail = task.artifact_details_by_id.get(&art.id);
-        card = card.child(artifact_row(art, detail, &ws_id, &task_id, rev, k, t));
+        (
+            &art.id,
+            &art.title,
+            &art.name,
+            &art.path,
+            &art.kind,
+            &art.latest_version_id,
+            &art.accepted_version_id,
+        )
+            .hash(&mut h);
+        if let Some(detail) = task.artifact_details_by_id.get(&art.id) {
+            1u8.hash(&mut h);
+            hash_json_value(detail, &mut h);
+        } else {
+            0u8.hash(&mut h);
+        }
     }
-
     if let Some(detail) = task.active_artifact_detail.as_ref() {
-        card = card.child(build_active_artifact_detail(
-            task, detail, &ws_id, &task_id, rev, k, t,
-        ));
+        1u8.hash(&mut h);
+        hash_json_value(detail, &mut h);
+        let decoded = decode_artifact_detail(detail);
+        let versions = detail.get("versions").and_then(Value::as_array);
+        let selected_vid = task
+            .selected_artifact_version_id
+            .as_deref()
+            .filter(|vid| {
+                decoded.current_version_id == Some(*vid)
+                    || versions.is_some_and(|arr| {
+                        arr.iter()
+                            .any(|v| v.get("id").and_then(Value::as_str) == Some(*vid))
+                    })
+            })
+            .or(decoded.current_version_id)
+            .or_else(|| {
+                versions
+                    .and_then(|arr| arr.last())
+                    .and_then(|v| v.get("id"))
+                    .and_then(Value::as_str)
+            });
+        if let Some(vid) = selected_vid
+            && let Some(preview_val) = task.artifact_previews_by_version_id.get(vid)
+        {
+            2u8.hash(&mut h);
+            hash_json_value(preview_val, &mut h);
+            if let Some(url) = preview_val
+                .get("dataUrl")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|u| is_data_image_url(u))
+            {
+                let img_ready = decode_cached_task_artifact_image(s, url).is_some();
+                img_ready.hash(&mut h);
+            }
+        }
+    } else {
+        0u8.hash(&mut h);
     }
+    h.finish()
+}
 
-    card
+fn build_artifact_review_card(s: &AppState, task: &TaskRecordView, k: &Kit, t: &ThemeTokens) -> El {
+    let ver = artifact_review_card_version(s, task, t);
+    memo("task-artifact-review-card", ver, || {
+        let ws_id = task.summary.workspace_id.clone();
+        let task_id = task.summary.id.clone();
+        let rev = task.summary.revision;
+
+        let mut card = col()
+            .w_full()
+            .padding(14.0)
+            .radius(10.0)
+            .fill(t.card_bg)
+            .border(1.0, t.border)
+            .gap(8.0)
+            .child(
+                row()
+                    .w_full()
+                    .gap(8.0)
+                    .center_y()
+                    .child(text("Artifacts").font(t.label).color(t.text_base))
+                    .child(Badge::new(task.artifacts.len().to_string()).build(k)),
+            );
+
+        for art in &task.artifacts {
+            let detail = task.artifact_details_by_id.get(&art.id);
+            card = card.child(artifact_row(art, detail, &ws_id, &task_id, rev, k, t));
+        }
+
+        if let Some(detail) = task.active_artifact_detail.as_ref() {
+            card = card.child(build_active_artifact_detail(
+                s, task, detail, &ws_id, &task_id, rev, k, t,
+            ));
+        }
+
+        card
+    })
 }
 
 fn artifact_row(
@@ -1619,7 +1897,9 @@ fn resolve_active_artifact_preview_content(
     (resolved.selected_version_id, resolved.text_content)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_active_artifact_detail(
+    s: &AppState,
     task: &TaskRecordView,
     detail: &Value,
     ws_id: &str,
@@ -1703,9 +1983,9 @@ fn build_active_artifact_detail(
 
     let decoded_inline_image = resolved
         .inline_image_data_url
-        .and_then(|url| crate::views::chat::attachments::decode_image_from_uri(url, None, None));
+        .and_then(|url| decode_cached_task_artifact_image(s, url));
 
-    if let Some(img) = decoded_inline_image {
+    if let Some(pixels) = decoded_inline_image {
         let preview_height = match resolved.inline_image_dims {
             Some((w, h)) if w > 0 && h > 0 => ((h as f32 / w as f32) * 320.0).clamp(96.0, 240.0),
             _ => 180.0,
@@ -1718,7 +1998,7 @@ fn build_active_artifact_detail(
                 .clip_rounded(6.0)
                 .fill(t.card_bg)
                 .border(1.0, t.border_muted)
-                .pixels_fit(img.pixels(), SurfaceFit::Fit),
+                .pixels_fit(&pixels, SurfaceFit::Fit),
         );
         if let Some(caption) = resolved.text_content {
             box_col = box_col.child(text(caption).font(t.caption).color(t.text_muted).wrap());
@@ -1877,74 +2157,94 @@ fn build_work_graph_card(
     }
 
     let collapsed = s.shell_ui.task_work_graph_collapsed;
-    let mut card = col()
-        .key("task-work-graph-card")
-        .w_full()
-        .padding(14.0)
-        .radius(10.0)
-        .fill(t.card_bg)
-        .border(1.0, t.border)
-        .gap(8.0)
-        .child(
-            row()
-                .w_full()
-                .gap(8.0)
-                .center_y()
-                .child(text("Work Items").font(t.label).color(t.text_base))
-                .child(
-                    Badge::new(format!(
-                        "{}/{}",
-                        task.summary.completed_work_item_count,
-                        items.len()
-                    ))
-                    .build(k),
-                )
-                .child(spacer())
-                .child(
-                    Button::new(if collapsed { "Expand" } else { "Collapse" })
-                        .variant(ButtonVariant::Ghost)
-                        .control_size(ControlSize::Small)
-                        .on_press_tx(|s: &mut AppState, _| {
-                            s.shell_ui.task_work_graph_collapsed =
-                                !s.shell_ui.task_work_graph_collapsed;
-                        })
-                        .build(k),
-                ),
-        );
+    let ver = {
+        let mut h = DefaultHasher::new();
+        (
+            t.dark,
+            s.desktop_settings.reduced_transparency,
+            s.desktop_settings.high_contrast,
+            std::mem::discriminant(&s.desktop_settings.accent_palette),
+            s.ui_scale.to_bits(),
+            collapsed,
+            task.summary.completed_work_item_count,
+            items.len(),
+        )
+            .hash(&mut h);
+        if !collapsed {
+            hash_json_value(&task.work_items, &mut h);
+        }
+        h.finish()
+    };
 
-    if !collapsed {
-        for (idx, item) in items.iter().enumerate() {
-            let title = item
-                .get("title")
-                .or_else(|| item.get("name"))
-                .and_then(Value::as_str)
-                .unwrap_or("Work item");
-            let status = item
-                .get("status")
-                .and_then(Value::as_str)
-                .unwrap_or("pending");
-            card = card.child(
+    Some(memo("task-work-graph-card", ver, || {
+        let mut card = col()
+            .w_full()
+            .padding(14.0)
+            .radius(10.0)
+            .fill(t.card_bg)
+            .border(1.0, t.border)
+            .gap(8.0)
+            .child(
                 row()
-                    .key(format!("task-wi-{idx}"))
                     .w_full()
-                    .padding(8.0)
-                    .radius(6.0)
-                    .fill(t.elevated_bg)
                     .gap(8.0)
                     .center_y()
+                    .child(text("Work Items").font(t.label).color(t.text_base))
                     .child(
-                        text(title)
-                            .font(t.body)
-                            .color(t.text_base)
-                            .truncate()
-                            .grow(1.0),
+                        Badge::new(format!(
+                            "{}/{}",
+                            task.summary.completed_work_item_count,
+                            items.len()
+                        ))
+                        .build(k),
                     )
-                    .child(Badge::new(status).variant(BadgeVariant::Neutral).build(k)),
+                    .child(spacer())
+                    .child(
+                        Button::new(if collapsed { "Expand" } else { "Collapse" })
+                            .variant(ButtonVariant::Ghost)
+                            .control_size(ControlSize::Small)
+                            .on_press_tx(|s: &mut AppState, _| {
+                                s.shell_ui.task_work_graph_collapsed =
+                                    !s.shell_ui.task_work_graph_collapsed;
+                            })
+                            .build(k),
+                    ),
             );
-        }
-    }
 
-    Some(card)
+        if !collapsed {
+            for (idx, item) in items.iter().enumerate() {
+                let title = item
+                    .get("title")
+                    .or_else(|| item.get("name"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("Work item");
+                let status = item
+                    .get("status")
+                    .and_then(Value::as_str)
+                    .unwrap_or("pending");
+                card = card.child(
+                    row()
+                        .key(format!("task-wi-{idx}"))
+                        .w_full()
+                        .padding(8.0)
+                        .radius(6.0)
+                        .fill(t.elevated_bg)
+                        .gap(8.0)
+                        .center_y()
+                        .child(
+                            text(title)
+                                .font(t.body)
+                                .color(t.text_base)
+                                .truncate()
+                                .grow(1.0),
+                        )
+                        .child(Badge::new(status).variant(BadgeVariant::Neutral).build(k)),
+                );
+            }
+        }
+
+        card
+    }))
 }
 
 fn build_task_inspector_sidebar(s: &AppState, task: &TaskRecordView, t: &ThemeTokens) -> El {

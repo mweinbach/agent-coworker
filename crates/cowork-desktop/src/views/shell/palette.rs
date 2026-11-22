@@ -1,6 +1,8 @@
 //! Command Palette (`Cmd/Ctrl+K`): unified quick switcher for shell actions,
 //! threads, tasks, workspaces, settings sections, and slash commands.
 
+use std::collections::HashMap;
+
 use rune::{El, Icon, ScrollSpec, col, el, icon, row, spacer, text};
 use rune_kit::{Badge, Button, ButtonVariant, ControlSize, Kit, TextInput};
 
@@ -57,14 +59,13 @@ pub fn build_command_palette(s: &AppState, k: &Kit, t: &ThemeTokens) -> Option<E
         return None;
     }
 
-    let query = s.command_palette_query.trim().to_ascii_lowercase();
+    let query = s.command_palette_query.trim().to_lowercase();
     let tasks_enabled = super::helpers::tasks_feature_enabled(s);
     let items = collect_palette_items(s, &query);
     let selected_idx = s
         .shell_ui
         .command_palette_selected
         .min(items.len().saturating_sub(1));
-    let selected_action = items.get(selected_idx).map(|item| item.action.clone());
 
     let placeholder = if tasks_enabled {
         "Jump to workspace, thread, task, command, or settings..."
@@ -83,34 +84,36 @@ pub fn build_command_palette(s: &AppState, k: &Kit, t: &ThemeTokens) -> Option<E
             s.shell_ui.command_palette_selected = 0;
             s.dispatch(Action::Shell(ShellAction::SetCommandPaletteQuery(val)));
         })
-        .on_key(|s: &mut AppState, ev, _| {
-            let query = s.command_palette_query.trim().to_ascii_lowercase();
+        .on_key(|s: &mut AppState, ev, _| match ev.key {
+            rune::Key::Up => {
+                s.shell_ui.command_palette_selected =
+                    s.shell_ui.command_palette_selected.saturating_sub(1);
+                true
+            }
+            rune::Key::Down => {
+                let query = s.command_palette_query.trim().to_lowercase();
+                let items = collect_palette_items(s, &query);
+                if !items.is_empty() {
+                    let max_idx = items.len().saturating_sub(1);
+                    s.shell_ui.command_palette_selected =
+                        (s.shell_ui.command_palette_selected + 1).min(max_idx);
+                }
+                true
+            }
+            rune::Key::Escape => {
+                close_command_palette(s);
+                true
+            }
+            _ => false,
+        })
+        .on_action(|s: &mut AppState, tx| {
+            let query = s.command_palette_query.trim().to_lowercase();
             let items = collect_palette_items(s, &query);
             let max_idx = items.len().saturating_sub(1);
-            match ev.key {
-                rune::Key::Up => {
-                    s.shell_ui.command_palette_selected =
-                        s.shell_ui.command_palette_selected.saturating_sub(1);
-                    true
-                }
-                rune::Key::Down => {
-                    if !items.is_empty() {
-                        s.shell_ui.command_palette_selected =
-                            (s.shell_ui.command_palette_selected + 1).min(max_idx);
-                    }
-                    true
-                }
-                rune::Key::Escape => {
-                    close_command_palette(s);
-                    true
-                }
-                _ => false,
-            }
-        })
-        .on_action(move |s: &mut AppState, tx| {
-            if let Some(act) = selected_action.as_ref() {
+            if let Some(item) = items.get(s.shell_ui.command_palette_selected.min(max_idx)) {
+                let act = item.action.clone();
                 close_command_palette(s);
-                s.dispatch_tx(act.clone(), tx);
+                s.dispatch_tx(act, tx);
             }
         })
         .build(k);
@@ -276,8 +279,8 @@ fn palette_row(item: PaletteItem, highlighted: bool, k: &Kit, t: &ThemeTokens) -
 
 fn matches_query(query: &str, title: &str, subtitle: &str) -> bool {
     query.is_empty()
-        || title.to_ascii_lowercase().contains(query)
-        || subtitle.to_ascii_lowercase().contains(query)
+        || super::helpers::contains_case_insensitive(title, query)
+        || super::helpers::contains_case_insensitive(subtitle, query)
 }
 
 pub(crate) fn collect_palette_items(s: &AppState, query: &str) -> Vec<PaletteItem> {
@@ -285,130 +288,170 @@ pub(crate) fn collect_palette_items(s: &AppState, query: &str) -> Vec<PaletteIte
     let tasks_enabled = super::helpers::tasks_feature_enabled(s);
     let active_ws_id = s
         .active_workspace_id
-        .clone()
-        .or_else(|| s.workspaces.first().map(|w| w.id.clone()));
+        .as_deref()
+        .or_else(|| s.workspaces.first().map(|w| w.id.as_str()));
 
     let next_theme = match s.desktop_settings.theme {
         ThemePreference::Dark => ThemePreference::Light,
         ThemePreference::Light | ThemePreference::System => ThemePreference::Dark,
     };
 
-    let mut actions = vec![PaletteItem {
-        key: "pal-act-new-chat".into(),
-        section: "Actions",
-        title: "New chat".into(),
-        subtitle: "Start a fresh conversation in the active workspace".into(),
-        icon_glyph: &icons::PLUS,
-        action: Action::Navigate(NavAction::OpenNewChat {
-            workspace_id: active_ws_id.clone(),
+    let push_static = |out: &mut Vec<PaletteItem>,
+                       key: &'static str,
+                       title: &'static str,
+                       subtitle: &'static str,
+                       icon_glyph: &'static Icon,
+                       action: Action| {
+        if matches_query(query, title, subtitle) {
+            out.push(PaletteItem {
+                key: key.to_owned(),
+                section: "Actions",
+                title: title.to_owned(),
+                subtitle: subtitle.to_owned(),
+                icon_glyph,
+                action,
+            });
+        }
+    };
+
+    push_static(
+        &mut out,
+        "pal-act-new-chat",
+        "New chat",
+        "Start a fresh conversation in the active workspace",
+        &icons::PLUS,
+        Action::Navigate(NavAction::OpenNewChat {
+            workspace_id: active_ws_id.map(str::to_owned),
         }),
-    }];
+    );
     if tasks_enabled {
-        actions.push(PaletteItem {
-            key: "pal-act-new-task".into(),
-            section: "Actions",
-            title: "New task".into(),
-            subtitle: "Create or inspect a structured workspace task".into(),
-            icon_glyph: &icons::CHECK_SQUARE,
-            action: Action::Navigate(NavAction::OpenView(ViewId::Task)),
-        });
+        push_static(
+            &mut out,
+            "pal-act-new-task",
+            "New task",
+            "Create or inspect a structured workspace task",
+            &icons::CHECK_SQUARE,
+            Action::Navigate(NavAction::OpenView(ViewId::Task)),
+        );
     }
-    actions.extend([
-        PaletteItem {
-            key: "pal-act-quick-chat".into(),
-            section: "Actions",
-            title: "Open Quick Chat".into(),
-            subtitle: "Launch compact floating Quick Chat".into(),
-            icon_glyph: &icons::POPOUT,
-            action: Action::Shell(ShellAction::OpenQuickChatWindow),
-        },
-        PaletteItem {
-            key: "pal-act-zoom-in".into(),
-            section: "Actions",
-            title: "Zoom In".into(),
-            subtitle: format!(
-                "Increase interface scale ({})",
-                crate::shortcut_label("Cmd+=")
-            ),
-            icon_glyph: &icons::ZOOM_IN,
-            action: Action::Shell(ShellAction::ZoomIn),
-        },
-        PaletteItem {
-            key: "pal-act-zoom-out".into(),
-            section: "Actions",
-            title: "Zoom Out".into(),
-            subtitle: format!(
-                "Decrease interface scale ({})",
-                crate::shortcut_label("Cmd+-")
-            ),
-            icon_glyph: &icons::ZOOM_OUT,
-            action: Action::Shell(ShellAction::ZoomOut),
-        },
-        PaletteItem {
-            key: "pal-act-zoom-reset".into(),
-            section: "Actions",
-            title: "Actual Size".into(),
-            subtitle: format!(
-                "Reset interface zoom scale to 100% ({})",
-                crate::shortcut_label("Cmd+0")
-            ),
-            icon_glyph: &icons::REFRESH,
-            action: Action::Shell(ShellAction::ResetZoom),
-        },
-        PaletteItem {
-            key: "pal-act-add-folder".into(),
-            section: "Actions",
-            title: "Add project folder...".into(),
-            subtitle: "Choose a workspace directory from disk".into(),
-            icon_glyph: &icons::FOLDER_PLUS,
-            action: Action::Native(NativeAction::PickWorkspaceFolder),
-        },
-        PaletteItem {
-            key: "pal-act-toggle-sidebar".into(),
-            section: "Actions",
-            title: "Toggle left sidebar".into(),
-            subtitle: "Show or collapse workspace and thread navigation".into(),
-            icon_glyph: &icons::FOLDER,
-            action: Action::Shell(ShellAction::ToggleSidebar),
-        },
-        PaletteItem {
-            key: "pal-act-toggle-inspector".into(),
-            section: "Actions",
-            title: "Toggle context inspector".into(),
-            subtitle: "Show or hide usage, subagents, workflows, and files".into(),
-            icon_glyph: &icons::FILE_TEXT,
-            action: Action::Shell(ShellAction::ToggleContextSidebar),
-        },
-        PaletteItem {
-            key: "pal-act-theme".into(),
-            section: "Actions",
-            title: format!("Switch to {:?} theme", next_theme),
-            subtitle: "Toggle appearance mode".into(),
-            icon_glyph: &icons::SPARKLES,
-            action: Action::Shell(ShellAction::SetTheme(next_theme)),
-        },
-        PaletteItem {
-            key: "pal-act-settings".into(),
-            section: "Actions",
-            title: "Open Settings".into(),
-            subtitle: "Configure providers, models, MCP, tools, and privacy".into(),
-            icon_glyph: &icons::SETTINGS,
-            action: Action::Navigate(NavAction::OpenSettings(None)),
-        },
-    ]);
-    actions.retain(|item| matches_query(query, &item.title, &item.subtitle));
-    out.extend(actions);
+    push_static(
+        &mut out,
+        "pal-act-quick-chat",
+        "Open Quick Chat",
+        "Launch compact floating Quick Chat",
+        &icons::POPOUT,
+        Action::Shell(ShellAction::OpenQuickChatWindow),
+    );
+    for (key, title, subtitle_prefix, accel, icon_glyph, action) in [
+        (
+            "pal-act-zoom-in",
+            "Zoom In",
+            "Increase interface scale",
+            "Cmd+=",
+            &icons::ZOOM_IN,
+            Action::Shell(ShellAction::ZoomIn),
+        ),
+        (
+            "pal-act-zoom-out",
+            "Zoom Out",
+            "Decrease interface scale",
+            "Cmd+-",
+            &icons::ZOOM_OUT,
+            Action::Shell(ShellAction::ZoomOut),
+        ),
+        (
+            "pal-act-zoom-reset",
+            "Actual Size",
+            "Reset interface zoom scale to 100%",
+            "Cmd+0",
+            &icons::REFRESH,
+            Action::Shell(ShellAction::ResetZoom),
+        ),
+    ] {
+        // Match against static title/prefix first; only format shortcut label if needed.
+        if matches_query(query, title, subtitle_prefix) {
+            out.push(PaletteItem {
+                key: key.to_owned(),
+                section: "Actions",
+                title: title.to_owned(),
+                subtitle: format!("{subtitle_prefix} ({})", crate::shortcut_label(accel)),
+                icon_glyph,
+                action,
+            });
+        } else if !query.is_empty() {
+            let subtitle = format!("{subtitle_prefix} ({})", crate::shortcut_label(accel));
+            if super::helpers::contains_case_insensitive(&subtitle, query) {
+                out.push(PaletteItem {
+                    key: key.to_owned(),
+                    section: "Actions",
+                    title: title.to_owned(),
+                    subtitle,
+                    icon_glyph,
+                    action,
+                });
+            }
+        }
+    }
+    push_static(
+        &mut out,
+        "pal-act-add-folder",
+        "Add project folder...",
+        "Choose a workspace directory from disk",
+        &icons::FOLDER_PLUS,
+        Action::Native(NativeAction::PickWorkspaceFolder),
+    );
+    push_static(
+        &mut out,
+        "pal-act-toggle-sidebar",
+        "Toggle left sidebar",
+        "Show or collapse workspace and thread navigation",
+        &icons::FOLDER,
+        Action::Shell(ShellAction::ToggleSidebar),
+    );
+    push_static(
+        &mut out,
+        "pal-act-toggle-inspector",
+        "Toggle context inspector",
+        "Show or hide usage, subagents, workflows, and files",
+        &icons::FILE_TEXT,
+        Action::Shell(ShellAction::ToggleContextSidebar),
+    );
+    let theme_title = match next_theme {
+        ThemePreference::Dark => "Switch to Dark theme",
+        ThemePreference::Light => "Switch to Light theme",
+        ThemePreference::System => "Switch to System theme",
+    };
+    push_static(
+        &mut out,
+        "pal-act-theme",
+        theme_title,
+        "Toggle appearance mode",
+        &icons::SPARKLES,
+        Action::Shell(ShellAction::SetTheme(next_theme)),
+    );
+    push_static(
+        &mut out,
+        "pal-act-settings",
+        "Open Settings",
+        "Configure providers, models, MCP, tools, and privacy",
+        &icons::SETTINGS,
+        Action::Navigate(NavAction::OpenSettings(None)),
+    );
+
+    let ws_names: HashMap<&str, &str> = s
+        .workspaces
+        .iter()
+        .map(|w| (w.id.as_str(), w.name.as_str()))
+        .collect();
 
     let mut thread_count = 0usize;
     for th in s.threads.iter().filter(|t| t.is_standard_chat()) {
         if thread_count >= 8 {
             break;
         }
-        let ws_name = s
-            .workspaces
-            .iter()
-            .find(|w| w.id == th.workspace_id)
-            .map(|w| w.name.as_str())
+        let ws_name = ws_names
+            .get(th.workspace_id.as_str())
+            .copied()
             .unwrap_or("Workspace");
         if matches_query(query, &th.title, ws_name) {
             out.push(PaletteItem {
@@ -424,17 +467,20 @@ pub(crate) fn collect_palette_items(s: &AppState, query: &str) -> Vec<PaletteIte
     }
 
     if tasks_enabled {
-        for task in s.tasks.iter().take(6) {
-            if matches_query(query, &task.title, &task.status) {
-                out.push(PaletteItem {
-                    key: format!("pal-task-{}", task.id),
-                    section: "Tasks",
-                    title: task.title.clone(),
-                    subtitle: task.status.clone(),
-                    icon_glyph: &icons::CHECK_SQUARE,
-                    action: Action::Navigate(NavAction::OpenTask(task.id.clone())),
-                });
-            }
+        for task in s
+            .tasks
+            .iter()
+            .filter(|task| matches_query(query, &task.title, &task.status))
+            .take(6)
+        {
+            out.push(PaletteItem {
+                key: format!("pal-task-{}", task.id),
+                section: "Tasks",
+                title: task.title.clone(),
+                subtitle: task.status.clone(),
+                icon_glyph: &icons::CHECK_SQUARE,
+                action: Action::Navigate(NavAction::OpenTask(task.id.clone())),
+            });
         }
     }
 
@@ -471,23 +517,28 @@ pub(crate) fn collect_palette_items(s: &AppState, query: &str) -> Vec<PaletteIte
         }
     }
 
-    if let Some(ws_id) = active_ws_id.as_deref()
+    if let Some(ws_id) = active_ws_id
         && let Some(cmds) = s.commands_by_workspace.get(ws_id)
     {
-        for cmd in cmds.iter().take(6) {
+        for cmd in cmds
+            .iter()
+            .filter(|cmd| {
+                let desc = cmd.description.as_deref().unwrap_or("");
+                matches_query(query, &cmd.name, desc)
+            })
+            .take(6)
+        {
             let desc = cmd.description.as_deref().unwrap_or("");
-            if matches_query(query, &cmd.name, desc) {
-                out.push(PaletteItem {
-                    key: format!("pal-cmd-{}", cmd.name),
-                    section: "Commands",
-                    title: format!("/{}", cmd.name),
-                    subtitle: desc.to_owned(),
-                    icon_glyph: &icons::TERMINAL,
-                    action: Action::Navigate(NavAction::OpenNewChat {
-                        workspace_id: Some(ws_id.to_owned()),
-                    }),
-                });
-            }
+            out.push(PaletteItem {
+                key: format!("pal-cmd-{}", cmd.name),
+                section: "Commands",
+                title: format!("/{}", cmd.name),
+                subtitle: desc.to_owned(),
+                icon_glyph: &icons::TERMINAL,
+                action: Action::Navigate(NavAction::OpenNewChat {
+                    workspace_id: Some(ws_id.to_owned()),
+                }),
+            });
         }
     }
 

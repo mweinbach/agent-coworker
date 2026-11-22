@@ -44,9 +44,10 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>, k: &Kit, t: &ThemeTokens) -> El
         }
     }
 
-    let route = s.route().clone();
+    let route_view = s.route().view;
+    let chrome_trailing = cx.chrome_insets().trailing;
     let mut layer = Vec::new();
-    let base = match route.view {
+    let base = match route_view {
         ViewId::Settings => {
             let layout = crate::views::settings::build_layout(s, cx, k, t);
             build_settings_frame(s, cx, k, t, layout, &mut layer)
@@ -62,10 +63,46 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>, k: &Kit, t: &ThemeTokens) -> El
         }
     };
 
-    rune_kit::root(base, overlays::build_overlays(s, k, t, layer)).on_layout::<AppState>(
-        |s, rect| {
+    rune_kit::root(base, overlays::build_overlays(s, k, t, layer)).on_layout_tx::<AppState>(
+        move |s, rect, tx| {
+            let mut needs_commit = false;
+            let mut resized = false;
             let width = rect[2];
+            let canvas_active = state::has_active_canvas_target(s);
             if width > 0.0 && (width - s.shell_ui.viewport_width).abs() > 1.0 {
+                resized = true;
+                let before_adaptive = resolve_shell_adaptive_layout(s, canvas_active);
+                let before_compact_tb = s.shell_ui.viewport_width < helpers::COMPACT_BREAKPOINT;
+                let before_menu_compact = s.shell_ui.menu_bar.is_bar_visible(s)
+                    && menu_bar::is_compact_menu_bar(
+                        s,
+                        Some(before_adaptive.primary_width),
+                        chrome_trailing,
+                    );
+                let has_presentation_preview = s
+                    .active_file_preview
+                    .as_ref()
+                    .is_some_and(|p| p.presentation.is_some());
+                let before_pres_bucket = has_presentation_preview
+                    .then(|| (s.shell_ui.viewport_width / 16.0).round() as i32);
+                let before_left_ov = s.shell_ui.left_overlay_open;
+                let before_mobile_nav = s.settings_ui.mobile_nav_open;
+                let before_right_ov = s.shell_ui.right_overlay_open;
+                let before_canvas_drawer_w = if canvas_active
+                    && (before_adaptive.tier == helpers::AdaptiveTier::Narrow
+                        || before_adaptive.right_overlay)
+                    && state::is_right_overlay_visible(s)
+                {
+                    Some(
+                        s.shell_ui
+                            .canvas_pane
+                            .width()
+                            .clamp(320.0, (s.shell_ui.viewport_width - 24.0).max(320.0)),
+                    )
+                } else {
+                    None
+                };
+
                 s.shell_ui.viewport_width = width;
                 if width >= helpers::NARROW_BREAKPOINT {
                     s.shell_ui.left_overlay_open = false;
@@ -74,14 +111,174 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>, k: &Kit, t: &ThemeTokens) -> El
                 if !state::right_rail_uses_overlay(s) {
                     s.shell_ui.right_overlay_open = false;
                 }
-            }
-            let next_canvas_key = state::active_canvas_target_key(s);
-            if next_canvas_key != s.shell_ui.last_canvas_key {
-                s.shell_ui.last_canvas_key = next_canvas_key.clone();
-                s.shell_ui.canvas_overlay_dismissed_key = None;
-                if next_canvas_key.is_some() {
-                    s.shell_ui.canvas_pane.set_open(true);
+
+                let after_adaptive = resolve_shell_adaptive_layout(s, canvas_active);
+                let after_compact_tb = s.shell_ui.viewport_width < helpers::COMPACT_BREAKPOINT;
+                let after_menu_compact = s.shell_ui.menu_bar.is_bar_visible(s)
+                    && menu_bar::is_compact_menu_bar(
+                        s,
+                        Some(after_adaptive.primary_width),
+                        chrome_trailing,
+                    );
+                if before_menu_compact != after_menu_compact {
+                    if after_menu_compact {
+                        if s.shell_ui.menu_bar.open_menu_idx.is_some() {
+                            s.shell_ui.menu_bar.narrow_menu_open = true;
+                        }
+                    } else {
+                        s.shell_ui.menu_bar.narrow_menu_open = false;
+                    }
                 }
+                let after_pres_bucket = has_presentation_preview
+                    .then(|| (s.shell_ui.viewport_width / 16.0).round() as i32);
+                let after_canvas_drawer_w = if canvas_active
+                    && (after_adaptive.tier == helpers::AdaptiveTier::Narrow
+                        || after_adaptive.right_overlay)
+                    && state::is_right_overlay_visible(s)
+                {
+                    Some(
+                        s.shell_ui
+                            .canvas_pane
+                            .width()
+                            .clamp(320.0, (s.shell_ui.viewport_width - 24.0).max(320.0)),
+                    )
+                } else {
+                    None
+                };
+
+                let structural_changed = (before_adaptive.tier == helpers::AdaptiveTier::Narrow)
+                    != (after_adaptive.tier == helpers::AdaptiveTier::Narrow)
+                    || before_adaptive.left_overlay != after_adaptive.left_overlay
+                    || before_adaptive.right_overlay != after_adaptive.right_overlay
+                    || before_compact_tb != after_compact_tb
+                    || before_menu_compact != after_menu_compact
+                    || before_pres_bucket != after_pres_bucket
+                    || before_left_ov != s.shell_ui.left_overlay_open
+                    || before_mobile_nav != s.settings_ui.mobile_nav_open
+                    || before_right_ov != s.shell_ui.right_overlay_open
+                    || before_canvas_drawer_w != after_canvas_drawer_w;
+                if structural_changed {
+                    needs_commit = true;
+                    tx.instant();
+                }
+            }
+
+            let (canvas_key_changed, has_next_canvas, next_canvas_owned) = {
+                let next_canvas_ref = state::active_canvas_target_key_ref(s);
+                let changed = match next_canvas_ref {
+                    Some(key_ref) => !key_ref.matches_stored(s.shell_ui.last_canvas_key.as_deref()),
+                    None => s.shell_ui.last_canvas_key.is_some(),
+                };
+                let owned = if changed {
+                    next_canvas_ref.map(state::ActiveCanvasKeyRef::to_owned_key)
+                } else {
+                    None
+                };
+                (changed, next_canvas_ref.is_some(), owned)
+            };
+            let mut canvas_auto_opened = false;
+            if canvas_key_changed {
+                let was_dismissed = s.shell_ui.canvas_overlay_dismissed_key.is_some();
+                s.shell_ui.last_canvas_key = next_canvas_owned;
+                s.shell_ui.canvas_overlay_dismissed_key = None;
+                if has_next_canvas {
+                    let was_closed = !s.shell_ui.canvas_pane.is_open();
+                    s.shell_ui.canvas_pane.set_open(true);
+                    if was_closed {
+                        canvas_auto_opened = true;
+                        needs_commit = true;
+                    } else if was_dismissed {
+                        needs_commit = true;
+                    }
+                }
+            }
+
+            // Record last-rendered route, inline pane open states, and spring animation windows
+            // without forcing extra commits.
+            let prev_route_view = s.shell_ui.last_route_view;
+            let cur_route_view = s.route().view;
+            let was_initial_frame = prev_route_view.is_none();
+            let was_route_swapped = prev_route_view.is_some_and(|prev| prev != cur_route_view);
+            let cur_adaptive = resolve_shell_adaptive_layout(s, canvas_active);
+            let cur_canvas_max = canvas_active && crate::views::chat::is_canvas_maximized(s);
+            let cur_right_overlay =
+                cur_adaptive.tier == helpers::AdaptiveTier::Narrow || cur_adaptive.right_overlay;
+            s.shell_ui.last_route_view = Some(cur_route_view);
+
+            if cur_route_view == ViewId::Settings {
+                s.shell_ui.sidebar_anim_until = None;
+                s.shell_ui.inspector_anim_until = None;
+            } else {
+                let suppress_pane_anim = was_initial_frame
+                    || was_route_swapped
+                    || resized
+                    || s.desktop_settings.reduce_motion;
+                let cur_sidebar_inline_open = !cur_adaptive.left_overlay && s.sidebar.is_open();
+                let cur_inspector_inline_open = !cur_canvas_max
+                    && !cur_right_overlay
+                    && if canvas_active {
+                        (!canvas_auto_opened || suppress_pane_anim)
+                            && s.shell_ui.canvas_pane.is_open()
+                    } else {
+                        s.context_sidebar.is_open()
+                    };
+
+                if suppress_pane_anim {
+                    s.shell_ui.sidebar_anim_until = None;
+                    s.shell_ui.inspector_anim_until = None;
+                } else {
+                    if s.shell_ui.sidebar_resize_start_width.is_some() || cur_adaptive.left_overlay
+                    {
+                        s.shell_ui.sidebar_anim_until = None;
+                    } else if cur_sidebar_inline_open != s.shell_ui.sidebar_last_rendered_open {
+                        s.shell_ui.sidebar_anim_until = Some(state::PaneAnimDeadline::after(
+                            s.app_elapsed_secs,
+                            state::PANE_ANIM_DURATION_SECS,
+                        ));
+                        if !cur_sidebar_inline_open && s.app_elapsed_secs > 0.0 {
+                            tx.wake_at(s.app_elapsed_secs + state::PANE_ANIM_DURATION_SECS + 0.02);
+                        }
+                    } else if s
+                        .shell_ui
+                        .sidebar_anim_until
+                        .is_some_and(|d| !d.is_active(s.app_elapsed_secs))
+                    {
+                        s.shell_ui.sidebar_anim_until = None;
+                    }
+
+                    if s.shell_ui.inspector_resize_start_width.is_some()
+                        || cur_canvas_max
+                        || cur_right_overlay
+                    {
+                        s.shell_ui.inspector_anim_until = None;
+                    } else if canvas_auto_opened
+                        || cur_inspector_inline_open != s.shell_ui.inspector_last_rendered_open
+                    {
+                        s.shell_ui.inspector_anim_until = Some(state::PaneAnimDeadline::after(
+                            s.app_elapsed_secs,
+                            state::PANE_ANIM_DURATION_SECS,
+                        ));
+                        if !canvas_auto_opened
+                            && !cur_inspector_inline_open
+                            && s.app_elapsed_secs > 0.0
+                        {
+                            tx.wake_at(s.app_elapsed_secs + state::PANE_ANIM_DURATION_SECS + 0.02);
+                        }
+                    } else if s
+                        .shell_ui
+                        .inspector_anim_until
+                        .is_some_and(|d| !d.is_active(s.app_elapsed_secs))
+                    {
+                        s.shell_ui.inspector_anim_until = None;
+                    }
+                }
+
+                s.shell_ui.sidebar_last_rendered_open = cur_sidebar_inline_open;
+                s.shell_ui.inspector_last_rendered_open = cur_inspector_inline_open;
+            }
+
+            if !needs_commit {
+                tx.live_only();
             }
         },
     )
@@ -250,12 +447,14 @@ fn build_settings_frame(
 
     // Keep the shared `"shell"` key from `FullBleedSplit::build` so swapping between workspace
     // views and Settings preserves the opaque main column and native vibrancy sidebar slot
-    // without unmounting or crossfading the entire window frame.
+    // without unmounting or crossfading the entire window frame. Settings never collapses its
+    // navigation rail, so keep width motion instant (`Spring::NONE`) to prevent resize lag and
+    // Chat <-> Settings pane-width jumps.
     split
         .hide_sidebar_toggle()
         .titlebar_inset(leading_lights)
         .sidebar_vibrancy(sidebar_vibrancy_alpha(s, t))
-        .spring(Spring::new(0.3, 0.0))
+        .spring(Spring::NONE)
         .reduced_motion(s.desktop_settings.reduce_motion)
         .build(k)
 }
@@ -268,16 +467,109 @@ fn build_workspace_split_frame(
     main_subview: El,
     layer: &mut Vec<El>,
 ) -> El {
-    let sidebar_el = sidebar::build_sidebar(s, k, t, layer);
-    let (canvas_content, canvas_overlays) = match crate::views::chat::canvas_pane(s, cx, k) {
-        Some(out) => (Some(out.content), out.overlays),
-        None => (None, Vec::new()),
-    };
-    let canvas_active = canvas_content.is_some();
+    let next_canvas_ref = state::active_canvas_target_key_ref(s);
+    let canvas_active = next_canvas_ref.is_some();
+    let canvas_opening_now = next_canvas_ref
+        .is_some_and(|key_ref| !key_ref.matches_stored(s.shell_ui.last_canvas_key.as_deref()));
     let canvas_maximized = canvas_active && crate::views::chat::is_canvas_maximized(s);
-    layer.extend(canvas_overlays);
-
     let adaptive = resolve_shell_adaptive_layout(s, canvas_active);
+
+    let route_view = s.route().view;
+    let is_initial_frame = s.shell_ui.last_route_view.is_none();
+    let route_swapped = s
+        .shell_ui
+        .last_route_view
+        .is_some_and(|prev| prev != route_view);
+
+    let sidebar_open = s.sidebar.is_open();
+    let sidebar_dragging = s.shell_ui.sidebar_resize_start_width.is_some();
+    let sidebar_inline_open = !adaptive.left_overlay && sidebar_open;
+    let sidebar_toggled_now = !is_initial_frame
+        && !route_swapped
+        && !adaptive.left_overlay
+        && sidebar_inline_open != s.shell_ui.sidebar_last_rendered_open;
+    let sidebar_anim_active = !is_initial_frame
+        && !route_swapped
+        && !adaptive.left_overlay
+        && !sidebar_dragging
+        && !s.desktop_settings.reduce_motion
+        && (sidebar_toggled_now
+            || s.shell_ui
+                .sidebar_anim_until
+                .is_some_and(|d| d.is_active(s.app_elapsed_secs)));
+    let sidebar_closing_anim = !sidebar_open && sidebar_anim_active;
+    let sidebar_settled_closed = !sidebar_open && !sidebar_dragging && !sidebar_closing_anim;
+
+    let right_is_overlay = adaptive.tier == helpers::AdaptiveTier::Narrow || adaptive.right_overlay;
+    let right_overlay_visible = if canvas_active {
+        state::is_right_overlay_visible(s)
+    } else {
+        s.shell_ui.right_overlay_open
+    };
+    let inspector_dragging = s.shell_ui.inspector_resize_start_width.is_some();
+    let inspector_open = if canvas_active {
+        s.shell_ui.canvas_pane.is_open() || canvas_opening_now
+    } else {
+        s.context_sidebar.is_open()
+    };
+    let inspector_rendered_open = !canvas_maximized
+        && !right_is_overlay
+        && if canvas_active {
+            s.shell_ui.canvas_pane.is_open()
+        } else {
+            s.context_sidebar.is_open()
+        };
+    let inspector_toggled_now = !is_initial_frame
+        && !route_swapped
+        && !canvas_maximized
+        && !right_is_overlay
+        && inspector_rendered_open != s.shell_ui.inspector_last_rendered_open;
+    let inspector_anim_active = !is_initial_frame
+        && !route_swapped
+        && !canvas_maximized
+        && !right_is_overlay
+        && !inspector_dragging
+        && !s.desktop_settings.reduce_motion
+        && (inspector_toggled_now
+            || s.shell_ui
+                .inspector_anim_until
+                .is_some_and(|d| d.is_active(s.app_elapsed_secs)));
+    let inspector_closing_anim = !inspector_open && inspector_anim_active;
+    let inspector_settled_closed =
+        !inspector_open && !inspector_dragging && !inspector_closing_anim;
+
+    // Gate left sidebar build: skip completely when hidden in a closed overlay drawer or
+    // settled closed inline.
+    let sidebar_el = if adaptive.left_overlay {
+        s.shell_ui
+            .left_overlay_open
+            .then(|| sidebar::build_sidebar_with_visibility(s, k, t, layer, true))
+    } else if sidebar_settled_closed {
+        Some(el().key("sidebar-collapsed-empty"))
+    } else {
+        Some(sidebar::build_sidebar_with_visibility(
+            s,
+            k,
+            t,
+            layer,
+            sidebar_open,
+        ))
+    };
+
+    // Gate Canvas and Context Sidebar builds: skip completely when hidden in a closed overlay
+    // drawer or settled closed inline.
+    let need_right_content = canvas_maximized
+        || (right_is_overlay && right_overlay_visible)
+        || (!right_is_overlay && !inspector_settled_closed);
+    let (canvas_content, canvas_overlays) = if canvas_active && need_right_content {
+        match crate::views::chat::canvas_pane(s, cx, k) {
+            Some(out) => (Some(out.content), out.overlays),
+            None => (None, Vec::new()),
+        }
+    } else {
+        (None, Vec::new())
+    };
+    layer.extend(canvas_overlays);
 
     // Back and forward live beside the sidebar toggle unless the sidebar is a drawer.
     let toolbar = top_bar::build_toolbar(
@@ -302,9 +594,17 @@ fn build_workspace_split_frame(
         )
     } else {
         let primary = banners::build_primary_content(s, k, t, main_subview, canvas_active);
-        let right = canvas_content
-            .unwrap_or_else(|| context_sidebar::build_context_sidebar(s, k, t, layer));
-        (primary, Some(right))
+        let right = if canvas_active {
+            canvas_content
+                .or_else(|| (!right_is_overlay).then(|| el().key("inspector-collapsed-empty")))
+        } else if need_right_content {
+            Some(context_sidebar::build_context_sidebar(s, k, t, layer))
+        } else if !right_is_overlay {
+            Some(el().key("inspector-collapsed-empty"))
+        } else {
+            None
+        };
+        (primary, right)
     };
 
     let mut split = FullBleedSplit::new(primary_el).toolbar(toolbar);
@@ -317,20 +617,21 @@ fn build_workspace_split_frame(
     };
 
     if adaptive.left_overlay {
-        if s.shell_ui.left_overlay_open {
-            push_left_drawer_overlay(layer, chrome, leading_lights, t, sidebar_el, |s| {
+        if let Some(sb_el) = sidebar_el {
+            push_left_drawer_overlay(layer, chrome, leading_lights, t, sb_el, |s| {
                 s.shell_ui.left_overlay_open = false;
             });
         }
-    } else {
+    } else if let Some(sb_el) = sidebar_el {
         split = split
             .sidebar(
                 &s.sidebar,
-                s.shell_ui.sidebar_resize_start_width.is_some(),
+                sidebar_dragging,
                 |s: &mut AppState| &mut s.sidebar,
                 |s: &mut AppState| &mut s.shell_ui.sidebar_resize_start_width,
-                sidebar_el,
+                sb_el,
             )
+            .sidebar_settled_closed(sidebar_settled_closed)
             .sidebar_padding(4.0, 4.0)
             .sidebar_nav(top_bar::build_nav_buttons(s, k))
             .unread(helpers::any_background_unread(s))
@@ -338,13 +639,8 @@ fn build_workspace_split_frame(
     }
 
     if let Some(right_panel_el) = right_panel_el {
-        if adaptive.tier == helpers::AdaptiveTier::Narrow || adaptive.right_overlay {
-            let show_overlay = if canvas_active {
-                state::is_right_overlay_visible(s)
-            } else {
-                s.shell_ui.right_overlay_open
-            };
-            if show_overlay {
+        if right_is_overlay {
+            if right_overlay_visible {
                 let drawer_width = if canvas_active {
                     s.shell_ui
                         .canvas_pane
@@ -386,21 +682,25 @@ fn build_workspace_split_frame(
                 );
             }
         } else if canvas_active {
-            split = split.inspector(
-                &s.shell_ui.canvas_pane,
-                s.shell_ui.inspector_resize_start_width.is_some(),
-                |s: &mut AppState| &mut s.shell_ui.canvas_pane,
-                |s: &mut AppState| &mut s.shell_ui.inspector_resize_start_width,
-                right_panel_el,
-            );
+            split = split
+                .inspector(
+                    &s.shell_ui.canvas_pane,
+                    inspector_dragging,
+                    |s: &mut AppState| &mut s.shell_ui.canvas_pane,
+                    |s: &mut AppState| &mut s.shell_ui.inspector_resize_start_width,
+                    right_panel_el,
+                )
+                .inspector_settled_closed(inspector_settled_closed);
         } else {
-            split = split.inspector(
-                &s.context_sidebar,
-                s.shell_ui.inspector_resize_start_width.is_some(),
-                |s: &mut AppState| &mut s.context_sidebar,
-                |s: &mut AppState| &mut s.shell_ui.inspector_resize_start_width,
-                right_panel_el,
-            );
+            split = split
+                .inspector(
+                    &s.context_sidebar,
+                    inspector_dragging,
+                    |s: &mut AppState| &mut s.context_sidebar,
+                    |s: &mut AppState| &mut s.shell_ui.inspector_resize_start_width,
+                    right_panel_el,
+                )
+                .inspector_settled_closed(inspector_settled_closed);
         }
     }
 
@@ -413,10 +713,19 @@ fn build_workspace_split_frame(
         layer,
     );
 
+    // Only animate pane widths while a sidebar or inspector open/collapse spring is active on
+    // this route; keep OS window resizes and Chat <-> Settings swaps instant so main content
+    // never spring-lags or jumps.
+    let split_spring = if sidebar_anim_active || inspector_anim_active {
+        Spring::new(0.22, 0.0)
+    } else {
+        Spring::NONE
+    };
+
     split
         .titlebar_inset(leading_lights)
         .sidebar_vibrancy(sidebar_vibrancy_alpha(s, t))
-        .spring(Spring::new(0.3, 0.0))
+        .spring(split_spring)
         .reduced_motion(s.desktop_settings.reduce_motion)
         .build(k)
 }
@@ -1339,7 +1648,8 @@ mod tests {
             assert!(rt.presented("settings-main-pane").is_none());
 
             // 4. Collapse sidebar in Chat, then open Settings via topbar gear button and Escape back.
-            rt.state.sidebar.set_open(false);
+            rt.update(|s, _| s.sidebar.set_open(false));
+            rt.frame(0.0);
             rt.settle_all();
             rt.frame(1.0 / 60.0);
 

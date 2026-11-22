@@ -2,9 +2,11 @@
 //!
 //! Ported from `apps/desktop/src/ui/Sidebar.tsx`, `src/ui/sidebar/`, and `sidebarHelpers.ts`.
 
-use std::collections::HashSet;
+use std::collections::hash_map::DefaultHasher;
+use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
 
-use rune::{El, col, el, row, text};
+use rune::{El, col, el, memo, row, text};
 use rune_kit::shell::{RowStatus, Sidebar, SidebarRow, SidebarSection};
 use rune_kit::{ControlSize, IconButton, IconButtonVariant, Kit, Menu, MenuItem};
 
@@ -13,7 +15,8 @@ use crate::router::{SettingsPageId, ViewId};
 use crate::state::{AppState, ThreadRecord, WorkspaceRecord};
 use crate::theme::ThemeTokens;
 use crate::views::shell::helpers::{
-    filtered_threads, pending_input_count, split_workspaces, thread_row_status,
+    contains_case_insensitive, filtered_threads, pending_input_count, split_workspaces,
+    thread_row_status,
 };
 use crate::views::shell::icons;
 
@@ -28,7 +31,183 @@ const SECTION_GAP: f32 = 10.0;
 /// Deliberately quiet: rows are a single line of text, chat rows carry no icons, ages or
 /// counts, and per-row actions only appear under the pointer. Live state (working, needs input,
 /// unread) still shows as a small status mark at the row's end.
-pub fn build_sidebar(s: &AppState, k: &Kit, _t: &ThemeTokens, layer: &mut Vec<El>) -> El {
+pub fn build_sidebar(s: &AppState, k: &Kit, t: &ThemeTokens, layer: &mut Vec<El>) -> El {
+    build_sidebar_with_visibility(s, k, t, layer, true)
+}
+
+/// Renders the left application sidebar, optionally suppressing animated busy spinners when
+/// the pane is collapsing or hidden, and memoizing the subtree against unrelated commits.
+pub(crate) fn build_sidebar_with_visibility(
+    s: &AppState,
+    k: &Kit,
+    t: &ThemeTokens,
+    layer: &mut Vec<El>,
+    allow_spinners: bool,
+) -> El {
+    // Push any active thread context menu outside `memo` so menu popups stay live even when
+    // the sidebar rows themselves are reused from cache.
+    push_thread_context_menu(s, k, layer);
+
+    if s.shell_ui.renaming_thread_id.is_some() {
+        return build_sidebar_inner(s, k, t, allow_spinners).key("sidebar");
+    }
+
+    let version = sidebar_version(s, t, allow_spinners);
+    memo("sidebar", version, || {
+        build_sidebar_inner(s, k, t, allow_spinners)
+    })
+}
+
+fn hash_string_set(set: &HashSet<String>, h: &mut DefaultHasher) {
+    set.len().hash(h);
+    if set.is_empty() {
+        return;
+    }
+    let mut xor_acc: u64 = 0;
+    let mut sum_acc: u64 = 0;
+    for item in set {
+        let mut item_h = DefaultHasher::new();
+        item.hash(&mut item_h);
+        let v = item_h.finish();
+        xor_acc ^= v;
+        sum_acc = sum_acc.wrapping_add(v);
+    }
+    (xor_acc, sum_acc).hash(h);
+}
+
+fn sidebar_version(s: &AppState, t: &ThemeTokens, allow_spinners: bool) -> u64 {
+    let mut h = DefaultHasher::new();
+    (
+        t.dark,
+        s.desktop_settings.reduced_transparency,
+        s.desktop_settings.high_contrast,
+        std::mem::discriminant(&s.desktop_settings.accent_palette),
+        s.ui_scale.to_bits(),
+        s.desktop_settings.reduce_motion,
+        allow_spinners,
+    )
+        .hash(&mut h);
+
+    let route = s.route();
+    (
+        std::mem::discriminant(&route.view),
+        &route.active_thread_id,
+        &route.active_task_id,
+        &s.active_workspace_id,
+    )
+        .hash(&mut h);
+
+    (
+        &s.sidebar_search,
+        s.shell_ui.needs_input_only,
+        s.shell_ui.chats_expanded,
+        s.shell_ui.sidebar_reorder_rev,
+    )
+        .hash(&mut h);
+
+    let tasks_enabled = super::helpers::tasks_feature_enabled(s);
+    tasks_enabled.hash(&mut h);
+
+    s.desktop_settings.sidebar_section_order.len().hash(&mut h);
+    for section_key in &s.desktop_settings.sidebar_section_order {
+        (
+            section_key,
+            s.collapsed_sidebar_sections.contains(section_key),
+        )
+            .hash(&mut h);
+    }
+
+    s.workspace_order.hash(&mut h);
+    hash_string_set(&s.collapsed_workspace_ids, &mut h);
+    hash_string_set(&s.shell_ui.expanded_thread_workspaces, &mut h);
+    if s.workspaces_rev != 0 {
+        (1u8, s.workspaces_rev, s.workspaces.len()).hash(&mut h);
+    } else {
+        (0u8, s.workspaces.len()).hash(&mut h);
+        for ws in &s.workspaces {
+            (&ws.id, &ws.name, ws.one_off_chat, ws.archived).hash(&mut h);
+        }
+    }
+
+    if s.threads_rev != 0 {
+        (1u8, s.threads_rev, s.threads.len()).hash(&mut h);
+        let mut active_count: usize = 0;
+        let mut xor_acc: u64 = 0;
+        let mut sum_acc: u64 = 0;
+        for (tid, rt) in &s.thread_runtime_by_id {
+            let status_tag = if !rt.pending_interactions.is_empty() {
+                3u8
+            } else if rt.streaming || rt.pending_turn_count > 0 || rt.active_turn_id.is_some() {
+                2u8
+            } else if rt.unread {
+                1u8
+            } else {
+                0u8
+            };
+            let pending_len = rt.pending_interactions.len();
+            if status_tag == 0 && pending_len == 0 {
+                continue;
+            }
+            active_count += 1;
+            let mut entry_h = DefaultHasher::new();
+            (tid.as_str(), status_tag, pending_len).hash(&mut entry_h);
+            let v = entry_h.finish();
+            xor_acc ^= v;
+            sum_acc = sum_acc.wrapping_add(v);
+        }
+        (active_count, xor_acc, sum_acc).hash(&mut h);
+    } else {
+        0u8.hash(&mut h);
+        let search_non_empty = !s.sidebar_search.trim().is_empty();
+        for tr in &s.threads {
+            if !tr.is_standard_chat() {
+                continue;
+            }
+            let (status_tag, pending_len) = match s.thread_runtime_by_id.get(&tr.id) {
+                Some(rt) => {
+                    let tag = if !rt.pending_interactions.is_empty() {
+                        3u8
+                    } else if rt.streaming
+                        || rt.pending_turn_count > 0
+                        || rt.active_turn_id.is_some()
+                    {
+                        2u8
+                    } else if rt.unread {
+                        1u8
+                    } else {
+                        0u8
+                    };
+                    (tag, rt.pending_interactions.len())
+                }
+                None => (0u8, 0usize),
+            };
+            (
+                &tr.id,
+                &tr.workspace_id,
+                &tr.title,
+                tr.pinned,
+                tr.updated_at,
+                status_tag,
+                pending_len,
+            )
+                .hash(&mut h);
+            if search_non_empty {
+                tr.preview.hash(&mut h);
+            }
+        }
+    }
+
+    if tasks_enabled {
+        s.tasks.len().hash(&mut h);
+        for task in &s.tasks {
+            (&task.id, &task.title, &task.status).hash(&mut h);
+        }
+    }
+
+    h.finish()
+}
+
+fn build_sidebar_inner(s: &AppState, k: &Kit, t: &ThemeTokens, allow_spinners: bool) -> El {
     let mut sb = Sidebar::new()
         .label("Workspace navigation")
         .inset(4.0)
@@ -36,12 +215,13 @@ pub fn build_sidebar(s: &AppState, k: &Kit, _t: &ThemeTokens, layer: &mut Vec<El
         .header_padding(0.0, SECTION_GAP)
         .row_gap(1.0);
 
-    for item in build_header_items(s, k) {
+    let pending_count = pending_input_count(s);
+    for item in build_header_items(s, k, pending_count) {
         sb = sb.header(item);
     }
 
     let query = s.sidebar_search.as_str();
-    let pending_filter = s.shell_ui.needs_input_only && pending_input_count(s) > 0;
+    let pending_filter = s.shell_ui.needs_input_only && pending_count > 0;
     let threads = filtered_threads(s, query, pending_filter);
     let (projects, one_off_ids, primary_one_off) = split_workspaces(s);
     let active_thread_id = s.route().active_thread_id.as_deref();
@@ -59,12 +239,16 @@ pub fn build_sidebar(s: &AppState, k: &Kit, _t: &ThemeTokens, layer: &mut Vec<El
     for section_key in &s.desktop_settings.sidebar_section_order {
         match section_key {
             SidebarSectionKey::Pinned => {
-                if let Some(sec) = build_pinned_section(s, k, layer, &threads, active_thread_id) {
+                if let Some(sec) =
+                    build_pinned_section(s, k, t, &threads, active_thread_id, allow_spinners)
+                {
                     sb = gap(sb).section(sec);
                 }
             }
             SidebarSectionKey::Tasks => {
-                if let Some(sec) = build_tasks_section(s, k, query, active_task_id) {
+                if let Some(sec) =
+                    build_tasks_section(s, k, t, query, active_task_id, allow_spinners)
+                {
                     sb = gap(sb).section(sec);
                 }
             }
@@ -72,22 +256,24 @@ pub fn build_sidebar(s: &AppState, k: &Kit, _t: &ThemeTokens, layer: &mut Vec<El
                 sb = gap(sb).section(build_chats_section(
                     s,
                     k,
-                    layer,
+                    t,
                     &threads,
                     &one_off_ids,
                     primary_one_off,
                     active_thread_id,
+                    allow_spinners,
                 ));
             }
             SidebarSectionKey::Workspaces => {
                 sb = build_workspaces_section(
                     s,
                     k,
-                    layer,
+                    t,
                     gap(sb),
                     &projects,
                     &threads,
                     active_thread_id,
+                    allow_spinners,
                 );
             }
         }
@@ -110,7 +296,7 @@ pub fn build_sidebar(s: &AppState, k: &Kit, _t: &ThemeTokens, layer: &mut Vec<El
         .transition(rune::Transition::none())
 }
 
-fn build_header_items(s: &AppState, k: &Kit) -> Vec<El> {
+fn build_header_items(s: &AppState, k: &Kit, pending: usize) -> Vec<El> {
     let new_chat = SidebarRow::new("New chat")
         .icon(&icons::PLUS)
         .detail(crate::shortcut_label("Cmd+N"))
@@ -136,7 +322,6 @@ fn build_header_items(s: &AppState, k: &Kit) -> Vec<El> {
 
     let mut items = vec![new_chat, search];
 
-    let pending = pending_input_count(s);
     if pending > 0 {
         items.push(
             SidebarRow::new(if s.shell_ui.needs_input_only {
@@ -243,9 +428,10 @@ fn show_more_row(
 fn build_pinned_section(
     s: &AppState,
     k: &Kit,
-    layer: &mut Vec<El>,
+    t: &ThemeTokens,
     threads: &[&ThreadRecord],
     active_thread_id: Option<&str>,
+    allow_spinners: bool,
 ) -> Option<SidebarSection> {
     let pinned: Vec<&ThreadRecord> = threads.iter().copied().filter(|tr| tr.pinned).collect();
     if pinned.is_empty() {
@@ -262,10 +448,11 @@ fn build_pinned_section(
         sec = sec.row(build_thread_row(
             s,
             k,
-            layer,
+            t,
             tr,
             active_thread_id == Some(tr.id.as_str()),
             ThreadIndent::TopLevel,
+            allow_spinners,
         ));
     }
     Some(sec)
@@ -274,17 +461,26 @@ fn build_pinned_section(
 fn build_tasks_section(
     s: &AppState,
     k: &Kit,
+    t: &ThemeTokens,
     query: &str,
     active_task_id: Option<&str>,
+    allow_spinners: bool,
 ) -> Option<SidebarSection> {
     if !super::helpers::tasks_feature_enabled(s) {
         return None;
     }
-    let q = query.trim().to_lowercase();
+    let trimmed = query.trim();
+    let q = if trimmed.is_empty() {
+        String::new()
+    } else if trimmed.is_ascii() {
+        trimmed.to_ascii_lowercase()
+    } else {
+        trimmed.to_lowercase()
+    };
     let visible: Vec<_> = s
         .tasks
         .iter()
-        .filter(|task| q.is_empty() || task.title.to_lowercase().contains(&q))
+        .filter(|task| q.is_empty() || contains_case_insensitive(&task.title, &q))
         .collect();
     if visible.is_empty() {
         return None;
@@ -292,6 +488,7 @@ fn build_tasks_section(
     let collapsed = s
         .collapsed_sidebar_sections
         .contains(&SidebarSectionKey::Tasks);
+    let reduce_motion = s.desktop_settings.reduce_motion;
     let mut sec = SidebarSection::new("Tasks")
         .key("section-tasks")
         .collapsed(collapsed)
@@ -309,8 +506,20 @@ fn build_tasks_section(
             .on_select(move |s: &mut AppState, tx| {
                 s.dispatch_tx(Action::Navigate(NavAction::OpenTask(task_id.clone())), tx);
             });
-        if let Some(st) = status {
-            r = r.status(st);
+        match status {
+            Some(RowStatus::Busy) => {
+                if !allow_spinners {
+                    // Collapsed/closing pane: omit animated busy spinners.
+                } else if reduce_motion {
+                    r = r.trailing(el().size(6.0, 6.0).radius(3.0).fill(t.accent).a11y_hidden());
+                } else {
+                    r = r.status(RowStatus::Busy);
+                }
+            }
+            Some(other) => {
+                r = r.status(other);
+            }
+            None => {}
         }
         sec = sec.row(r.build(k).key(format!("task-{}", task.id)));
     }
@@ -321,11 +530,12 @@ fn build_tasks_section(
 fn build_chats_section(
     s: &AppState,
     k: &Kit,
-    layer: &mut Vec<El>,
+    t: &ThemeTokens,
     threads: &[&ThreadRecord],
     one_off_ids: &HashSet<&str>,
     primary_one_off: Option<&str>,
     active_thread_id: Option<&str>,
+    allow_spinners: bool,
 ) -> SidebarSection {
     let chat_threads: Vec<&ThreadRecord> = threads
         .iter()
@@ -376,10 +586,11 @@ fn build_chats_section(
         sec = sec.row(build_thread_row(
             s,
             k,
-            layer,
+            t,
             tr,
             active_thread_id == Some(tr.id.as_str()),
             ThreadIndent::TopLevel,
+            allow_spinners,
         ));
     }
 
@@ -426,11 +637,12 @@ fn section_add_button(
 fn build_workspaces_section(
     s: &AppState,
     k: &Kit,
-    layer: &mut Vec<El>,
+    t: &ThemeTokens,
     mut sb: Sidebar,
     projects: &[&WorkspaceRecord],
     threads: &[&ThreadRecord],
     active_thread_id: Option<&str>,
+    allow_spinners: bool,
 ) -> Sidebar {
     let section_collapsed = s
         .collapsed_sidebar_sections
@@ -460,18 +672,27 @@ fn build_workspaces_section(
         return sb.section(empty);
     }
 
+    // Group threads by workspace in a single O(T) pass instead of O(P * T) filtering per project.
+    let mut threads_by_ws: HashMap<&str, Vec<&ThreadRecord>> =
+        HashMap::with_capacity(projects.len());
+    for tr in threads {
+        threads_by_ws
+            .entry(tr.workspace_id.as_str())
+            .or_default()
+            .push(tr);
+    }
+
+    let search_active = !s.sidebar_search.trim().is_empty();
     let project_count = projects.len();
     for (idx, ws) in projects.iter().enumerate() {
         let ws_id = ws.id.clone();
         let ws_id_new = ws.id.clone();
-        let search_active = !s.sidebar_search.trim().is_empty();
         let collapsed = !search_active && s.collapsed_workspace_ids.contains(&ws.id);
         let is_active_ws = s.active_workspace_id.as_deref() == Some(ws.id.as_str());
-        let ws_threads: Vec<&ThreadRecord> = threads
-            .iter()
-            .copied()
-            .filter(|tr| tr.workspace_id == ws.id)
-            .collect();
+        let ws_threads: &[&ThreadRecord] = threads_by_ws
+            .get(ws.id.as_str())
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
 
         let ws_id_toggle = ws.id.clone();
         let disclosure = IconButton::new(if collapsed {
@@ -516,7 +737,10 @@ fn build_workspaces_section(
                 &s.shell_ui.sidebar_reorder,
                 idx,
                 project_count,
-                |s: &mut AppState| &mut s.shell_ui.sidebar_reorder,
+                |s: &mut AppState| {
+                    s.shell_ui.sidebar_reorder_rev = s.shell_ui.sidebar_reorder_rev.wrapping_add(1);
+                    &mut s.shell_ui.sidebar_reorder
+                },
                 |s: &mut AppState, from, to| {
                     let order = reorder_project_workspaces(s, from, to);
                     if !order.is_empty() {
@@ -557,10 +781,11 @@ fn build_workspaces_section(
                 projects_header = projects_header.row(build_thread_row(
                     s,
                     k,
-                    layer,
+                    t,
                     tr,
                     active_thread_id == Some(tr.id.as_str()),
                     ThreadIndent::UnderProject,
+                    allow_spinners,
                 ));
             }
             if !search_active && ws_threads.len() > MAX_THREADS_PER_WORKSPACE {
@@ -609,15 +834,99 @@ pub(crate) fn reorder_project_workspaces(s: &AppState, from: usize, to: usize) -
     project_ids
 }
 
+fn push_thread_context_menu(s: &AppState, k: &Kit, layer: &mut Vec<El>) {
+    let Some(tid) = s.shell_ui.context_menu_thread_id.as_deref() else {
+        return;
+    };
+    let Some(pt) = s.shell_ui.context_menu_point else {
+        return;
+    };
+    let Some(tr) = s.threads.iter().find(|tr| tr.id == tid) else {
+        return;
+    };
+    let current_title = if tr.title.trim().is_empty() {
+        "Untitled chat".to_string()
+    } else {
+        tr.title.clone()
+    };
+    let tid_rename = tr.id.clone();
+    let tid_pin = tr.id.clone();
+    let next_pin = !tr.pinned;
+    let tid_fork = tr.id.clone();
+    let tid_arch = tr.id.clone();
+    let tid_del = tr.id.clone();
+
+    Menu::new(format!("thread-ctx-{}", tr.id))
+        .standard()
+        .at(pt.x, pt.y)
+        .open(true)
+        .on_close(|s: &mut AppState| {
+            s.shell_ui.context_menu_thread_id = None;
+            s.shell_ui.context_menu_point = None;
+        })
+        .item(
+            MenuItem::new("Rename")
+                .icon(&icons::FILE_TEXT)
+                .on_select(move |s: &mut AppState| {
+                    s.shell_ui.context_menu_thread_id = None;
+                    s.shell_ui.context_menu_point = None;
+                    s.shell_ui.renaming_thread_id = Some(tid_rename.clone());
+                    s.shell_ui.rename_edit.replace_text(&current_title);
+                    s.shell_ui.rename_edit.focused = true;
+                }),
+        )
+        .item(
+            MenuItem::new(if tr.pinned { "Unpin chat" } else { "Pin chat" })
+                .icon(&icons::PIN)
+                .on_select(move |s: &mut AppState| {
+                    s.shell_ui.context_menu_thread_id = None;
+                    s.shell_ui.context_menu_point = None;
+                    s.dispatch(Action::Chat(ChatAction::SetThreadPinned {
+                        thread_id: tid_pin.clone(),
+                        pinned: next_pin,
+                    }));
+                }),
+        )
+        .item(
+            MenuItem::new("New branch from here")
+                .icon(&icons::SPARKLES)
+                .on_select(move |s: &mut AppState| {
+                    s.shell_ui.context_menu_thread_id = None;
+                    s.shell_ui.context_menu_point = None;
+                    s.dispatch(Action::Chat(ChatAction::ForkThread {
+                        thread_id: tid_fork.clone(),
+                        turn_id: None,
+                    }));
+                }),
+        )
+        .item(MenuItem::new("Archive").on_select(move |s: &mut AppState| {
+            s.shell_ui.context_menu_thread_id = None;
+            s.shell_ui.context_menu_point = None;
+            s.dispatch(Action::Chat(ChatAction::ArchiveThread(tid_arch.clone())));
+        }))
+        .separator()
+        .item(
+            MenuItem::new("Delete permanently...")
+                .danger(true)
+                .on_select(move |s: &mut AppState| {
+                    s.shell_ui.context_menu_thread_id = None;
+                    s.shell_ui.context_menu_point = None;
+                    s.shell_ui.pending_delete_thread_id = Some(tid_del.clone());
+                }),
+        )
+        .build(k, layer);
+}
+
 /// One chat: its title, plus a status mark only while it is working, waiting on the user or
 /// unread. Archive appears under the pointer; everything else is on the context menu.
 fn build_thread_row(
     s: &AppState,
     k: &Kit,
-    layer: &mut Vec<El>,
+    t: &ThemeTokens,
     tr: &ThreadRecord,
     selected: bool,
     indent: ThreadIndent,
+    allow_spinners: bool,
 ) -> El {
     let title = if tr.title.trim().is_empty() {
         "Untitled chat".to_string()
@@ -628,7 +937,7 @@ fn build_thread_row(
     let tid_archive = tr.id.clone();
     let tid_ctx = tr.id.clone();
 
-    let mut r = SidebarRow::new(title.clone())
+    let mut r = SidebarRow::new(title)
         .height(ROW_H)
         .selected(selected)
         .on_select(move |s: &mut AppState, tx| {
@@ -666,89 +975,29 @@ fn build_thread_row(
         );
     }
 
-    if let Some(status) = thread_row_status(s, &tr.id) {
-        r = r.status(status);
+    match thread_row_status(s, &tr.id) {
+        Some(RowStatus::Busy) => {
+            if !allow_spinners {
+                // Collapsed/closing pane: omit animated busy spinners so invisible rows never
+                // keep the animation loop running.
+            } else if s.desktop_settings.reduce_motion {
+                r = r.trailing(el().size(6.0, 6.0).radius(3.0).fill(t.accent).a11y_hidden());
+            } else {
+                r = r.status(RowStatus::Busy);
+            }
+        }
+        Some(other) => {
+            r = r.status(other);
+        }
+        None => {}
     }
 
-    let row_el = r
-        .build(k)
+    r.build(k)
         .key(format!("thread-{}", tr.id))
         .on_secondary_press(move |s: &mut AppState, pt, _| {
             s.shell_ui.context_menu_thread_id = Some(tid_ctx.clone());
             s.shell_ui.context_menu_point = Some(pt);
-        });
-
-    if s.shell_ui.context_menu_thread_id.as_deref() == Some(tr.id.as_str())
-        && let Some(pt) = s.shell_ui.context_menu_point
-    {
-        let tid_rename = tr.id.clone();
-        let current_title = title;
-        let tid_pin = tr.id.clone();
-        let next_pin = !tr.pinned;
-        let tid_fork = tr.id.clone();
-        let tid_arch = tr.id.clone();
-        let tid_del = tr.id.clone();
-
-        Menu::new(format!("thread-ctx-{}", tr.id))
-            .standard()
-            .at(pt.x, pt.y)
-            .open(true)
-            .on_close(|s: &mut AppState| {
-                s.shell_ui.context_menu_thread_id = None;
-                s.shell_ui.context_menu_point = None;
-            })
-            .item(MenuItem::new("Rename").icon(&icons::FILE_TEXT).on_select(
-                move |s: &mut AppState| {
-                    s.shell_ui.context_menu_thread_id = None;
-                    s.shell_ui.context_menu_point = None;
-                    s.shell_ui.renaming_thread_id = Some(tid_rename.clone());
-                    s.shell_ui.rename_edit.replace_text(&current_title);
-                    s.shell_ui.rename_edit.focused = true;
-                },
-            ))
-            .item(
-                MenuItem::new(if tr.pinned { "Unpin chat" } else { "Pin chat" })
-                    .icon(&icons::PIN)
-                    .on_select(move |s: &mut AppState| {
-                        s.shell_ui.context_menu_thread_id = None;
-                        s.shell_ui.context_menu_point = None;
-                        s.dispatch(Action::Chat(ChatAction::SetThreadPinned {
-                            thread_id: tid_pin.clone(),
-                            pinned: next_pin,
-                        }));
-                    }),
-            )
-            .item(
-                MenuItem::new("New branch from here")
-                    .icon(&icons::SPARKLES)
-                    .on_select(move |s: &mut AppState| {
-                        s.shell_ui.context_menu_thread_id = None;
-                        s.shell_ui.context_menu_point = None;
-                        s.dispatch(Action::Chat(ChatAction::ForkThread {
-                            thread_id: tid_fork.clone(),
-                            turn_id: None,
-                        }));
-                    }),
-            )
-            .item(MenuItem::new("Archive").on_select(move |s: &mut AppState| {
-                s.shell_ui.context_menu_thread_id = None;
-                s.shell_ui.context_menu_point = None;
-                s.dispatch(Action::Chat(ChatAction::ArchiveThread(tid_arch.clone())));
-            }))
-            .separator()
-            .item(
-                MenuItem::new("Delete permanently...")
-                    .danger(true)
-                    .on_select(move |s: &mut AppState| {
-                        s.shell_ui.context_menu_thread_id = None;
-                        s.shell_ui.context_menu_point = None;
-                        s.shell_ui.pending_delete_thread_id = Some(tid_del.clone());
-                    }),
-            )
-            .build(k, layer);
-    }
-
-    row_el
+        })
 }
 
 #[cfg(test)]

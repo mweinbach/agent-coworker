@@ -2,7 +2,10 @@
 //!
 //! Ported from `apps/desktop/src/ui/layout/AppTopBar.tsx` and `PlatformTopBarChrome.tsx`.
 
-use rune::{Cx, El, col, el, row, spacer, text};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+
+use rune::{Cx, El, col, el, memo, row, spacer, text};
 use rune_kit::shell;
 use rune_kit::{
     Badge, BadgeVariant, Button, ButtonVariant, ControlSize, Divider, IconButton,
@@ -150,91 +153,115 @@ pub fn build_toolbar(
     let narrow = s.shell_ui.viewport_width < NARROW_BREAKPOINT;
     let compact = s.shell_ui.viewport_width < COMPACT_BREAKPOINT;
 
-    let title = match s.route().view {
+    let title: &str = match s.route().view {
         ViewId::Task => s
             .active_task
             .as_ref()
-            .map(|task| task.summary.title.clone())
-            .unwrap_or_else(|| "Tasks".to_string()),
+            .map(|task| task.summary.title.as_str())
+            .unwrap_or("Tasks"),
         _ => s
             .active_thread()
             .map(|tr| {
                 if tr.title.trim().is_empty() {
-                    "Untitled chat".to_string()
+                    "Untitled chat"
                 } else {
-                    tr.title.clone()
+                    tr.title.as_str()
                 }
             })
-            .unwrap_or_else(|| "New Cowork Chat".to_string()),
+            .unwrap_or("New Cowork Chat"),
     };
 
     let workspace_label = s
         .active_workspace()
         .filter(|w| !w.one_off_chat)
-        .map(|w| w.name.clone());
+        .map(|w| w.name.as_str());
 
     let active_rt = s.active_thread_runtime();
     let is_busy = active_rt
         .is_some_and(|rt| rt.streaming || rt.pending_turn_count > 0 || rt.active_turn_id.is_some());
+    let reduce_motion = s.desktop_settings.reduce_motion;
+    let active_thread_id = s.route().active_thread_id.as_deref();
 
-    let mut heading = row()
-        .key("topbar-thread-meta")
-        .gap(6.0)
-        .center_y()
-        .shrink()
-        .min_w(0.0);
+    let heading_ver = {
+        let mut h = DefaultHasher::new();
+        (
+            t.dark,
+            s.desktop_settings.reduced_transparency,
+            s.desktop_settings.high_contrast,
+            std::mem::discriminant(&s.desktop_settings.accent_palette),
+            s.ui_scale.to_bits(),
+            compact,
+            workspace_label,
+            title,
+            is_busy,
+            active_thread_id,
+            reduce_motion,
+        )
+            .hash(&mut h);
+        h.finish()
+    };
 
-    if !compact && let Some(ws_name) = workspace_label {
-        heading = heading
-            .child(
-                text(ws_name)
-                    .font(k.ty.ui)
-                    .color(t.text_muted)
-                    .max_w(180.0)
-                    .truncate(),
-            )
-            .child(text("/").font(k.ty.ui).color(t.text_faint));
-    }
+    let heading = memo("topbar-thread-meta", heading_ver, || {
+        let mut heading = row().gap(6.0).center_y().shrink().min_w(0.0);
 
-    heading = heading.child(
-        text(title)
-            .key("topbar-title")
-            .font(k.ty.ui_medium)
-            .color(k.c.text_base)
-            .truncate(),
-    );
-
-    if is_busy {
-        heading = heading.child(
-            row()
-                .key("topbar-busy-indicator")
-                .gap(5.0)
-                .px(8.0)
-                .h(22.0)
-                .radius(999.0)
-                .fill(t.accent_soft)
-                .center_y()
-                .child(Spinner::new().size(12.0).color(t.accent).build(k))
-                .child(text("Busy").font(k.ty.small_medium).color(t.accent)),
-        );
-        if let Some(thread_id) = s.route().active_thread_id.clone() {
-            heading = heading.child(
-                IconButton::new(&icons::STOP_CIRCLE)
-                    .variant(IconButtonVariant::GhostMuted)
-                    .control_size(ControlSize::Small)
-                    .help("Stop current turn")
-                    .shortcut(crate::shortcut_label("Cmd+."))
-                    .on_press_tx(move |s: &mut AppState, _| {
-                        s.dispatch(Action::Chat(ChatAction::CancelTurn {
-                            thread_id: thread_id.clone(),
-                            include_subagents: true,
-                        }));
-                    })
-                    .build(k)
-                    .key("topbar-stop-turn"),
-            );
+        if !compact && let Some(ws_name) = workspace_label {
+            heading = heading
+                .child(
+                    text(ws_name.to_owned())
+                        .font(k.ty.ui)
+                        .color(t.text_muted)
+                        .max_w(180.0)
+                        .truncate(),
+                )
+                .child(text("/").font(k.ty.ui).color(t.text_faint));
         }
-    }
+
+        heading = heading.child(
+            text(title.to_owned())
+                .key("topbar-title")
+                .font(k.ty.ui_medium)
+                .color(k.c.text_base)
+                .truncate(),
+        );
+
+        if is_busy {
+            let busy_glyph = if reduce_motion {
+                el().size(6.0, 6.0).radius(3.0).fill(t.accent).a11y_hidden()
+            } else {
+                Spinner::new().size(12.0).color(t.accent).build(k)
+            };
+            heading = heading.child(
+                row()
+                    .key("topbar-busy-indicator")
+                    .gap(5.0)
+                    .px(8.0)
+                    .h(22.0)
+                    .radius(999.0)
+                    .fill(t.accent_soft)
+                    .center_y()
+                    .child(busy_glyph)
+                    .child(text("Busy").font(k.ty.small_medium).color(t.accent)),
+            );
+            if let Some(thread_id) = active_thread_id.map(str::to_owned) {
+                heading = heading.child(
+                    IconButton::new(&icons::STOP_CIRCLE)
+                        .variant(IconButtonVariant::GhostMuted)
+                        .control_size(ControlSize::Small)
+                        .help("Stop current turn")
+                        .shortcut(crate::shortcut_label("Cmd+."))
+                        .on_press_tx(move |s: &mut AppState, _| {
+                            s.dispatch(Action::Chat(ChatAction::CancelTurn {
+                                thread_id: thread_id.clone(),
+                                include_subagents: true,
+                            }));
+                        })
+                        .build(k)
+                        .key("topbar-stop-turn"),
+                );
+            }
+        }
+        heading
+    });
 
     let mut toolbar = ShellToolbar::new();
     if narrow {
@@ -283,19 +310,8 @@ pub fn build_toolbar(
         toolbar = toolbar.trailing(usage_popover);
     }
 
-    let quick_chat_btn = IconButton::new(&icons::POPOUT)
-        .variant(IconButtonVariant::GhostMuted)
-        .control_size(ControlSize::Regular)
-        .help("Quick Chat")
-        .on_press_tx(|s: &mut AppState, _| {
-            s.dispatch(Action::Shell(ShellAction::OpenQuickChatWindow));
-        })
-        .build(k)
-        .key("topbar-quick-chat");
-
     let right_overlay_mode = super::state::right_rail_uses_overlay(s);
-    let canvas_key = super::state::active_canvas_target_key(s);
-    let canvas_active = canvas_key.is_some();
+    let canvas_active = super::state::has_active_canvas_target(s);
     let canvas_max = canvas_active && crate::views::chat::is_canvas_maximized(s);
     let inspector_open = if right_overlay_mode {
         super::state::is_right_overlay_visible(s)
@@ -304,57 +320,76 @@ pub fn build_toolbar(
     } else {
         s.context_sidebar.is_open()
     };
-    let inspector_btn = IconButton::new(&shell::INSPECTOR)
-        .variant(IconButtonVariant::GhostMuted)
-        .control_size(ControlSize::Regular)
-        .expanded(inspector_open && !canvas_max)
-        .help(if canvas_active {
-            if inspector_open {
-                "Hide canvas"
-            } else {
-                "Show canvas"
-            }
-        } else if inspector_open {
-            "Hide context sidebar"
-        } else {
-            "Show context sidebar"
-        })
-        .shortcut(crate::shortcut_label("Opt+Cmd+I"))
-        .on_press_tx(move |s: &mut AppState, _| {
-            if super::state::right_rail_uses_overlay(s) {
-                let next_open = !super::state::is_right_overlay_visible(s);
-                s.shell_ui.right_overlay_open = next_open;
-                if next_open {
-                    s.shell_ui.left_overlay_open = false;
-                    s.shell_ui.canvas_overlay_dismissed_key = None;
+
+    let trailing_ver = {
+        let mut h = DefaultHasher::new();
+        (
+            t.dark,
+            s.desktop_settings.reduced_transparency,
+            s.desktop_settings.high_contrast,
+            std::mem::discriminant(&s.desktop_settings.accent_palette),
+            s.ui_scale.to_bits(),
+            canvas_active,
+            canvas_max,
+            inspector_open,
+        )
+            .hash(&mut h);
+        h.finish()
+    };
+
+    let trailing_actions = memo("topbar-trailing-actions", trailing_ver, || {
+        let quick_chat_btn = IconButton::new(&icons::POPOUT)
+            .variant(IconButtonVariant::GhostMuted)
+            .control_size(ControlSize::Regular)
+            .help("Quick Chat")
+            .on_press_tx(|s: &mut AppState, _| {
+                s.dispatch(Action::Shell(ShellAction::OpenQuickChatWindow));
+            })
+            .build(k)
+            .key("topbar-quick-chat");
+
+        let inspector_btn = IconButton::new(&shell::INSPECTOR)
+            .variant(IconButtonVariant::GhostMuted)
+            .control_size(ControlSize::Regular)
+            .expanded(inspector_open || canvas_max)
+            .help(if canvas_active {
+                if inspector_open || canvas_max {
+                    "Hide canvas"
                 } else {
-                    s.shell_ui.canvas_overlay_dismissed_key =
-                        super::state::active_canvas_target_key(s);
+                    "Show canvas"
                 }
-            } else if super::state::active_canvas_target_key(s).is_some() {
-                s.shell_ui.canvas_pane.toggle();
+            } else if inspector_open {
+                "Hide context sidebar"
             } else {
-                s.dispatch(Action::Shell(ShellAction::ToggleContextSidebar));
-            }
-        })
-        .build(k)
-        .key("topbar-inspector-toggle");
+                "Show context sidebar"
+            })
+            .shortcut(crate::shortcut_label("Opt+Cmd+I"))
+            .on_press_tx(move |s: &mut AppState, _| {
+                super::state::toggle_right_inspector(s);
+            })
+            .build(k)
+            .key("topbar-inspector-toggle");
 
-    let settings_btn = IconButton::new(&icons::SETTINGS)
-        .variant(IconButtonVariant::GhostMuted)
-        .control_size(ControlSize::Regular)
-        .help("Settings")
-        .shortcut(crate::shortcut_label("Cmd+,"))
-        .on_press_tx(|s: &mut AppState, tx| {
-            s.dispatch_tx(Action::Navigate(NavAction::OpenSettings(None)), tx);
-        })
-        .build(k)
-        .key("topbar-settings");
+        let settings_btn = IconButton::new(&icons::SETTINGS)
+            .variant(IconButtonVariant::GhostMuted)
+            .control_size(ControlSize::Regular)
+            .help("Settings")
+            .shortcut(crate::shortcut_label("Cmd+,"))
+            .on_press_tx(|s: &mut AppState, tx| {
+                s.dispatch_tx(Action::Navigate(NavAction::OpenSettings(None)), tx);
+            })
+            .build(k)
+            .key("topbar-settings");
 
-    toolbar = toolbar
-        .trailing(quick_chat_btn)
-        .trailing(inspector_btn)
-        .trailing(settings_btn);
+        row()
+            .gap(4.0)
+            .center_y()
+            .child(quick_chat_btn)
+            .child(inspector_btn)
+            .child(settings_btn)
+    });
+
+    toolbar = toolbar.trailing(trailing_actions);
 
     append_caption_reserve(toolbar, chrome)
 }
@@ -388,118 +423,126 @@ fn build_usage_popover(
         .build(k)
         .key("topbar-usage-chip");
 
-    let mut body = col()
-        .w_full()
-        .gap(8.0)
-        .child(usage_row(
-            "Session tokens",
-            format!(
-                "{} in · {} out",
-                format_tokens(usage.input_tokens),
-                format_tokens(usage.output_tokens)
-            ),
-            t,
-        ))
-        .child(usage_row(
-            "Cached tokens",
-            format_tokens(usage.cached_tokens),
-            t,
-        ))
-        .child(usage_row(
-            "Estimated cost",
-            format_cost_usd(usage.estimated_cost_usd),
-            t,
-        ));
+    // Keep the `Popover` wrapper mounted so trigger tree depth and anchor bounds stay stable,
+    // while skipping popover body formatting and `usage.by_model` sorting whenever closed.
+    let body = if !s.shell_ui.usage_popover_open {
+        el()
+    } else {
+        let mut body = col()
+            .w_full()
+            .gap(8.0)
+            .child(usage_row(
+                "Session tokens",
+                format!(
+                    "{} in · {} out",
+                    format_tokens(usage.input_tokens),
+                    format_tokens(usage.output_tokens)
+                ),
+                t,
+            ))
+            .child(usage_row(
+                "Cached tokens",
+                format_tokens(usage.cached_tokens),
+                t,
+            ))
+            .child(usage_row(
+                "Estimated cost",
+                format_cost_usd(usage.estimated_cost_usd),
+                t,
+            ));
 
-    if let Some(last_turn) = &rt.last_turn_usage {
-        body = body.child(Divider::horizontal().build(k)).child(usage_row(
-            "Last turn",
-            format!(
-                "{} · {} in / {} out",
-                format_cost_usd(last_turn.estimated_cost_usd),
-                format_tokens(last_turn.input_tokens),
-                format_tokens(last_turn.output_tokens),
-            ),
-            t,
-        ));
-    }
-
-    if !usage.by_model.is_empty() {
-        let mut details = usage.by_model.values().collect::<Vec<_>>();
-        details.sort_by(|a, b| {
-            b.estimated_cost_usd
-                .total_cmp(&a.estimated_cost_usd)
-                .then_with(|| a.model.cmp(&b.model))
-        });
-
-        body = body.child(
-            Button::new(if s.shell_ui.usage_more_details {
-                "Hide model breakdown"
-            } else {
-                "Model breakdown"
-            })
-            .variant(ButtonVariant::Ghost)
-            .control_size(ControlSize::Small)
-            .on_press_tx(|s: &mut AppState, _| {
-                s.shell_ui.usage_more_details = !s.shell_ui.usage_more_details;
-            })
-            .build(k)
-            .key("usage-more-details-btn"),
-        );
-
-        if s.shell_ui.usage_more_details {
-            let mut models_col = col().w_full().gap(4.0);
-            for entry in details {
-                let model_label = if entry.provider.is_empty() {
-                    entry.model.clone()
-                } else {
-                    format!("{}:{}", entry.provider, entry.model)
-                };
-                models_col = models_col.child(
-                    row()
-                        .w_full()
-                        .gap(8.0)
-                        .center_y()
-                        .child(
-                            text(model_label)
-                                .font(t.caption)
-                                .color(t.text_base)
-                                .truncate()
-                                .grow(1.0)
-                                .shrink(),
-                        )
-                        .child(
-                            text(format!(
-                                "{} · {}t",
-                                format_cost_usd(entry.estimated_cost_usd),
-                                entry.turns.max(1)
-                            ))
-                            .font(t.caption)
-                            .color(t.text_muted),
-                        ),
-                );
-            }
-            body = body.child(models_col);
+        if let Some(last_turn) = &rt.last_turn_usage {
+            body = body.child(Divider::horizontal().build(k)).child(usage_row(
+                "Last turn",
+                format!(
+                    "{} · {} in / {} out",
+                    format_cost_usd(last_turn.estimated_cost_usd),
+                    format_tokens(last_turn.input_tokens),
+                    format_tokens(last_turn.output_tokens),
+                ),
+                t,
+            ));
         }
-    }
 
-    if rt.usage_hard_cap_reached
-        && let Some(thread_id) = s.route().active_thread_id.clone()
-    {
-        body = body.child(
-            Button::new("Clear usage hard cap")
-                .variant(ButtonVariant::Danger)
+        if !usage.by_model.is_empty() {
+            let mut details = usage.by_model.values().collect::<Vec<_>>();
+            details.sort_by(|a, b| {
+                b.estimated_cost_usd
+                    .total_cmp(&a.estimated_cost_usd)
+                    .then_with(|| a.model.cmp(&b.model))
+            });
+
+            body = body.child(
+                Button::new(if s.shell_ui.usage_more_details {
+                    "Hide model breakdown"
+                } else {
+                    "Model breakdown"
+                })
+                .variant(ButtonVariant::Ghost)
                 .control_size(ControlSize::Small)
-                .on_press_tx(move |s: &mut AppState, _| {
-                    s.shell_ui.usage_popover_open = false;
-                    s.dispatch(Action::Chat(ChatAction::ClearThreadUsageHardCap(
-                        thread_id.clone(),
-                    )));
+                .on_press_tx(|s: &mut AppState, _| {
+                    s.shell_ui.usage_more_details = !s.shell_ui.usage_more_details;
                 })
                 .build(k)
-                .key("topbar-clear-hard-cap"),
-        );
-    }
+                .key("usage-more-details-btn"),
+            );
+
+            if s.shell_ui.usage_more_details {
+                let mut models_col = col().w_full().gap(4.0);
+                for entry in details {
+                    let model_label = if entry.provider.is_empty() {
+                        entry.model.clone()
+                    } else {
+                        format!("{}:{}", entry.provider, entry.model)
+                    };
+                    models_col = models_col.child(
+                        row()
+                            .w_full()
+                            .gap(8.0)
+                            .center_y()
+                            .child(
+                                text(model_label)
+                                    .font(t.caption)
+                                    .color(t.text_base)
+                                    .truncate()
+                                    .grow(1.0)
+                                    .shrink(),
+                            )
+                            .child(
+                                text(format!(
+                                    "{} · {}t",
+                                    format_cost_usd(entry.estimated_cost_usd),
+                                    entry.turns.max(1)
+                                ))
+                                .font(t.caption)
+                                .color(t.text_muted),
+                            ),
+                    );
+                }
+                body = body.child(models_col);
+            }
+        }
+
+        if rt.usage_hard_cap_reached
+            && let Some(thread_id) = s.route().active_thread_id.clone()
+        {
+            body = body.child(
+                Button::new("Clear usage hard cap")
+                    .variant(ButtonVariant::Danger)
+                    .control_size(ControlSize::Small)
+                    .on_press_tx(move |s: &mut AppState, _| {
+                        s.shell_ui.usage_popover_open = false;
+                        s.dispatch(Action::Chat(ChatAction::ClearThreadUsageHardCap(
+                            thread_id.clone(),
+                        )));
+                    })
+                    .build(k)
+                    .key("topbar-clear-hard-cap"),
+            );
+        }
+
+        body
+    };
 
     Popover::new("topbar-usage-popover")
         .trigger(trigger)

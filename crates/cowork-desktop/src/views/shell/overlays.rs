@@ -2,6 +2,8 @@
 //! suppression), Sidebar search overlay, Delete confirmation, Workflow run detail,
 //! External URL modal, Confirm Dialog, LM Studio prompt, and Onboarding.
 
+use std::collections::HashMap;
+
 use cowork_protocol::CreationRepairAction;
 use rune::{El, Icon, ScrollSpec, col, el, icon, row, spacer, text};
 use rune_kit::{
@@ -359,38 +361,68 @@ fn push_lmstudio_start_modal(s: &AppState, k: &Kit, t: &ThemeTokens, layer: &mut
 }
 
 pub(crate) fn collect_search_overlay_items(s: &AppState) -> Vec<SearchOverlayItem> {
-    let query = s.shell_ui.search_edit.text.trim().to_ascii_lowercase();
+    let trimmed = s.shell_ui.search_edit.text.trim();
+    let query = if trimmed.is_empty() {
+        String::new()
+    } else if trimmed.is_ascii() {
+        trimmed.to_ascii_lowercase()
+    } else {
+        trimmed.to_lowercase()
+    };
     let ws_filter = s.shell_ui.search_workspace_filter.as_deref();
     let mut items = Vec::new();
 
-    let mut thread_count = 0usize;
-    for th in helpers::filtered_threads(s, "", false) {
-        if let Some(wid) = ws_filter
-            && th.workspace_id != wid
-        {
-            continue;
-        }
-        let ws_name = s
-            .workspaces
-            .iter()
-            .find(|w| w.id == th.workspace_id)
-            .map(|w| w.name.as_str())
+    // Index workspace names once (O(W)) instead of O(T * W) linear scans per thread/task.
+    let ws_names: HashMap<&str, &str> = s
+        .workspaces
+        .iter()
+        .map(|w| (w.id.as_str(), w.name.as_str()))
+        .collect();
+
+    // Filter matching threads BEFORE partial-sorting the top 15 by `updated_at` descending.
+    let mut matching_threads: Vec<&crate::state::ThreadRecord> = s
+        .threads
+        .iter()
+        .filter(|th| th.is_standard_chat())
+        .filter(|th| ws_filter.is_none_or(|wid| th.workspace_id == wid))
+        .filter(|th| {
+            if query.is_empty() {
+                return true;
+            }
+            let ws_name = ws_names
+                .get(th.workspace_id.as_str())
+                .copied()
+                .unwrap_or("Chat");
+            let title = if th.title.trim().is_empty() {
+                "New chat"
+            } else {
+                th.title.as_str()
+            };
+            helpers::contains_case_insensitive(title, &query)
+                || helpers::contains_case_insensitive(ws_name, &query)
+                || th
+                    .preview
+                    .as_deref()
+                    .is_some_and(|p| helpers::contains_case_insensitive(p, &query))
+        })
+        .collect();
+
+    if matching_threads.len() > 15 {
+        matching_threads.select_nth_unstable_by(15, |a, b| b.updated_at.cmp(&a.updated_at));
+        matching_threads.truncate(15);
+    }
+    matching_threads.sort_by_key(|b| std::cmp::Reverse(b.updated_at));
+
+    for th in matching_threads {
+        let ws_name = ws_names
+            .get(th.workspace_id.as_str())
+            .copied()
             .unwrap_or("Chat");
         let title = if th.title.trim().is_empty() {
             "New chat".to_owned()
         } else {
             th.title.clone()
         };
-        let matches = query.is_empty()
-            || title.to_ascii_lowercase().contains(&query)
-            || ws_name.to_ascii_lowercase().contains(&query)
-            || th
-                .preview
-                .as_deref()
-                .is_some_and(|p| p.to_ascii_lowercase().contains(&query));
-        if !matches {
-            continue;
-        }
         let age = helpers::format_relative_age(th.updated_at, s.now_secs);
         let subtitle = if age.is_empty() {
             ws_name.to_owned()
@@ -405,10 +437,6 @@ pub(crate) fn collect_search_overlay_items(s: &AppState) -> Vec<SearchOverlayIte
             icon_glyph: &icons::MESSAGE,
             action: Action::Navigate(NavAction::OpenThread(th.id.clone())),
         });
-        thread_count += 1;
-        if thread_count >= 15 {
-            break;
-        }
     }
 
     for ws in s
@@ -417,8 +445,8 @@ pub(crate) fn collect_search_overlay_items(s: &AppState) -> Vec<SearchOverlayIte
         .filter(|w| ws_filter.is_none_or(|wid| wid == w.id))
         .filter(|w| {
             query.is_empty()
-                || w.name.to_ascii_lowercase().contains(&query)
-                || w.path.to_ascii_lowercase().contains(&query)
+                || helpers::contains_case_insensitive(&w.name, &query)
+                || helpers::contains_case_insensitive(&w.path, &query)
         })
         .take(8)
     {
@@ -441,17 +469,15 @@ pub(crate) fn collect_search_overlay_items(s: &AppState) -> Vec<SearchOverlayIte
                 continue;
             }
             let matches = query.is_empty()
-                || sum.title.to_ascii_lowercase().contains(&query)
-                || sum.objective.to_ascii_lowercase().contains(&query)
-                || sum.status.to_ascii_lowercase().contains(&query);
+                || helpers::contains_case_insensitive(&sum.title, &query)
+                || helpers::contains_case_insensitive(&sum.objective, &query)
+                || helpers::contains_case_insensitive(&sum.status, &query);
             if !matches {
                 continue;
             }
-            let ws_name = s
-                .workspaces
-                .iter()
-                .find(|w| w.id == sum.workspace_id)
-                .map(|w| w.name.as_str())
+            let ws_name = ws_names
+                .get(sum.workspace_id.as_str())
+                .copied()
                 .unwrap_or("Workspace");
             items.push(SearchOverlayItem {
                 key: format!("sr-task-{}", sum.id),
@@ -482,7 +508,6 @@ fn build_sidebar_search_overlay(s: &AppState, k: &Kit, t: &ThemeTokens) -> Optio
         .shell_ui
         .search_selected
         .min(items.len().saturating_sub(1));
-    let selected_action = items.get(selected_idx).map(|item| item.action.clone());
 
     let search_input = TextInput::new(&s.shell_ui.search_edit)
         .placeholder("Search chats, projects, and tasks...")
@@ -495,17 +520,16 @@ fn build_sidebar_search_overlay(s: &AppState, k: &Kit, t: &ThemeTokens) -> Optio
             s.shell_ui.search_selected = 0;
         })
         .on_key(|s: &mut AppState, ev, tx| {
-            let items = collect_search_overlay_items(s);
-            let max_idx = items.len().saturating_sub(1);
-            for (slot, digit) in ['1', '2', '3', '4', '5', '6', '7', '8', '9']
-                .into_iter()
-                .enumerate()
-            {
-                if ev.is_command(digit)
-                    && !ev.mods.alt
-                    && !ev.mods.shift
-                    && let Some(item) = items.get(slot)
-                {
+            let quick_slot = if !ev.mods.alt && !ev.mods.shift {
+                ['1', '2', '3', '4', '5', '6', '7', '8', '9']
+                    .into_iter()
+                    .position(|digit| ev.is_command(digit))
+            } else {
+                None
+            };
+            if let Some(slot) = quick_slot {
+                let items = collect_search_overlay_items(s);
+                if let Some(item) = items.get(slot) {
                     s.shell_ui.search_overlay_open = false;
                     s.shell_ui.search_selected = 0;
                     s.dispatch_tx(item.action.clone(), tx);
@@ -518,7 +542,9 @@ fn build_sidebar_search_overlay(s: &AppState, k: &Kit, t: &ThemeTokens) -> Optio
                     true
                 }
                 rune::Key::Down => {
+                    let items = collect_search_overlay_items(s);
                     if !items.is_empty() {
+                        let max_idx = items.len().saturating_sub(1);
                         s.shell_ui.search_selected = (s.shell_ui.search_selected + 1).min(max_idx);
                     }
                     true
@@ -531,11 +557,14 @@ fn build_sidebar_search_overlay(s: &AppState, k: &Kit, t: &ThemeTokens) -> Optio
                 _ => false,
             }
         })
-        .on_action(move |s: &mut AppState, tx| {
-            if let Some(act) = selected_action.as_ref() {
+        .on_action(|s: &mut AppState, tx| {
+            let items = collect_search_overlay_items(s);
+            let max_idx = items.len().saturating_sub(1);
+            if let Some(item) = items.get(s.shell_ui.search_selected.min(max_idx)) {
+                let act = item.action.clone();
                 s.shell_ui.search_overlay_open = false;
                 s.shell_ui.search_selected = 0;
-                s.dispatch_tx(act.clone(), tx);
+                s.dispatch_tx(act, tx);
             }
         })
         .build(k);

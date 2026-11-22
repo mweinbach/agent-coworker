@@ -90,6 +90,79 @@ fn excluded_skills_list(ws: &WorkspaceRecord) -> Vec<String> {
         .unwrap_or_default()
 }
 
+fn effective_excluded_skills(ws: &WorkspaceRecord, si_event: Option<&Value>) -> Vec<String> {
+    let has_ws_override = ws.defaults.get("skillImprovementExcludedSkills").is_some()
+        || ws
+            .defaults
+            .get("defaultSkillImprovementExcludedSkills")
+            .is_some();
+    if has_ws_override {
+        return excluded_skills_list(ws);
+    }
+    si_event
+        .and_then(|e| e.get("excludedSkills"))
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Extracts toggleable skill names from a canonical `SkillImprovementStatusEvent` (`skills` array),
+/// matching Electron's `MemoryPage.tsx` semantics: include skills that are `(included && eligible)`
+/// or already `excluded` (so exclusions remain reversible across scope changes), sorted by name.
+fn extract_skill_improvement_skills(si_event: Option<&Value>) -> Vec<String> {
+    let Some(items) = si_event
+        .and_then(|e| e.get("skills").or_else(|| e.get("eligibleSkills")))
+        .and_then(Value::as_array)
+    else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = items
+        .iter()
+        .filter_map(|item| {
+            let name = item
+                .get("skillName")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())?;
+            let has_flags = item.get("eligible").is_some()
+                || item.get("included").is_some()
+                || item.get("excluded").is_some();
+            if has_flags {
+                let eligible = item
+                    .get("eligible")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                let included = item
+                    .get("included")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(true);
+                let excluded = item
+                    .get("excluded")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                if !((included && eligible) || excluded) {
+                    return None;
+                }
+            }
+            Some(name.to_owned())
+        })
+        .collect();
+    names.sort();
+    names.dedup();
+    names
+}
+
+fn extract_skill_improvement_history(si_event: Option<&Value>) -> Option<&Vec<Value>> {
+    si_event
+        .and_then(|e| e.get("runHistory").or_else(|| e.get("history")))
+        .and_then(Value::as_array)
+}
+
 fn build_model_choices(s: &AppState, ws: Option<&WorkspaceRecord>) -> Vec<(String, String)> {
     let statuses = ws
         .and_then(|w| s.workspace_runtime_by_id.get(&w.id))
@@ -545,15 +618,11 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
         .skill_improvement_status
         .as_ref()
         .and_then(|v| v.get("event").or(Some(v)));
-    let si_skills = si_event
-        .and_then(|e| e.get("eligibleSkills"))
-        .and_then(Value::as_array);
+    let si_skills = extract_skill_improvement_skills(si_event);
     let si_pending = si_event
         .and_then(|e| e.get("pendingJobs"))
         .and_then(Value::as_array);
-    let si_history = si_event
-        .and_then(|e| e.get("history"))
-        .and_then(Value::as_array);
+    let si_history = extract_skill_improvement_history(si_event);
     let si_backups = si_event
         .and_then(|e| e.get("backups"))
         .and_then(Value::as_array);
@@ -734,56 +803,52 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
             );
 
             // Included skills checklist
-            let excluded = excluded_skills_list(ws);
+            let excluded = effective_excluded_skills(ws, si_event);
             let ws_si_refresh = ws_id.clone();
-            let included_body: El = match si_skills {
-                Some(items) if !items.is_empty() => {
-                    let checks: Vec<El> = items
-                        .iter()
-                        .filter_map(|item| {
-                            let skill_name = item.get("skillName").and_then(Value::as_str)?;
-                            let checked = !excluded.iter().any(|ex| ex == skill_name);
-                            let name_owned = skill_name.to_string();
-                            let excluded_now = excluded.clone();
-                            let ws_ex = ws_id.clone();
-                            Some(
-                                Checkbox::new(checked)
-                                    .label(skill_name.to_string())
-                                    .on_toggle(move |s: &mut AppState| {
-                                        let mut next = excluded_now.clone();
-                                        if checked {
-                                            if !next.iter().any(|e| e == &name_owned) {
-                                                next.push(name_owned.clone());
-                                            }
-                                        } else {
-                                            next.retain(|e| e != &name_owned);
-                                        }
-                                        s.dispatch(Action::Settings(
-                                            SettingsAction::UpdateWorkspaceDefaults {
-                                                workspace_id: ws_ex.clone(),
-                                                defaults: json!({
-                                                    "skillImprovementExcludedSkills": next
-                                                }),
-                                            },
-                                        ));
-                                    })
-                                    .build(k),
-                            )
-                        })
-                        .collect();
-                    row()
-                        .w_full()
-                        .flex_wrap()
-                        .gap(10.0)
-                        .px(10.0)
-                        .py(10.0)
-                        .radius(k.radius.md)
-                        .border(1.0, t.border_muted)
-                        .children(checks)
-                }
-                _ => text("No eligible skills found for this scope.")
+            let included_body: El = if !si_skills.is_empty() {
+                let checks: Vec<El> = si_skills
+                    .iter()
+                    .map(|skill_name| {
+                        let checked = !excluded.iter().any(|ex| ex == skill_name);
+                        let name_owned = skill_name.clone();
+                        let excluded_now = excluded.clone();
+                        let ws_ex = ws_id.clone();
+                        Checkbox::new(checked)
+                            .label(skill_name.clone())
+                            .on_toggle(move |s: &mut AppState| {
+                                let mut next = excluded_now.clone();
+                                if checked {
+                                    if !next.iter().any(|e| e == &name_owned) {
+                                        next.push(name_owned.clone());
+                                    }
+                                } else {
+                                    next.retain(|e| e != &name_owned);
+                                }
+                                s.dispatch(Action::Settings(
+                                    SettingsAction::UpdateWorkspaceDefaults {
+                                        workspace_id: ws_ex.clone(),
+                                        defaults: json!({
+                                            "skillImprovementExcludedSkills": next
+                                        }),
+                                    },
+                                ));
+                            })
+                            .build(k)
+                    })
+                    .collect();
+                row()
+                    .w_full()
+                    .flex_wrap()
+                    .gap(10.0)
+                    .px(10.0)
+                    .py(10.0)
+                    .radius(k.radius.md)
+                    .border(1.0, t.border_muted)
+                    .children(checks)
+            } else {
+                text("No eligible skills found for this scope.")
                     .font(k.ty.small)
-                    .color(t.text_muted),
+                    .color(t.text_muted)
             };
 
             si_section = si_section.child(
@@ -862,7 +927,19 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                     .take(5)
                     .filter_map(|entry| {
                         let skill = entry.get("skillName").and_then(Value::as_str)?;
-                        let msg = entry.get("message").and_then(Value::as_str).unwrap_or("");
+                        let msg = entry
+                            .get("message")
+                            .and_then(Value::as_str)
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                            .or_else(|| {
+                                entry
+                                    .get("error")
+                                    .and_then(Value::as_str)
+                                    .map(str::trim)
+                                    .filter(|s| !s.is_empty())
+                            })
+                            .unwrap_or("");
                         let status = entry
                             .get("status")
                             .and_then(Value::as_str)
@@ -1833,4 +1910,111 @@ fn build_legacy_memory_section(
     }
 
     section.build(k, t)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decodes_canonical_skill_improvement_status_skills_and_run_history() {
+        let status = json!({
+            "type": "skill_improvement_status",
+            "enabled": true,
+            "scope": "user",
+            "excludedSkills": ["zeta-excluded"],
+            "busy": false,
+            "blockReason": null,
+            "pendingJobs": [],
+            "runHistory": [
+                {
+                    "id": "run-1",
+                    "skillName": "alpha-skill",
+                    "status": "completed",
+                    "startedAt": "2026-11-22T10:00:00Z",
+                    "finishedAt": "2026-11-22T10:01:00Z",
+                    "message": "Clarified workflow steps",
+                    "usageCount": 3
+                }
+            ],
+            "backups": [],
+            "skills": [
+                {
+                    "skillName": "beta-skill",
+                    "installationId": "inst-beta",
+                    "scope": "user",
+                    "enabled": true,
+                    "effective": true,
+                    "eligible": true,
+                    "included": true,
+                    "excluded": false,
+                    "writable": true,
+                    "sourceKind": "user",
+                    "rootDir": "/tmp/skills/beta",
+                    "skillPath": "/tmp/skills/beta/SKILL.md",
+                    "hasBackup": false
+                },
+                {
+                    "skillName": "alpha-skill",
+                    "installationId": "inst-alpha",
+                    "scope": "user",
+                    "enabled": true,
+                    "effective": true,
+                    "eligible": true,
+                    "included": true,
+                    "excluded": false,
+                    "writable": true,
+                    "sourceKind": "user",
+                    "rootDir": "/tmp/skills/alpha",
+                    "skillPath": "/tmp/skills/alpha/SKILL.md",
+                    "hasBackup": false
+                },
+                {
+                    "skillName": "builtin-readonly",
+                    "installationId": "inst-ro",
+                    "scope": "built-in",
+                    "enabled": true,
+                    "effective": true,
+                    "eligible": false,
+                    "included": false,
+                    "excluded": false,
+                    "writable": false,
+                    "sourceKind": "built-in",
+                    "rootDir": "/tmp/skills/ro",
+                    "skillPath": "/tmp/skills/ro/SKILL.md",
+                    "hasBackup": false
+                },
+                {
+                    "skillName": "zeta-excluded",
+                    "installationId": "inst-zeta",
+                    "scope": "project",
+                    "enabled": true,
+                    "effective": true,
+                    "eligible": false,
+                    "included": false,
+                    "excluded": true,
+                    "writable": true,
+                    "sourceKind": "marketplace",
+                    "rootDir": "/tmp/skills/zeta",
+                    "skillPath": "/tmp/skills/zeta/SKILL.md",
+                    "hasBackup": false
+                }
+            ]
+        });
+
+        let skills = extract_skill_improvement_skills(Some(&status));
+        assert_eq!(skills, vec!["alpha-skill", "beta-skill", "zeta-excluded"]);
+
+        let history = extract_skill_improvement_history(Some(&status))
+            .expect("canonical runHistory must decode");
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0]["skillName"], "alpha-skill");
+        assert_eq!(history[0]["status"], "completed");
+
+        let ws = WorkspaceRecord::new("ws-1", "Test", "/tmp/ws", 1_700_000_000_000);
+        assert_eq!(
+            effective_excluded_skills(&ws, Some(&status)),
+            vec!["zeta-excluded"]
+        );
+    }
 }

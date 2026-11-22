@@ -45,13 +45,23 @@ pub(crate) fn extract_task_questions(value: &Value) -> Vec<TaskQuestionItem> {
         .enumerate()
         .filter_map(|(idx, item)| {
             let obj = item.as_object()?;
-            let resolved = obj
-                .get("resolved")
-                .or_else(|| obj.get("answered"))
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-            if resolved {
-                return None;
+            if let Some(status) = obj.get("status").and_then(Value::as_str) {
+                if !status.eq_ignore_ascii_case("pending") {
+                    return None;
+                }
+            } else {
+                let resolved = obj
+                    .get("resolved")
+                    .or_else(|| obj.get("answered"))
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+                    || obj
+                        .get("resolvedAt")
+                        .and_then(Value::as_str)
+                        .is_some_and(|s| !s.trim().is_empty());
+                if resolved {
+                    return None;
+                }
             }
             let id = obj
                 .get("id")
@@ -1123,6 +1133,70 @@ fn artifact_row(
     r
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct DecodedArtifactDetail<'a> {
+    artifact_id: String,
+    title: &'a str,
+    content: &'a str,
+    current_version_id: Option<&'a str>,
+}
+
+fn decode_artifact_detail(detail: &Value) -> DecodedArtifactDetail<'_> {
+    let nested = detail.get("artifact").and_then(Value::as_object);
+    let versions = detail.get("versions").and_then(Value::as_array);
+    let artifact_id = nested
+        .and_then(|a| a.get("id").or_else(|| a.get("artifactId")))
+        .or_else(|| detail.get("id").or_else(|| detail.get("artifactId")))
+        .or_else(|| {
+            versions
+                .and_then(|arr| arr.first())
+                .and_then(|v| v.get("artifactId"))
+        })
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_owned();
+    let title = nested
+        .and_then(|a| {
+            a.get("title")
+                .or_else(|| a.get("name"))
+                .or_else(|| a.get("path"))
+        })
+        .or_else(|| detail.get("title").or_else(|| detail.get("name")))
+        .and_then(Value::as_str)
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or("Artifact detail");
+    let content = detail
+        .get("content")
+        .or_else(|| detail.get("summary"))
+        .or_else(|| detail.get("body"))
+        .or_else(|| {
+            nested.and_then(|a| {
+                a.get("content")
+                    .or_else(|| a.get("summary"))
+                    .or_else(|| a.get("body"))
+            })
+        })
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let current_version_id = detail
+        .get("latestVersionId")
+        .or_else(|| detail.get("currentVersionId"))
+        .or_else(|| {
+            nested.and_then(|a| {
+                a.get("latestVersionId")
+                    .or_else(|| a.get("currentVersionId"))
+            })
+        })
+        .and_then(Value::as_str);
+
+    DecodedArtifactDetail {
+        artifact_id,
+        title,
+        content,
+        current_version_id,
+    }
+}
+
 fn build_active_artifact_detail(
     detail: &Value,
     ws_id: &str,
@@ -1131,27 +1205,11 @@ fn build_active_artifact_detail(
     k: &Kit,
     t: &ThemeTokens,
 ) -> El {
-    let artifact_id = detail
-        .get("id")
-        .or_else(|| detail.get("artifactId"))
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_owned();
-    let title = detail
-        .get("title")
-        .or_else(|| detail.get("name"))
-        .and_then(Value::as_str)
-        .unwrap_or("Artifact detail");
-    let content = detail
-        .get("content")
-        .or_else(|| detail.get("summary"))
-        .or_else(|| detail.get("body"))
-        .and_then(Value::as_str)
-        .unwrap_or("");
-    let current_vid = detail
-        .get("latestVersionId")
-        .or_else(|| detail.get("currentVersionId"))
-        .and_then(Value::as_str);
+    let decoded = decode_artifact_detail(detail);
+    let artifact_id = decoded.artifact_id;
+    let title = decoded.title;
+    let content = decoded.content;
+    let current_vid = decoded.current_version_id;
 
     let mut box_col = col()
         .key("task-artifact-detail-box")
@@ -1579,5 +1637,96 @@ mod tests {
             "Waiting on database migration sign-off"
         );
         assert_eq!(task_blocker_label(&json!({ "id": "blk-2" })), "Blocked");
+    }
+
+    #[test]
+    fn extract_task_questions_filters_canonical_non_pending_statuses() {
+        let payload = json!([
+            {
+                "id": "q-answered-1",
+                "header": "Round 1",
+                "question": "Old answered question 1",
+                "status": "answered",
+                "blocking": true,
+                "options": []
+            },
+            {
+                "id": "q-defaulted-2",
+                "header": "Round 1",
+                "question": "Defaulted question",
+                "status": "defaulted",
+                "blocking": false,
+                "options": []
+            },
+            {
+                "id": "q-dismissed-3",
+                "header": "Round 1",
+                "question": "Dismissed question",
+                "status": "dismissed",
+                "blocking": false,
+                "options": []
+            },
+            {
+                "id": "q-superseded-4",
+                "header": "Round 1",
+                "question": "Superseded question",
+                "status": "superseded",
+                "blocking": false,
+                "options": []
+            },
+            {
+                "id": "q-pending-5",
+                "header": "Round 2",
+                "question": "Follow-up pending question",
+                "status": "pending",
+                "blocking": true,
+                "recommendedOptionId": "opt-a",
+                "options": [
+                    { "id": "opt-a", "label": "Option A", "description": "Preferred" }
+                ]
+            }
+        ]);
+
+        let items = extract_task_questions(&payload);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].id, "q-pending-5");
+        assert_eq!(items[0].question, "Follow-up pending question");
+    }
+
+    #[test]
+    fn decode_artifact_detail_reads_nested_canonical_task_artifact_detail() {
+        let canonical = json!({
+            "artifact": {
+                "id": "art-42",
+                "taskId": "task-1",
+                "path": "reports/summary.md",
+                "kind": "markdown",
+                "title": "Executive Summary",
+                "createdBy": "agent",
+                "provenance": {},
+                "createdAt": "2026-11-22T00:00:00Z"
+            },
+            "versions": [
+                {
+                    "id": "ver-2",
+                    "artifactId": "art-42",
+                    "version": 2,
+                    "changeSummary": "Revised recommendations"
+                },
+                {
+                    "id": "ver-1",
+                    "artifactId": "art-42",
+                    "version": 1,
+                    "changeSummary": "Initial draft"
+                }
+            ],
+            "latestVersionId": "ver-2",
+            "acceptedVersionId": null
+        });
+
+        let decoded = decode_artifact_detail(&canonical);
+        assert_eq!(decoded.artifact_id, "art-42");
+        assert_eq!(decoded.title, "Executive Summary");
+        assert_eq!(decoded.current_version_id, Some("ver-2"));
     }
 }

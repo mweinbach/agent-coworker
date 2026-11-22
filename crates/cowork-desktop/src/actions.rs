@@ -245,6 +245,8 @@ pub enum ChatAction {
         path: String,
     },
     CloseCanvasDocument,
+    ConfirmDiscardCanvasTransition,
+    CancelCanvasTransition,
     SendCanvasEditPrompt {
         prompt: String,
     },

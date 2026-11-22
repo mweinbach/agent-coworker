@@ -764,10 +764,10 @@ fn trigger_reload(s: &mut AppState, doc: &ResolvedCanvasDoc) {
 }
 
 fn trigger_close(s: &mut AppState) {
-    let had_canvas_session = s.canvas_document.is_some();
-    s.chat_ui.canvas.clear();
-    if had_canvas_session {
+    if s.canvas_document.is_some() {
         s.dispatch(Action::Chat(ChatAction::CloseCanvasDocument));
+    } else {
+        s.chat_ui.canvas.clear();
     }
     if s.active_file_preview.is_some() {
         s.dispatch(Action::Shell(ShellAction::CloseFilePreview));
@@ -897,6 +897,7 @@ pub fn canvas_pane(s: &AppState, cx: &mut Cx<AppState>, k: &Kit) -> Option<Subvi
 
     let mut overlays = Vec::new();
     build_reload_confirm_dialog(s, k, &doc, dirty, &mut overlays);
+    build_discard_confirm_dialog(s, k, &doc, &mut overlays);
 
     let mut root = col()
         .key("canvas-pane")
@@ -2064,6 +2065,101 @@ fn build_reload_confirm_dialog(
                                 .key("canvas-reload-confirm-btn"),
                         ),
                 ),
+        )
+        .build(k, overlays);
+}
+
+fn build_discard_confirm_dialog(
+    s: &AppState,
+    k: &Kit,
+    doc: &ResolvedCanvasDoc,
+    overlays: &mut Vec<El>,
+) {
+    let Some(ref pending) = s.canvas_discard_confirm else {
+        return;
+    };
+    let is_switch = matches!(
+        pending,
+        crate::state::PendingCanvasTransition::OpenDocument { .. }
+    );
+    let action_verb = if is_switch {
+        "Discard & Switch"
+    } else {
+        "Discard & Close"
+    };
+    let detail = doc
+        .error_message
+        .as_deref()
+        .map(str::trim)
+        .filter(|msg| !msg.is_empty());
+    let msg = match detail {
+        Some(err) => format!(
+            "Your edits could not be saved ({err}). Keep editing to resolve this, or discard your unsaved changes."
+        ),
+        None => "You have unsaved edits in this Canvas document that could not be saved. Keep editing or discard your unsaved changes.".to_string(),
+    };
+    let can_retry = doc.lifecycle == CanvasLifecycleKind::SaveError;
+
+    let mut actions = row().w_full().gap(8.0).pt(4.0).child(spacer()).child(
+        Button::new("Keep editing")
+            .variant(ButtonVariant::Ghost)
+            .control_size(ControlSize::Regular)
+            .on_press(|state: &mut AppState| {
+                state.dispatch(Action::Chat(ChatAction::CancelCanvasTransition));
+            })
+            .build(k)
+            .key("canvas-discard-cancel-btn"),
+    );
+    if can_retry {
+        actions = actions.child(
+            Button::new("Retry save")
+                .variant(ButtonVariant::Outline)
+                .control_size(ControlSize::Regular)
+                .on_press(|state: &mut AppState| {
+                    if let Some(transition) = state.canvas_discard_confirm.take() {
+                        state.pending_canvas_transition = Some(transition);
+                    }
+                    state.dispatch(Action::Chat(ChatAction::SaveCanvasDocument));
+                })
+                .build(k)
+                .key("canvas-discard-retry-btn"),
+        );
+    }
+    actions = actions.child(
+        Button::new(action_verb)
+            .variant(ButtonVariant::Danger)
+            .control_size(ControlSize::Regular)
+            .on_press(|state: &mut AppState| {
+                state.dispatch(Action::Chat(ChatAction::ConfirmDiscardCanvasTransition));
+            })
+            .build(k)
+            .key("canvas-discard-confirm-btn"),
+    );
+
+    Dialog::new("canvas-discard-confirm-dialog", "Unsaved Canvas changes")
+        .open(true)
+        .width(440.0)
+        .fit()
+        .click_outside(true)
+        .on_close(|state: &mut AppState| {
+            state.dispatch(Action::Chat(ChatAction::CancelCanvasTransition));
+        })
+        .child(
+            col()
+                .w_full()
+                .min_w(0.0)
+                .px(16.0)
+                .pb(16.0)
+                .gap(12.0)
+                .child(
+                    text(msg)
+                        .font(k.ty.ui)
+                        .color(k.c.text_muted)
+                        .w_full()
+                        .min_w(0.0)
+                        .wrap(),
+                )
+                .child(actions),
         )
         .build(k, overlays);
 }

@@ -217,6 +217,12 @@ impl CanvasDocumentSession {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PendingCanvasTransition {
+    Close,
+    OpenDocument { workspace_id: String, path: String },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PendingCanvasRpc {
     pub document_id: String,
     pub generation: u64,
@@ -336,6 +342,11 @@ pub struct WorkspaceRuntime {
     pub agent_profiles_catalog: AgentProfilesCatalogState,
     pub agent_profiles_loaded: bool,
     pub subagents: Vec<SubagentProfile>,
+    pub memory_entries: Vec<MemoryEntry>,
+    pub scoped_memories: Vec<ScopedMemoryEntry>,
+    pub memories_loaded: bool,
+    pub advanced_memories: Vec<Value>,
+    pub advanced_memories_loaded: bool,
     pub backups: Vec<BackupSummary>,
     pub backups_loaded: bool,
     pub backup_delta: Option<BackupDeltaView>,
@@ -1803,6 +1814,8 @@ pub struct AppState {
     pub app_elapsed_secs: f64,
     pub ui_scale: f32,
     pub canvas_document: Option<CanvasDocumentSession>,
+    pub pending_canvas_transition: Option<PendingCanvasTransition>,
+    pub canvas_discard_confirm: Option<PendingCanvasTransition>,
     pub product_analytics: Option<Value>,
     pub(crate) pending_launchable_open_path: Option<String>,
     pub(crate) last_launchable_window: WindowMode,
@@ -1822,6 +1835,7 @@ pub struct AppState {
     pub(crate) persisted_active_thread_id: Option<String>,
     pub(crate) rekeyed_thread_ids: HashMap<String, String>,
     pub(crate) latest_creation_preflight_rpc_id: Option<u64>,
+    pub(crate) notified_task_input_ids: HashSet<String>,
     pub(crate) shared_dirty: bool,
 }
 
@@ -1945,6 +1959,8 @@ impl Default for AppState {
             app_elapsed_secs: 0.0,
             ui_scale: DEFAULT_UI_SCALE,
             canvas_document: None,
+            pending_canvas_transition: None,
+            canvas_discard_confirm: None,
             product_analytics: None,
             pending_launchable_open_path: None,
             last_launchable_window: WindowMode::Main,
@@ -1964,6 +1980,7 @@ impl Default for AppState {
             persisted_active_thread_id: None,
             rekeyed_thread_ids: HashMap::new(),
             latest_creation_preflight_rpc_id: None,
+            notified_task_input_ids: HashSet::new(),
             shared_dirty: false,
         }
     }
@@ -2607,6 +2624,7 @@ impl AppState {
                     doc.workspace_id, doc.document_id
                 ));
             return doc.dirty()
+                || matches!(doc.status, CanvasDocumentStatus::Saving)
                 || (matches_session && self.chat_ui.canvas.source_edit.text != doc.draft_content);
         }
         self.chat_ui.canvas.is_dirty()
@@ -3058,7 +3076,14 @@ impl AppState {
 
     fn open_canvas_document(&mut self, workspace_id: String, path: String) {
         let resolved_path = self.resolve_workspace_fs_path(&workspace_id, &path);
-        self.close_canvas_document();
+        self.request_canvas_transition(PendingCanvasTransition::OpenDocument {
+            workspace_id,
+            path: resolved_path,
+        });
+    }
+
+    fn open_canvas_document_now(&mut self, workspace_id: String, resolved_path: String) {
+        self.force_close_canvas_document();
         self.pending_presentation_rpcs.clear();
         self.active_file_preview_request_id = None;
         self.active_file_preview = None;
@@ -3104,6 +3129,68 @@ impl AppState {
                 preserved_draft: None,
             },
         );
+    }
+
+    fn request_canvas_transition(&mut self, transition: PendingCanvasTransition) {
+        if let PendingCanvasTransition::OpenDocument {
+            ref workspace_id,
+            ref path,
+        } = transition
+            && let Some(doc) = self.canvas_document.as_ref()
+            && doc.workspace_id == *workspace_id
+            && self.workspace_paths_match(workspace_id, &doc.path, path)
+        {
+            self.pending_canvas_transition = None;
+            self.canvas_discard_confirm = None;
+            self.context_sidebar.set_open(true);
+            return;
+        }
+
+        let Some(doc) = self.canvas_document.as_ref() else {
+            self.complete_canvas_transition(transition);
+            return;
+        };
+
+        if doc.truncated
+            || (!doc.dirty() && !matches!(doc.status, CanvasDocumentStatus::Saving))
+            || matches!(doc.status, CanvasDocumentStatus::LoadError { .. })
+        {
+            self.complete_canvas_transition(transition);
+            return;
+        }
+
+        match doc.status {
+            CanvasDocumentStatus::Saving | CanvasDocumentStatus::Loading => {
+                // Save (or rename reopen carrying a draft) is already in flight; complete once flushed.
+                self.pending_canvas_transition = Some(transition);
+                self.canvas_discard_confirm = None;
+            }
+            CanvasDocumentStatus::Conflict { .. } | CanvasDocumentStatus::SaveError { .. } => {
+                // Previous save failed or conflicted; require explicit user confirmation before discarding edits.
+                self.pending_canvas_transition = None;
+                self.canvas_discard_confirm = Some(transition);
+            }
+            CanvasDocumentStatus::Ready => {
+                // Flush pending edits immediately before closing or opening another document.
+                self.pending_canvas_transition = Some(transition);
+                self.canvas_discard_confirm = None;
+                self.request_canvas_save();
+            }
+            CanvasDocumentStatus::LoadError { .. } => {
+                self.complete_canvas_transition(transition);
+            }
+        }
+    }
+
+    fn complete_canvas_transition(&mut self, transition: PendingCanvasTransition) {
+        self.pending_canvas_transition = None;
+        self.canvas_discard_confirm = None;
+        match transition {
+            PendingCanvasTransition::Close => self.force_close_canvas_document(),
+            PendingCanvasTransition::OpenDocument { workspace_id, path } => {
+                self.open_canvas_document_now(workspace_id, path);
+            }
+        }
     }
 
     fn reopen_canvas_document_after_rename(&mut self, new_path: String) {
@@ -3177,6 +3264,8 @@ impl AppState {
     }
 
     fn reload_canvas_document(&mut self) {
+        self.pending_canvas_transition = None;
+        self.canvas_discard_confirm = None;
         let Some(prev) = self.canvas_document.take() else {
             return;
         };
@@ -3237,6 +3326,12 @@ impl AppState {
     }
 
     fn close_canvas_document(&mut self) {
+        self.request_canvas_transition(PendingCanvasTransition::Close);
+    }
+
+    fn force_close_canvas_document(&mut self) {
+        self.pending_canvas_transition = None;
+        self.canvas_discard_confirm = None;
         self.chat_ui.canvas.clear();
         let Some(prev) = self.canvas_document.take() else {
             return;
@@ -3451,6 +3546,14 @@ impl AppState {
                     }
                     doc.last_poll_secs = self.now_secs;
                     doc.status = CanvasDocumentStatus::Ready;
+                    let still_dirty = doc.dirty();
+                    if self.pending_canvas_transition.is_some() {
+                        if still_dirty {
+                            self.request_canvas_save();
+                        } else if let Some(transition) = self.pending_canvas_transition.take() {
+                            self.complete_canvas_transition(transition);
+                        }
+                    }
                 } else {
                     let kind = payload
                         .get("error")
@@ -3463,7 +3566,15 @@ impl AppState {
                         .and_then(Value::as_str)
                         .unwrap_or("Unable to open document.")
                         .to_string();
+                    let still_dirty = doc.dirty();
                     doc.status = CanvasDocumentStatus::LoadError { kind, message };
+                    if let Some(transition) = self.pending_canvas_transition.take() {
+                        if still_dirty {
+                            self.canvas_discard_confirm = Some(transition);
+                        } else {
+                            self.complete_canvas_transition(transition);
+                        }
+                    }
                 }
             }
             "cowork/workspace/document/revision" => {
@@ -3602,6 +3713,18 @@ impl AppState {
                             dir,
                         }));
                     }
+                    if self.pending_canvas_transition.is_some() {
+                        let still_dirty = self
+                            .canvas_document
+                            .as_ref()
+                            .is_some_and(CanvasDocumentSession::dirty);
+                        if still_dirty {
+                            // Newer edits arrived while the flush save was in flight; flush again before transitioning.
+                            self.request_canvas_save();
+                        } else if let Some(transition) = self.pending_canvas_transition.take() {
+                            self.complete_canvas_transition(transition);
+                        }
+                    }
                 } else {
                     let kind = payload
                         .get("error")
@@ -3628,6 +3751,9 @@ impl AppState {
                             doc.status = CanvasDocumentStatus::SaveError { kind, message };
                         }
                     }
+                    if let Some(transition) = self.pending_canvas_transition.take() {
+                        self.canvas_discard_confirm = Some(transition);
+                    }
                 }
             }
             _ => {}
@@ -3650,12 +3776,23 @@ impl AppState {
                 kind: None,
                 message: err.message.clone(),
             };
+            if let Some(transition) = self.pending_canvas_transition.take() {
+                self.canvas_discard_confirm = Some(transition);
+            }
         } else if method.ends_with("/open") {
+            let still_dirty = doc.dirty();
             doc.dirty_since_secs = None;
             doc.status = CanvasDocumentStatus::LoadError {
                 kind: None,
                 message: err.message.clone(),
             };
+            if let Some(transition) = self.pending_canvas_transition.take() {
+                if still_dirty {
+                    self.canvas_discard_confirm = Some(transition);
+                } else {
+                    self.complete_canvas_transition(transition);
+                }
+            }
         }
     }
 
@@ -4025,6 +4162,18 @@ impl AppState {
         params: Value,
         retry_on_disconnect: bool,
     ) -> u64 {
+        self.send_ws_request_with_timeout(workspace_id, method, params, None, retry_on_disconnect)
+    }
+
+    /// Sends a JSON-RPC request to `workspace_id` with an explicit timeout override.
+    pub fn send_ws_request_with_timeout(
+        &mut self,
+        workspace_id: &str,
+        method: &str,
+        params: Value,
+        timeout_ms: Option<u64>,
+        retry_on_disconnect: bool,
+    ) -> u64 {
         let request_id = self.services.next_rpc_id;
         self.services.next_rpc_id += 1;
         self.pending_rpc_meta.insert(
@@ -4039,7 +4188,7 @@ impl AppState {
             request_id,
             method: method.to_string(),
             params,
-            timeout_ms: None,
+            timeout_ms,
             retry_on_disconnect,
         });
         request_id
@@ -4053,8 +4202,26 @@ impl AppState {
         params: &P,
         retry_on_disconnect: bool,
     ) -> Option<u64> {
+        self.send_ws_typed_with_timeout(workspace_id, method, params, None, retry_on_disconnect)
+    }
+
+    /// Serializes typed `cowork-protocol` params and sends a JSON-RPC request with an explicit timeout override.
+    pub fn send_ws_typed_with_timeout<P: Serialize>(
+        &mut self,
+        workspace_id: &str,
+        method: &str,
+        params: &P,
+        timeout_ms: Option<u64>,
+        retry_on_disconnect: bool,
+    ) -> Option<u64> {
         let value = serde_json::to_value(params).ok()?;
-        Some(self.send_ws_request(workspace_id, method, value, retry_on_disconnect))
+        Some(self.send_ws_request_with_timeout(
+            workspace_id,
+            method,
+            value,
+            timeout_ms,
+            retry_on_disconnect,
+        ))
     }
 
     fn next_tag(&mut self, prefix: &str) -> String {
@@ -5395,6 +5562,9 @@ impl AppState {
                 } else if canonical == Some(SettingsPageId::Subagents) {
                     self.sync_active_workspace_agent_profiles();
                     self.refresh_active_workspace_agent_profiles();
+                } else if canonical == Some(SettingsPageId::ProfileMemory) {
+                    self.sync_active_workspace_memories();
+                    self.refresh_active_workspace_memories();
                 } else if canonical == Some(SettingsPageId::Backup) {
                     self.refresh_active_workspace_backups();
                 } else if canonical == Some(SettingsPageId::RemoteAccess)
@@ -5423,6 +5593,9 @@ impl AppState {
                 } else if canonical == SettingsPageId::Subagents {
                     self.sync_active_workspace_agent_profiles();
                     self.refresh_active_workspace_agent_profiles();
+                } else if canonical == SettingsPageId::ProfileMemory {
+                    self.sync_active_workspace_memories();
+                    self.refresh_active_workspace_memories();
                 } else if canonical == SettingsPageId::Backup {
                     self.refresh_active_workspace_backups();
                 } else if canonical == SettingsPageId::RemoteAccess && self.remote_access.running {
@@ -5534,6 +5707,7 @@ impl AppState {
             self.sync_active_workspace_plugins();
             self.sync_active_workspace_skills();
             self.sync_active_workspace_agent_profiles();
+            self.sync_active_workspace_memories();
             self.sync_active_workspace_backups();
             if let Some(ws_id) = self.active_workspace_id.clone() {
                 self.ensure_workspace_server_started(&ws_id);
@@ -5546,6 +5720,17 @@ impl AppState {
                             && self.route().settings_page.canonical() == SettingsPageId::ToolAccess)
                     {
                         self.bootstrap_tool_access_catalogs(&ws_id);
+                    }
+                    let memories_loaded = self
+                        .workspace_runtime_by_id
+                        .get(&ws_id)
+                        .is_some_and(|rt| rt.memories_loaded && rt.advanced_memories_loaded);
+                    if !memories_loaded
+                        || (self.route().view == ViewId::Settings
+                            && self.route().settings_page.canonical()
+                                == SettingsPageId::ProfileMemory)
+                    {
+                        self.refresh_workspace_memories(&ws_id);
                     }
                     if self.route().view == ViewId::Settings
                         && self.route().settings_page.canonical() == SettingsPageId::Subagents
@@ -6820,6 +7005,7 @@ impl AppState {
                     if matches!(doc.status, CanvasDocumentStatus::SaveError { .. }) {
                         doc.status = CanvasDocumentStatus::Ready;
                     }
+                    self.canvas_discard_confirm = None;
                 }
             }
             ChatAction::SaveCanvasDocument => {
@@ -6830,6 +7016,19 @@ impl AppState {
             }
             ChatAction::CloseCanvasDocument => {
                 self.close_canvas_document();
+            }
+            ChatAction::ConfirmDiscardCanvasTransition => {
+                if let Some(transition) = self
+                    .canvas_discard_confirm
+                    .take()
+                    .or_else(|| self.pending_canvas_transition.take())
+                {
+                    self.complete_canvas_transition(transition);
+                }
+            }
+            ChatAction::CancelCanvasTransition => {
+                self.canvas_discard_confirm = None;
+                self.pending_canvas_transition = None;
             }
             ChatAction::SendCanvasEditPrompt { prompt } => {
                 if !prompt.trim().is_empty() {
@@ -7841,16 +8040,19 @@ impl AppState {
                 callback_input,
             } => {
                 let cwd = self.workspace_path(&workspace_id);
+                let trimmed = callback_input.trim();
                 let params = ProviderAuthCallbackParams {
                     cwd,
                     provider,
                     method_id,
-                    code: Some(callback_input),
+                    code: (!trimmed.is_empty()).then(|| trimmed.to_string()),
                 };
-                let _ = self.send_ws_typed(
+                // Browser-based OAuth (e.g. Codex ChatGPT login) allows up to 5 minutes on the server.
+                let _ = self.send_ws_typed_with_timeout(
                     &workspace_id,
                     "cowork/provider/auth/callback",
                     &params,
+                    Some(330_000),
                     false,
                 );
             }
@@ -8617,10 +8819,10 @@ impl AppState {
             } => {
                 let cwd = self.workspace_path(&workspace_id);
                 let scope = self
-                    .scoped_memories
-                    .iter()
+                    .scoped_memories_for_workspace(&workspace_id)
+                    .into_iter()
                     .find(|m| m.id == key && !m.scope.is_empty())
-                    .map(|m| m.scope.clone())
+                    .map(|m| m.scope)
                     .unwrap_or_else(|| "workspace".to_string());
                 let params = MemoryUpsertParams {
                     cwd,
@@ -8634,10 +8836,10 @@ impl AppState {
             SettingsAction::DeleteMemory { workspace_id, key } => {
                 let cwd = self.workspace_path(&workspace_id);
                 let scope = self
-                    .scoped_memories
-                    .iter()
+                    .scoped_memories_for_workspace(&workspace_id)
+                    .into_iter()
                     .find(|m| m.id == key && !m.scope.is_empty())
-                    .map(|m| m.scope.clone())
+                    .map(|m| m.scope)
                     .unwrap_or_else(|| "workspace".to_string());
                 let params = MemoryDeleteParams {
                     cwd,
@@ -9335,6 +9537,7 @@ impl AppState {
                 self.sync_active_workspace_plugins();
                 self.sync_active_workspace_skills();
                 self.sync_active_workspace_agent_profiles();
+                self.sync_active_workspace_memories();
                 self.sync_active_workspace_backups();
                 self.sync_active_explorer_dir();
                 self.persist_state();
@@ -9375,13 +9578,14 @@ impl AppState {
                 self.sync_active_workspace_plugins();
                 self.sync_active_workspace_skills();
                 self.sync_active_workspace_agent_profiles();
+                self.sync_active_workspace_memories();
                 self.sync_active_workspace_backups();
                 if self
                     .canvas_document
                     .as_ref()
                     .is_some_and(|d| d.workspace_id == workspace_id)
                 {
-                    self.close_canvas_document();
+                    self.force_close_canvas_document();
                 }
                 self.sync_active_explorer_dir();
                 self.persist_state();
@@ -9836,22 +10040,74 @@ impl AppState {
                 if let (Some(task_id), Some(activity)) = (
                     params.get("taskId").and_then(Value::as_str),
                     params.get("activity").cloned(),
-                ) && let Some(active) = self
-                    .active_task
-                    .as_mut()
-                    .filter(|t| t.summary.id == task_id)
-                {
-                    let dup = activity
-                        .get("id")
-                        .and_then(Value::as_str)
-                        .is_some_and(|aid| {
-                            active
-                                .activity
-                                .iter()
-                                .any(|a| a.get("id").and_then(Value::as_str) == Some(aid))
-                        });
-                    if !dup {
-                        active.activity.insert(0, activity);
+                ) {
+                    if let Some(active) = self
+                        .active_task
+                        .as_mut()
+                        .filter(|t| t.summary.id == task_id)
+                    {
+                        let dup = activity
+                            .get("id")
+                            .and_then(Value::as_str)
+                            .is_some_and(|aid| {
+                                active
+                                    .activity
+                                    .iter()
+                                    .any(|a| a.get("id").and_then(Value::as_str) == Some(aid))
+                            });
+                        if !dup {
+                            active.activity.insert(0, activity.clone());
+                        }
+                    }
+
+                    // Notify the user when any task requests blocking input, regardless of whether
+                    // that task is currently open in the main view.
+                    if activity.get("kind").and_then(Value::as_str) == Some("input_requested") {
+                        let summary = self
+                            .active_task
+                            .as_ref()
+                            .filter(|t| t.summary.id == task_id)
+                            .map(|t| &t.summary)
+                            .or_else(|| self.tasks.iter().find(|t| t.id == task_id));
+                        let has_blocking = summary.is_none_or(|s| s.blocking_question_count > 0);
+                        let activity_id = activity
+                            .get("id")
+                            .and_then(Value::as_str)
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty());
+                        let dedup_key = activity_id.map(|aid| format!("task-input:{aid}"));
+                        let already_notified = dedup_key
+                            .as_ref()
+                            .is_some_and(|key| self.notified_task_input_ids.contains(key));
+                        if has_blocking && !already_notified {
+                            if let Some(key) = dedup_key.clone() {
+                                self.notified_task_input_ids.insert(key);
+                            }
+                            let task_title = summary
+                                .map(|s| s.title.trim())
+                                .filter(|title| !title.is_empty())
+                                .unwrap_or("Task");
+                            let title = format!("{task_title} needs input");
+                            let body = activity
+                                .get("summary")
+                                .and_then(Value::as_str)
+                                .map(str::trim)
+                                .filter(|text| !text.is_empty())
+                                .unwrap_or("A task is waiting for your input.")
+                                .to_string();
+                            self.toasts.push(NotificationRecord {
+                                key: dedup_key
+                                    .unwrap_or_else(|| format!("task-input:{task_id}:{now_ms}")),
+                                title: title.clone(),
+                                description: Some(body.clone()),
+                                tone: NotificationTone::Info,
+                                created_at_secs: (now_ms.max(0) as u64) / 1000,
+                            });
+                            self.send_native(NativeCommand::ShowDesktopNotification {
+                                title,
+                                body,
+                            });
+                        }
                     }
                 }
             }
@@ -10867,7 +11123,7 @@ impl AppState {
                 self.apply_provider_auth_methods_event(evt);
             }
             "memory_list" => {
-                self.apply_memory_list_event(evt);
+                self.apply_memory_list_event(workspace_id, evt);
             }
             "plugins_catalog" => {
                 self.apply_plugins_catalog_event(workspace_id, evt);
@@ -11208,7 +11464,7 @@ impl AppState {
                 self.apply_provider_status_event(workspace_id, &payload);
             }
             "cowork/provider/auth/authorize" => {
-                self.last_auth_challenge = Some(payload);
+                self.apply_provider_auth_authorize_response(workspace_id, payload);
             }
             "cowork/provider/auth/callback"
             | "cowork/provider/auth/setApiKey"
@@ -11220,6 +11476,17 @@ impl AppState {
                 {
                     self.settings_mutation_error = Some(msg.to_string());
                 } else {
+                    if method == "cowork/provider/auth/callback" {
+                        let done_provider = evt.get("provider").and_then(Value::as_str);
+                        let matches_active = self.last_auth_challenge.as_ref().is_some_and(|ch| {
+                            let target = ch.get("event").unwrap_or(ch);
+                            done_provider.is_none()
+                                || target.get("provider").and_then(Value::as_str) == done_provider
+                        });
+                        if matches_active {
+                            self.last_auth_challenge = None;
+                        }
+                    }
                     self.dispatch(Action::Settings(SettingsAction::RefreshProviderCatalog {
                         workspace_id: workspace_id.to_string(),
                     }));
@@ -11315,19 +11582,13 @@ impl AppState {
             }
             "cowork/memory/list" | "cowork/memory/upsert" | "cowork/memory/delete" => {
                 let target = payload.get("event").unwrap_or(&payload);
-                self.apply_memory_list_event(target);
+                self.apply_memory_list_event(workspace_id, target);
             }
             "cowork/memory/advanced/list"
             | "cowork/memory/advanced/upsert"
             | "cowork/memory/advanced/delete" => {
                 let target = payload.get("event").unwrap_or(&payload);
-                if let Some(entries) = target
-                    .get("memories")
-                    .or_else(|| target.get("entries"))
-                    .and_then(Value::as_array)
-                {
-                    self.advanced_memories = entries.clone();
-                }
+                self.apply_advanced_memory_list_event(workspace_id, target);
             }
             "cowork/connectors/openai-native/list"
             | "cowork/connectors/openai-native/refresh"
@@ -11478,15 +11739,20 @@ impl AppState {
             "task/artifact/read"
             | "task/artifact/version/accept"
             | "task/artifact/version/restore" => {
-                if let Some(task_val) = payload.get("task") {
-                    self.apply_task_record_update(workspace_id, task_val);
-                }
                 let detail = payload.get("detail").cloned().unwrap_or(payload.clone());
                 let artifact_id = detail
                     .get("artifact")
                     .and_then(|a| a.get("id"))
+                    .or_else(|| detail.get("id").or_else(|| detail.get("artifactId")))
                     .and_then(Value::as_str)
                     .map(str::to_string);
+                if let Some(task_val) = payload.get("task") {
+                    self.apply_task_record_update_inner(
+                        workspace_id,
+                        task_val,
+                        artifact_id.as_deref(),
+                    );
+                }
                 if let Some(active) = self.active_task.as_mut() {
                     if let Some(aid) = artifact_id {
                         reconcile_artifact_detail_into_list(&mut active.artifacts, &aid, &detail);
@@ -12250,7 +12516,194 @@ impl AppState {
         }
     }
 
-    fn apply_memory_list_event(&mut self, evt: &Value) {
+    fn apply_provider_auth_authorize_response(&mut self, workspace_id: &str, payload: Value) {
+        self.last_auth_challenge = Some(payload.clone());
+        let evt = payload.get("event").unwrap_or(&payload);
+        let Some(provider) = evt
+            .get("provider")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        else {
+            return;
+        };
+        let method_id = evt
+            .get("methodId")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| self.resolve_provider_oauth_method(provider));
+        let challenge = evt.get("challenge").unwrap_or(evt);
+        let challenge_is_auto = challenge
+            .get("method")
+            .or_else(|| challenge.get("mode"))
+            .and_then(Value::as_str)
+            .is_some_and(|mode| mode.eq_ignore_ascii_case("auto"));
+        let spec_is_auto = self
+            .provider_auth_method_specs
+            .get(provider)
+            .is_some_and(|specs| {
+                specs.iter().any(|spec| {
+                    spec.id == method_id
+                        && spec
+                            .oauth_mode
+                            .as_deref()
+                            .is_some_and(|mode| mode.eq_ignore_ascii_case("auto"))
+                })
+            });
+        if challenge_is_auto || spec_is_auto {
+            // Automatic OAuth methods (such as Codex `oauth_cli`) run browser sign-in and
+            // completion inside `cowork/provider/auth/callback` with `code` omitted/null.
+            let params = ProviderAuthCallbackParams {
+                cwd: self.workspace_path(workspace_id),
+                provider: provider.to_string(),
+                method_id,
+                code: None,
+            };
+            let _ = self.send_ws_typed_with_timeout(
+                workspace_id,
+                "cowork/provider/auth/callback",
+                &params,
+                Some(330_000),
+                false,
+            );
+        }
+    }
+
+    fn is_effective_memory_workspace(&self, workspace_id: &str) -> bool {
+        if let Some(id) = self.resolve_management_workspace_id() {
+            return id == workspace_id;
+        }
+        self.is_active_or_sole_workspace(workspace_id)
+    }
+
+    fn memory_entries_from_scoped(scoped: &[ScopedMemoryEntry]) -> Vec<MemoryEntry> {
+        scoped
+            .iter()
+            .map(|m| MemoryEntry {
+                key: m.id.clone(),
+                content: m.content.clone(),
+                updated_at: m.updated_at_ms,
+            })
+            .collect()
+    }
+
+    pub fn scoped_memories_for_workspace(&self, workspace_id: &str) -> Vec<ScopedMemoryEntry> {
+        if let Some(rt) = self.workspace_runtime_by_id.get(workspace_id)
+            && rt.memories_loaded
+        {
+            return rt.scoped_memories.clone();
+        }
+        if self
+            .workspace_runtime_by_id
+            .values()
+            .all(|rt| !rt.memories_loaded)
+            && self.is_effective_memory_workspace(workspace_id)
+        {
+            if !self.scoped_memories.is_empty() {
+                return self.scoped_memories.clone();
+            }
+            return self
+                .memory_entries
+                .iter()
+                .map(|entry| ScopedMemoryEntry {
+                    id: entry.key.clone(),
+                    scope: "workspace".to_string(),
+                    content: entry.content.clone(),
+                    created_at: None,
+                    updated_at: None,
+                    updated_at_ms: entry.updated_at,
+                })
+                .collect();
+        }
+        Vec::new()
+    }
+
+    pub fn advanced_memories_for_workspace(&self, workspace_id: &str) -> &[Value] {
+        if let Some(rt) = self.workspace_runtime_by_id.get(workspace_id)
+            && rt.advanced_memories_loaded
+        {
+            return &rt.advanced_memories;
+        }
+        if self
+            .workspace_runtime_by_id
+            .values()
+            .all(|rt| !rt.advanced_memories_loaded)
+            && self.is_effective_memory_workspace(workspace_id)
+        {
+            return &self.advanced_memories;
+        }
+        &[]
+    }
+
+    fn sync_active_workspace_memories(&mut self) {
+        self.settings_ui.memory_dialog_open = false;
+        self.settings_ui.memory_editing_key = None;
+        self.settings_ui.memory_delete_confirm = None;
+        self.settings_ui.memory_delete_confirm_key = None;
+        self.settings_ui.expanded_memory_keys.clear();
+        self.settings_ui.advanced_memory_dialog_open = false;
+        self.settings_ui.advanced_memory_editing_slug = None;
+        self.settings_ui.advanced_memory_delete_confirm_slug = None;
+        self.settings_ui.expanded_advanced_memory_slugs.clear();
+
+        let target_ws_id = self
+            .resolve_management_workspace_id()
+            .map(str::to_string)
+            .or_else(|| self.active_workspace_id.clone());
+        if let Some(ws_id) = target_ws_id.as_deref()
+            && let Some(rt) = self.workspace_runtime_by_id.get(ws_id)
+        {
+            if rt.memories_loaded {
+                self.scoped_memories = rt.scoped_memories.clone();
+                self.memory_entries = rt.memory_entries.clone();
+            } else {
+                self.scoped_memories.clear();
+                self.memory_entries.clear();
+            }
+            if rt.advanced_memories_loaded {
+                self.advanced_memories = rt.advanced_memories.clone();
+            } else {
+                self.advanced_memories.clear();
+            }
+        } else {
+            self.scoped_memories.clear();
+            self.memory_entries.clear();
+            self.advanced_memories.clear();
+        }
+    }
+
+    fn refresh_workspace_memories(&mut self, workspace_id: &str) {
+        if !self.is_workspace_ws_connected(workspace_id) {
+            return;
+        }
+        let cwd = self.workspace_path(workspace_id);
+        let _ = self.send_ws_typed(
+            workspace_id,
+            "cowork/memory/list",
+            &MemoryListParams {
+                cwd: cwd.clone(),
+                scope: None,
+            },
+            true,
+        );
+        let _ = self.send_ws_typed(
+            workspace_id,
+            "cowork/memory/advanced/list",
+            &MemoryAdvancedListParams { cwd },
+            true,
+        );
+    }
+
+    fn refresh_active_workspace_memories(&mut self) {
+        let Some(ws_id) = self.resolve_management_workspace_id().map(str::to_string) else {
+            return;
+        };
+        self.refresh_workspace_memories(&ws_id);
+    }
+
+    fn apply_memory_list_event(&mut self, workspace_id: &str, evt: &Value) {
         let Some(arr) = evt
             .get("memories")
             .or_else(|| evt.get("entries"))
@@ -12267,21 +12720,47 @@ impl AppState {
                     .filter(|s| *s == "user" || *s == "workspace")
             })
             .flatten();
-        if let Some(target_scope) = scoped_only {
-            self.scoped_memories.retain(|m| m.scope != target_scope);
-            self.scoped_memories.extend(parsed);
-        } else {
-            self.scoped_memories = parsed;
+        let (scoped, entries) = {
+            let rt = self
+                .workspace_runtime_by_id
+                .entry(workspace_id.to_string())
+                .or_default();
+            if let Some(target_scope) = scoped_only {
+                rt.scoped_memories.retain(|m| m.scope != target_scope);
+                rt.scoped_memories.extend(parsed);
+            } else {
+                rt.scoped_memories = parsed;
+            }
+            rt.memory_entries = Self::memory_entries_from_scoped(&rt.scoped_memories);
+            rt.memories_loaded = true;
+            (rt.scoped_memories.clone(), rt.memory_entries.clone())
+        };
+        if self.is_effective_memory_workspace(workspace_id) {
+            self.scoped_memories = scoped;
+            self.memory_entries = entries;
         }
-        self.memory_entries = self
-            .scoped_memories
-            .iter()
-            .map(|m| MemoryEntry {
-                key: m.id.clone(),
-                content: m.content.clone(),
-                updated_at: m.updated_at_ms,
-            })
-            .collect();
+    }
+
+    fn apply_advanced_memory_list_event(&mut self, workspace_id: &str, evt: &Value) {
+        let Some(entries) = evt
+            .get("memories")
+            .or_else(|| evt.get("entries"))
+            .and_then(Value::as_array)
+        else {
+            return;
+        };
+        let cloned = entries.clone();
+        {
+            let rt = self
+                .workspace_runtime_by_id
+                .entry(workspace_id.to_string())
+                .or_default();
+            rt.advanced_memories = cloned.clone();
+            rt.advanced_memories_loaded = true;
+        }
+        if self.is_effective_memory_workspace(workspace_id) {
+            self.advanced_memories = cloned;
+        }
     }
 
     fn apply_plugins_catalog_event(&mut self, workspace_id: &str, evt: &Value) {
@@ -13713,9 +14192,19 @@ impl AppState {
     }
 
     fn apply_task_record_update(&mut self, workspace_id: &str, val: &Value) {
+        self.apply_task_record_update_inner(workspace_id, val, None);
+    }
+
+    fn apply_task_record_update_inner(
+        &mut self,
+        workspace_id: &str,
+        val: &Value,
+        skip_artifact_refresh_id: Option<&str>,
+    ) {
         let Some(mut task) = parse_task_record(val, workspace_id) else {
             return;
         };
+        let mut stale_artifact_ids_to_refresh: Vec<String> = Vec::new();
         if let Some(existing) = self
             .active_task
             .as_ref()
@@ -13724,25 +14213,57 @@ impl AppState {
             if task.runs.is_empty() && !existing.runs.is_empty() {
                 task.runs = existing.runs.clone();
             }
-            if task.active_artifact_detail.is_none() {
-                task.active_artifact_detail = existing.active_artifact_detail.clone();
-            }
-            for (k, v) in &existing.artifact_details_by_id {
-                task.artifact_details_by_id
-                    .entry(k.clone())
-                    .or_insert_with(|| v.clone());
-            }
-            for (aid, detail) in &task.artifact_details_by_id {
-                if task
-                    .artifacts
-                    .iter()
-                    .find(|art| art.id == *aid)
-                    .is_some_and(|art| {
-                        art.latest_version_id.is_none() && art.accepted_version_id.is_none()
-                    })
-                {
-                    reconcile_artifact_detail_into_list(&mut task.artifacts, aid, detail);
+            let revision_changed = task.summary.revision != existing.summary.revision;
+            if !revision_changed {
+                if task.active_artifact_detail.is_none() {
+                    task.active_artifact_detail = existing.active_artifact_detail.clone();
                 }
+                for (k, v) in &existing.artifact_details_by_id {
+                    task.artifact_details_by_id
+                        .entry(k.clone())
+                        .or_insert_with(|| v.clone());
+                }
+                for (aid, detail) in &task.artifact_details_by_id {
+                    if task
+                        .artifacts
+                        .iter()
+                        .find(|art| art.id == *aid)
+                        .is_some_and(|art| {
+                            art.latest_version_id.is_none() && art.accepted_version_id.is_none()
+                        })
+                    {
+                        reconcile_artifact_detail_into_list(&mut task.artifacts, aid, detail);
+                    }
+                }
+            } else {
+                // Task revision changed (for example after `capture_artifact_version` or a remote
+                // update): invalidate cached artifact details so stale `acceptedVersionId` /
+                // `latestVersionId` are never treated as authoritative, and re-fetch them.
+                let mut to_refresh: Vec<String> = existing
+                    .artifact_details_by_id
+                    .keys()
+                    .filter(|aid| task.artifacts.iter().any(|art| art.id == **aid))
+                    .cloned()
+                    .collect();
+                if let Some(active_aid) = existing
+                    .active_artifact_detail
+                    .as_ref()
+                    .and_then(|d| {
+                        d.get("artifact")
+                            .and_then(|a| a.get("id"))
+                            .or_else(|| d.get("id").or_else(|| d.get("artifactId")))
+                            .and_then(Value::as_str)
+                    })
+                    .filter(|aid| task.artifacts.iter().any(|art| art.id == *aid))
+                    && !to_refresh
+                        .iter()
+                        .any(|existing_id| existing_id == active_aid)
+                {
+                    to_refresh.push(active_aid.to_string());
+                }
+                to_refresh.sort();
+                to_refresh.retain(|aid| Some(aid.as_str()) != skip_artifact_refresh_id);
+                stale_artifact_ids_to_refresh = to_refresh;
             }
         }
         self.upsert_task_summary(task.summary.clone());
@@ -13772,8 +14293,19 @@ impl AppState {
                 .active_task
                 .as_ref()
                 .is_some_and(|t| t.summary.id == task.summary.id);
+        let task_id_for_refresh = task.summary.id.clone();
         if viewing_this_task {
             self.active_task = Some(task);
+            for artifact_id in stale_artifact_ids_to_refresh {
+                self.send_task_ws(
+                    workspace_id,
+                    "task/artifact/read",
+                    json!({
+                        "taskId": task_id_for_refresh,
+                        "artifactId": artifact_id,
+                    }),
+                );
+            }
         }
     }
 }
@@ -25700,8 +26232,16 @@ mod tests {
         assert_eq!(art.latest_version_id.as_deref(), Some("ver-2"));
         assert_eq!(art.accepted_version_id.as_deref(), Some("ver-2"));
 
-        // Subsequent canonical `task/updated` (still without version IDs on `TaskArtifact`)
-        // preserves reconciled acceptance state from `artifact_details_by_id`.
+        // Same-revision canonical `task/updated` preserves reconciled acceptance state.
+        state.apply_task_record_update("ws-1", &canonical_task);
+        let art_same_rev = &state.active_task.as_ref().unwrap().artifacts[0];
+        assert_eq!(art_same_rev.latest_version_id.as_deref(), Some("ver-2"));
+        assert_eq!(art_same_rev.accepted_version_id.as_deref(), Some("ver-2"));
+
+        // Revision-bumping `task/updated` (e.g. after `capture_artifact_version`) invalidates
+        // stale cached details and triggers `task/artifact/read` so the new version is not
+        // mislabeled as Accepted.
+        state.services.emitted_ws_commands.clear();
         state.apply_task_record_update(
             "ws-1",
             &json!({
@@ -25717,9 +26257,153 @@ mod tests {
                 }]
             }),
         );
-        let art_after = &state.active_task.as_ref().unwrap().artifacts[0];
-        assert_eq!(art_after.latest_version_id.as_deref(), Some("ver-2"));
-        assert_eq!(art_after.accepted_version_id.as_deref(), Some("ver-2"));
+        let art_after_bump = &state.active_task.as_ref().unwrap().artifacts[0];
+        assert_eq!(art_after_bump.latest_version_id, None);
+        assert_eq!(art_after_bump.accepted_version_id, None);
+        assert!(
+            state
+                .active_task
+                .as_ref()
+                .unwrap()
+                .artifact_details_by_id
+                .is_empty()
+        );
+        assert!(
+            state
+                .services
+                .emitted_ws_commands
+                .iter()
+                .any(|cmd| matches!(
+                    cmd,
+                    WsCommand::SendRequest { method, params, .. }
+                        if method == "task/artifact/read"
+                            && params["taskId"] == "task-1"
+                            && params["artifactId"] == "art-1"
+                ))
+        );
+
+        // Applying the refreshed detail exposes the new unaccepted `ver-3`.
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-1".to_string(),
+            request_id: 22,
+            method: "task/artifact/read".to_string(),
+            result: Ok(json!({
+                "detail": {
+                    "artifact": { "id": "art-1", "title": "Report", "path": "output/report.md" },
+                    "latestVersionId": "ver-3",
+                    "acceptedVersionId": "ver-2",
+                    "versions": [
+                        { "id": "ver-3", "reviewStatus": "pending" },
+                        { "id": "ver-2", "reviewStatus": "accepted" }
+                    ]
+                }
+            })),
+        });
+        let art_refreshed = &state.active_task.as_ref().unwrap().artifacts[0];
+        assert_eq!(art_refreshed.latest_version_id.as_deref(), Some("ver-3"));
+        assert_eq!(art_refreshed.accepted_version_id.as_deref(), Some("ver-2"));
+    }
+
+    #[test]
+    fn task_input_requested_activity_dispatches_background_desktop_notification_even_when_unopened()
+    {
+        let mut state = AppState::default();
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-1", "App", "/tmp/app", 1));
+        state.tasks.push(TaskSummaryView {
+            id: "task-bg".to_string(),
+            workspace_id: "ws-1".to_string(),
+            title: "Quarterly audit".to_string(),
+            status: "blocked".to_string(),
+            blocking_question_count: 1,
+            ..Default::default()
+        });
+        assert!(state.active_task.is_none());
+
+        state.apply_ws_notification(
+            "ws-1",
+            "task/activity",
+            json!({
+                "taskId": "task-bg",
+                "activity": {
+                    "id": "act-101",
+                    "kind": "input_requested",
+                    "summary": "Confirm which fiscal quarter to include."
+                }
+            }),
+        );
+
+        let notifications: Vec<_> = state
+            .services
+            .emitted_native_commands
+            .iter()
+            .filter_map(|cmd| match cmd {
+                NativeCommand::ShowDesktopNotification { title, body } => {
+                    Some((title.clone(), body.clone()))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            notifications,
+            vec![(
+                "Quarterly audit needs input".to_string(),
+                "Confirm which fiscal quarter to include.".to_string(),
+            )]
+        );
+        assert_eq!(state.toasts.len(), 1);
+        assert_eq!(state.toasts[0].key, "task-input:act-101");
+
+        // Duplicate activity delivery does not re-notify.
+        state.apply_ws_notification(
+            "ws-1",
+            "task/activity",
+            json!({
+                "taskId": "task-bg",
+                "activity": {
+                    "id": "act-101",
+                    "kind": "input_requested",
+                    "summary": "Confirm which fiscal quarter to include."
+                }
+            }),
+        );
+        let notif_count = state
+            .services
+            .emitted_native_commands
+            .iter()
+            .filter(|cmd| matches!(cmd, NativeCommand::ShowDesktopNotification { .. }))
+            .count();
+        assert_eq!(notif_count, 1);
+
+        // Non-blocking task (`blocking_question_count == 0`) does not emit a notification.
+        state.tasks.push(TaskSummaryView {
+            id: "task-opt".to_string(),
+            workspace_id: "ws-1".to_string(),
+            title: "Optional note".to_string(),
+            status: "working".to_string(),
+            blocking_question_count: 0,
+            ..Default::default()
+        });
+        state.apply_ws_notification(
+            "ws-1",
+            "task/activity",
+            json!({
+                "taskId": "task-opt",
+                "activity": {
+                    "id": "act-102",
+                    "kind": "input_requested",
+                    "summary": "Optional clarification."
+                }
+            }),
+        );
+        let notif_count_after = state
+            .services
+            .emitted_native_commands
+            .iter()
+            .filter(|cmd| matches!(cmd, NativeCommand::ShowDesktopNotification { .. }))
+            .count();
+        assert_eq!(notif_count_after, 1);
     }
 
     #[test]
@@ -26012,5 +26696,481 @@ mod tests {
         assert_eq!(tools[0].1, ToolRunStatus::Completed);
         assert_eq!(tools[0].2, json!({ "filePath": "README.md" }));
         assert_eq!(tools[0].3, Some(json!({ "content": "# Hi" })));
+    }
+
+    #[test]
+    fn memory_and_advanced_memory_snapshots_stay_scoped_per_workspace() {
+        let mut state = AppState::default();
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-a", "Alpha", "/tmp/alpha", 1));
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-b", "Beta", "/tmp/beta", 2));
+        state.active_workspace_id = Some("ws-a".to_string());
+        state
+            .workspace_socket_by_id
+            .insert("ws-a".to_string(), crate::ws::WsConnectionState::Connected);
+        state
+            .workspace_socket_by_id
+            .insert("ws-b".to_string(), crate::ws::WsConnectionState::Connected);
+
+        // Workspace A receives both legacy and advanced memories.
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-a".to_string(),
+            request_id: 1,
+            method: "cowork/memory/list".to_string(),
+            result: Ok(json!({
+                "event": {
+                    "type": "memory_list",
+                    "memories": [
+                        { "id": "alpha-fact", "scope": "workspace", "content": "Alpha uses pnpm" }
+                    ]
+                }
+            })),
+        });
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-a".to_string(),
+            request_id: 2,
+            method: "cowork/memory/advanced/list".to_string(),
+            result: Ok(json!({
+                "event": {
+                    "memories": [
+                        { "slug": "alpha-guide", "name": "Alpha Guide", "type": "project", "description": "A", "body": "Alpha body" }
+                    ]
+                }
+            })),
+        });
+        assert_eq!(state.scoped_memories.len(), 1);
+        assert_eq!(state.scoped_memories[0].id, "alpha-fact");
+        assert_eq!(state.advanced_memories.len(), 1);
+        assert_eq!(state.advanced_memories[0]["slug"], "alpha-guide");
+
+        // Open an edit dialog in workspace A, then switch to workspace B.
+        state.settings_ui.memory_dialog_open = true;
+        state.settings_ui.memory_editing_key = Some("alpha-fact".to_string());
+        state.settings_ui.advanced_memory_dialog_open = true;
+        state.settings_ui.advanced_memory_editing_slug = Some("alpha-guide".to_string());
+
+        state.dispatch(Action::Navigate(NavAction::SelectWorkspace(
+            "ws-b".to_string(),
+        )));
+
+        // Switching to unloaded workspace B clears A's displayed memories, closes dialogs, and fetches B's memories.
+        assert!(state.scoped_memories.is_empty());
+        assert!(state.memory_entries.is_empty());
+        assert!(state.advanced_memories.is_empty());
+        assert!(state.scoped_memories_for_workspace("ws-b").is_empty());
+        assert!(state.advanced_memories_for_workspace("ws-b").is_empty());
+        assert!(!state.settings_ui.memory_dialog_open);
+        assert!(state.settings_ui.memory_editing_key.is_none());
+        assert!(!state.settings_ui.advanced_memory_dialog_open);
+        assert!(state.settings_ui.advanced_memory_editing_slug.is_none());
+        assert!(
+            state
+                .services
+                .emitted_ws_commands
+                .iter()
+                .any(|cmd| matches!(
+                    cmd,
+                    WsCommand::SendRequest { workspace_id, method, .. }
+                        if workspace_id == "ws-b" && method == "cowork/memory/list"
+                ))
+        );
+        assert!(
+            state
+                .services
+                .emitted_ws_commands
+                .iter()
+                .any(|cmd| matches!(
+                    cmd,
+                    WsCommand::SendRequest { workspace_id, method, .. }
+                        if workspace_id == "ws-b" && method == "cowork/memory/advanced/list"
+                ))
+        );
+
+        // Workspace B loads its own memories.
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-b".to_string(),
+            request_id: 3,
+            method: "cowork/memory/list".to_string(),
+            result: Ok(json!({
+                "event": {
+                    "type": "memory_list",
+                    "memories": [
+                        { "id": "beta-fact", "scope": "workspace", "content": "Beta uses cargo" }
+                    ]
+                }
+            })),
+        });
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-b".to_string(),
+            request_id: 4,
+            method: "cowork/memory/advanced/list".to_string(),
+            result: Ok(json!({
+                "event": {
+                    "memories": [
+                        { "slug": "beta-guide", "name": "Beta Guide", "type": "project", "description": "B", "body": "Beta body" }
+                    ]
+                }
+            })),
+        });
+
+        // A delayed update from workspace A must NOT overwrite workspace B's displayed memories.
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-a".to_string(),
+            request_id: 5,
+            method: "cowork/memory/list".to_string(),
+            result: Ok(json!({
+                "event": {
+                    "type": "memory_list",
+                    "memories": [
+                        { "id": "alpha-late", "scope": "workspace", "content": "Late Alpha update" }
+                    ]
+                }
+            })),
+        });
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-a".to_string(),
+            request_id: 6,
+            method: "cowork/memory/advanced/list".to_string(),
+            result: Ok(json!({
+                "event": {
+                    "memories": [
+                        { "slug": "alpha-late-adv", "name": "Late Alpha", "type": "note", "description": "L", "body": "Late" }
+                    ]
+                }
+            })),
+        });
+
+        assert_eq!(state.scoped_memories.len(), 1);
+        assert_eq!(state.scoped_memories[0].id, "beta-fact");
+        assert_eq!(state.advanced_memories.len(), 1);
+        assert_eq!(state.advanced_memories[0]["slug"], "beta-guide");
+
+        // Switching back to workspace A immediately reflects workspace A's stored snapshot.
+        state.dispatch(Action::Navigate(NavAction::SelectWorkspace(
+            "ws-a".to_string(),
+        )));
+        assert_eq!(state.scoped_memories.len(), 1);
+        assert_eq!(state.scoped_memories[0].id, "alpha-late");
+        assert_eq!(state.advanced_memories.len(), 1);
+        assert_eq!(state.advanced_memories[0]["slug"], "alpha-late-adv");
+    }
+
+    #[test]
+    fn canvas_close_and_switch_flush_unsaved_edits_and_guard_save_failures() {
+        let mut state = AppState {
+            now_secs: 100.0,
+            ..Default::default()
+        };
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-1", "Repo", "/tmp/repo", 1));
+        state
+            .workspace_socket_by_id
+            .insert("ws-1".to_string(), crate::ws::WsConnectionState::Connected);
+        state.feature_flags.insert("canvas".to_string(), true);
+
+        // Open README.md and mark Ready.
+        state.dispatch(Action::Chat(ChatAction::OpenCanvasDocument {
+            workspace_id: "ws-1".to_string(),
+            path: "README.md".to_string(),
+        }));
+        let open_id = match state.services.emitted_ws_commands.last().cloned() {
+            Some(WsCommand::SendRequest { request_id, .. }) => request_id,
+            other => panic!("expected open request, got {other:?}"),
+        };
+        let doc_id = state.canvas_document.as_ref().unwrap().document_id.clone();
+        let doc_gen = state.canvas_document.as_ref().unwrap().generation;
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-1".to_string(),
+            request_id: open_id,
+            method: "cowork/workspace/document/open".to_string(),
+            result: Ok(json!({
+                "ok": true,
+                "document": {
+                    "path": "/tmp/repo/README.md",
+                    "content": "initial",
+                    "truncated": false
+                }
+            })),
+        });
+
+        // 1. Make an unsaved edit before debounce elapses and click Close: must flush via save first!
+        state.dispatch(Action::Chat(ChatAction::UpdateCanvasDraft {
+            document_id: doc_id.clone(),
+            generation: doc_gen,
+            content: "initial + unsaved edit".to_string(),
+        }));
+        state.services.emitted_ws_commands.clear();
+        state.dispatch(Action::Chat(ChatAction::CloseCanvasDocument));
+
+        assert!(
+            state.canvas_document.is_some(),
+            "dirty Canvas document must stay open while flushing edits"
+        );
+        assert_eq!(
+            state.pending_canvas_transition,
+            Some(PendingCanvasTransition::Close)
+        );
+        assert!(
+            !state
+                .services
+                .emitted_ws_commands
+                .iter()
+                .any(|c| matches!(c, WsCommand::SendRequest { method, .. } if method == "cowork/workspace/document/close")),
+            "document/close must not fire before flush save completes"
+        );
+        let save_id = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .find_map(|c| match c {
+                WsCommand::SendRequest {
+                    request_id,
+                    method,
+                    params,
+                    ..
+                } if method == "cowork/workspace/document/save" => {
+                    assert_eq!(params["content"], "initial + unsaved edit");
+                    Some(*request_id)
+                }
+                _ => None,
+            })
+            .expect("closing dirty Canvas must flush via cowork/workspace/document/save");
+
+        // Once the flush save succeeds, document closes cleanly.
+        let edit_rev = state.canvas_document.as_ref().unwrap().edit_revision;
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-1".to_string(),
+            request_id: save_id,
+            method: "cowork/workspace/document/save".to_string(),
+            result: Ok(json!({
+                "ok": true,
+                "status": "saved",
+                "editRevision": edit_rev,
+                "path": "/tmp/repo/README.md"
+            })),
+        });
+        assert!(state.canvas_document.is_none());
+        assert!(state.pending_canvas_transition.is_none());
+        assert!(state.services.emitted_ws_commands.iter().any(|c| matches!(
+            c,
+            WsCommand::SendRequest { method, .. } if method == "cowork/workspace/document/close"
+        )));
+
+        // 2. Reopen README.md, edit it, then request opening NOTES.md -> must flush README.md first,
+        // and if save fails with conflict, retain README.md draft and open discard confirmation.
+        state.dispatch(Action::Chat(ChatAction::OpenCanvasDocument {
+            workspace_id: "ws-1".to_string(),
+            path: "README.md".to_string(),
+        }));
+        let open2_id = match state.services.emitted_ws_commands.last().cloned() {
+            Some(WsCommand::SendRequest { request_id, .. }) => request_id,
+            other => panic!("expected open request, got {other:?}"),
+        };
+        let doc2_id = state.canvas_document.as_ref().unwrap().document_id.clone();
+        let doc2_gen = state.canvas_document.as_ref().unwrap().generation;
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-1".to_string(),
+            request_id: open2_id,
+            method: "cowork/workspace/document/open".to_string(),
+            result: Ok(json!({
+                "ok": true,
+                "document": {
+                    "path": "/tmp/repo/README.md",
+                    "content": "v1",
+                    "truncated": false
+                }
+            })),
+        });
+        state.dispatch(Action::Chat(ChatAction::UpdateCanvasDraft {
+            document_id: doc2_id,
+            generation: doc2_gen,
+            content: "v1 + precious draft".to_string(),
+        }));
+        state.services.emitted_ws_commands.clear();
+        state.dispatch(Action::Chat(ChatAction::OpenCanvasDocument {
+            workspace_id: "ws-1".to_string(),
+            path: "NOTES.md".to_string(),
+        }));
+
+        // Must flush README.md rather than opening NOTES.md immediately.
+        assert_eq!(
+            state.canvas_document.as_ref().unwrap().path,
+            "/tmp/repo/README.md"
+        );
+        let save2_id = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .find_map(|c| match c {
+                WsCommand::SendRequest {
+                    request_id, method, ..
+                } if method == "cowork/workspace/document/save" => Some(*request_id),
+                _ => None,
+            })
+            .expect("switching from dirty Canvas doc must flush save first");
+        assert!(
+            !state
+                .services
+                .emitted_ws_commands
+                .iter()
+                .any(|c| matches!(c, WsCommand::SendRequest { method, .. } if method == "cowork/workspace/document/open")),
+            "second document must not open before first document flushes"
+        );
+
+        // Simulate save conflict: README.md and its draft stay open, and discard confirm opens.
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-1".to_string(),
+            request_id: save2_id,
+            method: "cowork/workspace/document/save".to_string(),
+            result: Ok(json!({
+                "ok": false,
+                "error": { "kind": "conflict", "message": "Changed externally on disk" }
+            })),
+        });
+        let kept = state.canvas_document.as_ref().unwrap();
+        assert_eq!(kept.path, "/tmp/repo/README.md");
+        assert_eq!(kept.draft_content, "v1 + precious draft");
+        assert!(matches!(kept.status, CanvasDocumentStatus::Conflict { .. }));
+        assert_eq!(
+            state.canvas_discard_confirm,
+            Some(PendingCanvasTransition::OpenDocument {
+                workspace_id: "ws-1".to_string(),
+                path: "/tmp/repo/NOTES.md".to_string(),
+            })
+        );
+
+        // Explicit discard confirmation completes the switch to NOTES.md.
+        state.dispatch(Action::Chat(ChatAction::ConfirmDiscardCanvasTransition));
+        assert!(state.canvas_discard_confirm.is_none());
+        assert_eq!(
+            state.canvas_document.as_ref().unwrap().path,
+            "/tmp/repo/NOTES.md"
+        );
+        assert!(state.services.emitted_ws_commands.iter().any(|c| matches!(
+            c,
+            WsCommand::SendRequest { method, params, .. }
+                if method == "cowork/workspace/document/open"
+                    && params["path"] == "/tmp/repo/NOTES.md"
+        )));
+    }
+
+    #[test]
+    fn automatic_oauth_challenge_dispatches_callback_without_code_and_refreshes_on_success() {
+        let mut state = AppState::default();
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-1", "Repo", "/tmp/repo", 1));
+        state.active_workspace_id = Some("ws-1".to_string());
+        state.provider_auth_method_specs.insert(
+            "codex-cli".to_string(),
+            vec![ProviderAuthMethodSpec {
+                id: "oauth_cli".to_string(),
+                method_type: "oauth".to_string(),
+                label: Some("Sign in with ChatGPT".to_string()),
+                oauth_mode: Some("auto".to_string()),
+                fields: Vec::new(),
+            }],
+        );
+
+        // Automatic OAuth challenge (`challenge.method == "auto"`) must immediately trigger
+        // `cowork/provider/auth/callback` with `code: null` and a 330s timeout.
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-1".to_string(),
+            request_id: 10,
+            method: "cowork/provider/auth/authorize".to_string(),
+            result: Ok(json!({
+                "event": {
+                    "type": "provider_auth_challenge",
+                    "provider": "codex-cli",
+                    "methodId": "oauth_cli",
+                    "challenge": {
+                        "method": "auto",
+                        "url": "https://auth.openai.com/oauth/authorize?state=abc",
+                        "instructions": "Continue to browser-based ChatGPT sign-in."
+                    }
+                }
+            })),
+        });
+
+        assert!(state.last_auth_challenge.is_some());
+        let cb_cmd = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .find_map(|cmd| match cmd {
+                WsCommand::SendRequest {
+                    method,
+                    params,
+                    timeout_ms,
+                    ..
+                } if method == "cowork/provider/auth/callback" => {
+                    Some((params.clone(), *timeout_ms))
+                }
+                _ => None,
+            })
+            .expect("automatic OAuth challenge must dispatch cowork/provider/auth/callback");
+        assert_eq!(cb_cmd.0["provider"], "codex-cli");
+        assert_eq!(cb_cmd.0["methodId"], "oauth_cli");
+        assert!(
+            cb_cmd.0.get("code").is_none() || cb_cmd.0["code"].is_null(),
+            "automatic OAuth callback must not send a pasted authorization code: {:?}",
+            cb_cmd.0
+        );
+        assert_eq!(cb_cmd.1, Some(330_000));
+
+        // Completing the callback clears `last_auth_challenge` and refreshes provider catalog/status.
+        state.services.emitted_ws_commands.clear();
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-1".to_string(),
+            request_id: 11,
+            method: "cowork/provider/auth/callback".to_string(),
+            result: Ok(json!({
+                "event": {
+                    "type": "provider_auth_result",
+                    "provider": "codex-cli",
+                    "methodId": "oauth_cli",
+                    "ok": true,
+                    "mode": "oauth",
+                    "message": "Codex app-server ChatGPT sign-in completed."
+                }
+            })),
+        });
+        assert!(state.last_auth_challenge.is_none());
+        assert!(state.services.emitted_ws_commands.iter().any(|cmd| matches!(
+            cmd,
+            WsCommand::SendRequest { method, .. } if method == "cowork/provider/catalog/read"
+        )));
+
+        // Manual OAuth challenge must NOT auto-dispatch `cowork/provider/auth/callback`.
+        state.services.emitted_ws_commands.clear();
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-1".to_string(),
+            request_id: 12,
+            method: "cowork/provider/auth/authorize".to_string(),
+            result: Ok(json!({
+                "event": {
+                    "type": "provider_auth_challenge",
+                    "provider": "anthropic",
+                    "methodId": "oauth_code",
+                    "challenge": {
+                        "method": "code",
+                        "url": "https://example.com/oauth",
+                        "instructions": "Paste the authorization code."
+                    }
+                }
+            })),
+        });
+        assert!(
+            !state
+                .services
+                .emitted_ws_commands
+                .iter()
+                .any(|cmd| matches!(cmd, WsCommand::SendRequest { method, .. } if method == "cowork/provider/auth/callback")),
+            "manual code-based OAuth challenge must wait for pasted code"
+        );
     }
 }

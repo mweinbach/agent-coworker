@@ -1221,11 +1221,29 @@ fn build_expanded_provider_controls(
         let prov_oauth = prov.id.clone();
         let ws_cb = ws_id.to_owned();
         let prov_cb = prov.id.clone();
-        let method_id = methods
-            .iter()
-            .find(|m| m.to_ascii_lowercase().contains("oauth"))
-            .cloned()
-            .unwrap_or_else(|| "oauth".to_owned());
+        let oauth_spec = s
+            .provider_auth_method_specs
+            .get(&prov.id)
+            .and_then(|specs| specs.iter().find(|m| m.method_type == "oauth"));
+        let method_id = oauth_spec
+            .map(|m| m.id.clone())
+            .or_else(|| {
+                methods
+                    .iter()
+                    .find(|m| m.to_ascii_lowercase().contains("oauth"))
+                    .cloned()
+            })
+            .unwrap_or_else(|| {
+                if prov.id == "codex-cli" {
+                    "oauth_cli".to_owned()
+                } else {
+                    "oauth".to_owned()
+                }
+            });
+        let is_auto = oauth_spec
+            .and_then(|m| m.oauth_mode.as_deref())
+            .is_some_and(|mode| mode.eq_ignore_ascii_case("auto"))
+            || prov.id == "codex-cli";
         let code_empty = s.shell_ui.onboarding_oauth_code_edit.text.trim().is_empty();
 
         let mut oauth_col = col().w_full().gap(6.0);
@@ -1234,65 +1252,61 @@ fn build_expanded_provider_controls(
                 .pt(10.0)
                 .border_sides([1.0, 0.0, 0.0, 0.0], t.border_muted);
         }
+        let mut oauth_actions = row().w_full().gap(8.0).flex_wrap().center_y().child(
+            Button::new("Sign in")
+                .variant(if has_api {
+                    ButtonVariant::Outline
+                } else {
+                    ButtonVariant::Contrast
+                })
+                .control_size(ControlSize::Regular)
+                .on_press(move |s: &mut AppState| {
+                    s.dispatch(Action::Settings(SettingsAction::StartProviderAuth {
+                        workspace_id: ws_oauth.clone(),
+                        provider: prov_oauth.clone(),
+                    }));
+                })
+                .build(k),
+        );
+        if !is_auto {
+            oauth_actions = oauth_actions
+                .child(
+                    TextInput::new(&s.shell_ui.onboarding_oauth_code_edit)
+                        .label("OAuth authorization code")
+                        .placeholder("Paste code if prompted…")
+                        .width(Some(272.0))
+                        .on_edit(|s: &mut AppState| &mut s.shell_ui.onboarding_oauth_code_edit)
+                        .build(k),
+                )
+                .child(
+                    Button::new("Submit")
+                        .variant(ButtonVariant::Outline)
+                        .control_size(ControlSize::Regular)
+                        .disabled(code_empty)
+                        .on_press(move |s: &mut AppState| {
+                            let code = s.shell_ui.onboarding_oauth_code_edit.text.trim().to_owned();
+                            if !code.is_empty() {
+                                s.dispatch(Action::Settings(
+                                    SettingsAction::CompleteProviderAuthCallback {
+                                        workspace_id: ws_cb.clone(),
+                                        provider: prov_cb.clone(),
+                                        method_id: method_id.clone(),
+                                        callback_input: code,
+                                    },
+                                ));
+                                s.shell_ui.onboarding_oauth_code_edit = TextEdit::new("");
+                            }
+                        })
+                        .build(k),
+                );
+        }
         oauth_col = oauth_col
             .child(
                 text("Browser sign-in")
                     .font(k.ty.small_medium)
                     .color(t.text_muted),
             )
-            .child(
-                row()
-                    .w_full()
-                    .gap(8.0)
-                    .flex_wrap()
-                    .center_y()
-                    .child(
-                        Button::new("Sign in")
-                            .variant(if has_api {
-                                ButtonVariant::Outline
-                            } else {
-                                ButtonVariant::Contrast
-                            })
-                            .control_size(ControlSize::Regular)
-                            .on_press(move |s: &mut AppState| {
-                                s.dispatch(Action::Settings(SettingsAction::StartProviderAuth {
-                                    workspace_id: ws_oauth.clone(),
-                                    provider: prov_oauth.clone(),
-                                }));
-                            })
-                            .build(k),
-                    )
-                    .child(
-                        TextInput::new(&s.shell_ui.onboarding_oauth_code_edit)
-                            .label("OAuth authorization code")
-                            .placeholder("Paste code if prompted…")
-                            .width(Some(272.0))
-                            .on_edit(|s: &mut AppState| &mut s.shell_ui.onboarding_oauth_code_edit)
-                            .build(k),
-                    )
-                    .child(
-                        Button::new("Submit")
-                            .variant(ButtonVariant::Outline)
-                            .control_size(ControlSize::Regular)
-                            .disabled(code_empty)
-                            .on_press(move |s: &mut AppState| {
-                                let code =
-                                    s.shell_ui.onboarding_oauth_code_edit.text.trim().to_owned();
-                                if !code.is_empty() {
-                                    s.dispatch(Action::Settings(
-                                        SettingsAction::CompleteProviderAuthCallback {
-                                            workspace_id: ws_cb.clone(),
-                                            provider: prov_cb.clone(),
-                                            method_id: method_id.clone(),
-                                            callback_input: code,
-                                        },
-                                    ));
-                                    s.shell_ui.onboarding_oauth_code_edit = TextEdit::new("");
-                                }
-                            })
-                            .build(k),
-                    ),
-            );
+            .child(oauth_actions);
 
         if let Some(ch) = extract_challenge(s, &prov.id) {
             let inner = ch.get("challenge").unwrap_or(ch);

@@ -11,7 +11,7 @@ use rune_kit::{
 use serde_json::{Value, json};
 
 use crate::actions::{Action, NavAction, SettingsAction};
-use crate::state::{AppState, MemoryEntry, ScopedMemoryEntry, WorkspaceRecord};
+use crate::state::{AppState, ScopedMemoryEntry, WorkspaceRecord};
 use crate::theme::ThemeTokens;
 use crate::views::settings::icons;
 use crate::views::settings::primitives::{
@@ -1023,7 +1023,8 @@ fn build_advanced_memory_section(
                 .build(k),
         );
 
-    if s.advanced_memories.is_empty() {
+    let advanced_memories = s.advanced_memories_for_workspace(ws_id);
+    if advanced_memories.is_empty() {
         section = section.child(
             EmptyState::new("No memories yet")
                 .icon(&icons::BOT)
@@ -1031,7 +1032,7 @@ fn build_advanced_memory_section(
                 .build(k, t),
         );
     } else {
-        for entry in &s.advanced_memories {
+        for entry in advanced_memories {
             let slug = entry
                 .get("slug")
                 .and_then(Value::as_str)
@@ -1356,21 +1357,8 @@ fn build_advanced_memory_section(
     section.build(k, t)
 }
 
-fn scoped_memory_entries(s: &AppState) -> Vec<ScopedMemoryEntry> {
-    if !s.scoped_memories.is_empty() {
-        return s.scoped_memories.clone();
-    }
-    s.memory_entries
-        .iter()
-        .map(|entry: &MemoryEntry| ScopedMemoryEntry {
-            id: entry.key.clone(),
-            scope: "workspace".to_string(),
-            content: entry.content.clone(),
-            created_at: None,
-            updated_at: None,
-            updated_at_ms: entry.updated_at,
-        })
-        .collect()
+fn scoped_memory_entries(s: &AppState, ws_id: &str) -> Vec<ScopedMemoryEntry> {
+    s.scoped_memories_for_workspace(ws_id)
 }
 
 fn memory_scope_label(scope: &str) -> &'static str {
@@ -1395,7 +1383,7 @@ fn build_legacy_memory_section(
         .trim()
         .to_ascii_lowercase();
     let scope_filter = s.settings_ui.memory_scope_filter.as_str();
-    let entries = scoped_memory_entries(s);
+    let entries = scoped_memory_entries(s, ws_id);
     let mut filtered: Vec<ScopedMemoryEntry> = entries
         .into_iter()
         .filter(|entry| {

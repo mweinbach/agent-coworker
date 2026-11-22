@@ -227,6 +227,7 @@ pub fn open_create_editor(s: &mut AppState) {
     s.settings_ui.mcp_oauth_resource_edit = TextEdit::new("");
     s.settings_ui.mcp_oauth_mode = "auto".to_string();
     s.settings_ui.mcp_editor_error = None;
+    s.settings_ui.mcp_editor_saving = false;
     s.settings_ui.mcp_editor_advanced_open = false;
 }
 
@@ -259,15 +260,18 @@ fn open_edit_editor(s: &mut AppState, summary: &McpServerSummary) {
     s.settings_ui.mcp_oauth_resource_edit = TextEdit::new(extras.oauth_resource);
     s.settings_ui.mcp_oauth_mode = extras.oauth_mode;
     s.settings_ui.mcp_editor_error = None;
+    s.settings_ui.mcp_editor_saving = false;
     s.settings_ui.mcp_editor_advanced_open = false;
 }
 
 fn close_editor(s: &mut AppState) {
     s.settings_ui.mcp_editor_open = false;
+    s.settings_ui.mcp_editor_saving = false;
     s.settings_ui.mcp_editing_name = None;
     s.settings_ui.mcp_editing_source = None;
     s.settings_ui.mcp_editing_base_config = None;
     s.settings_ui.mcp_editor_error = None;
+    s.pending_mcp_upsert_rpc = None;
 }
 
 /// Renders the Custom connectors (MCP servers) tab view inside `ToolAccess`.
@@ -1220,14 +1224,18 @@ fn append_editor_dialog(
                 })
                 .build(k),
         )
-        .child(
-            Button::new(if is_edit {
+        .child({
+            let mcp_saving = s.settings_ui.mcp_editor_saving;
+            Button::new(if mcp_saving {
+                "Saving..."
+            } else if is_edit {
                 "Save connector"
             } else {
                 "Add connector"
             })
             .variant(ButtonVariant::Contrast)
             .control_size(ControlSize::Regular)
+            .disabled(mcp_saving)
             .on_press(move |s: &mut AppState| {
                 let draft = McpDraftInput {
                     name: s.settings_ui.mcp_name_edit.text.clone(),
@@ -1268,6 +1276,8 @@ fn append_editor_dialog(
                             .mcp_editing_name
                             .clone()
                             .filter(|prev| prev != &name);
+                        // Keep editor open and draft intact until `cowork/mcp/server/upsert`
+                        // succeeds so connection drops or write errors remain retryable.
                         s.dispatch(Action::Settings(SettingsAction::UpsertScopedMcpServer {
                             workspace_id: ws_save.clone(),
                             name,
@@ -1275,15 +1285,14 @@ fn append_editor_dialog(
                             previous_name,
                             server: config,
                         }));
-                        close_editor(s);
                     }
                     Err(err) => {
                         s.settings_ui.mcp_editor_error = Some(err.message);
                     }
                 }
             })
-            .build(k),
-        );
+            .build(k)
+        });
 
     let body = col()
         .w_full()

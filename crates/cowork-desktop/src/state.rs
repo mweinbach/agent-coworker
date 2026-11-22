@@ -1875,6 +1875,7 @@ pub struct AppState {
     pub(crate) pending_task_feedback_rpcs: HashMap<u64, (String, String)>,
     pub(crate) pending_task_create_rpc: Option<(u64, String)>,
     pub(crate) pending_agent_profile_upsert_rpc: Option<(u64, String)>,
+    pub(crate) pending_mcp_upsert_rpc: Option<(u64, String)>,
     pub(crate) active_file_preview_request_id: Option<String>,
     pub(crate) pending_hydrate_threads_by_rpc_id: HashMap<u64, String>,
     pub(crate) pending_resume_threads_by_rpc_id: HashMap<u64, String>,
@@ -2030,6 +2031,7 @@ impl Default for AppState {
             pending_task_feedback_rpcs: HashMap::new(),
             pending_task_create_rpc: None,
             pending_agent_profile_upsert_rpc: None,
+            pending_mcp_upsert_rpc: None,
             active_file_preview_request_id: None,
             pending_hydrate_threads_by_rpc_id: HashMap::new(),
             pending_resume_threads_by_rpc_id: HashMap::new(),
@@ -2247,6 +2249,7 @@ impl AppState {
         let id = format!("oneoff-{}", uuid::Uuid::new_v4());
         let path = chats_root.join(&id).to_string_lossy().into_owned();
         let now = self.wall_clock_ms();
+        let had_defaults_source = self.resolve_workspace_defaults_source().is_some();
         let ws = self.build_workspace_record_with_defaults(
             id.clone(),
             "Quick chat".to_string(),
@@ -2255,8 +2258,14 @@ impl AppState {
             true,
         );
         let yolo = ws.yolo;
+        let inherited_defaults = had_defaults_source
+            .then(|| build_inherited_defaults_apply_params(&ws))
+            .flatten();
         self.workspaces.push(ws);
         self.workspace_order.push(id.clone());
+        if let Some(params) = inherited_defaults {
+            self.enqueue_pending_workspace_defaults(&id, params);
+        }
         self.persist_state();
         self.send_native(NativeCommand::StartWorkspaceServer {
             workspace_id: id.clone(),
@@ -3955,20 +3964,30 @@ impl AppState {
             return;
         };
 
-        if let Some((preview_ws, preview_path, has_pres)) =
+        if let Some((preview_ws, preview_path, is_pres)) =
             self.active_file_preview.as_ref().map(|p| {
                 (
                     p.workspace_id.clone(),
                     p.path.clone(),
-                    p.presentation.is_some(),
+                    p.presentation.is_some() || is_presentation_preview_path(&p.path),
                 )
             })
-            && has_pres
             && preview_ws == workspace_id
             && self.workspace_paths_match(workspace_id, changed_path, &preview_path)
             && let Some(root) = self.workspace_path(workspace_id)
         {
-            self.request_presentation_preview(workspace_id.to_string(), root, preview_path);
+            if is_pres {
+                self.request_presentation_preview(workspace_id.to_string(), root, preview_path);
+            } else {
+                let request_id = self.next_tag("preview");
+                self.active_file_preview_request_id = Some(request_id.clone());
+                self.send_native(NativeCommand::ReadFilePreview {
+                    request_id,
+                    workspace_id: workspace_id.to_string(),
+                    workspace_root: root,
+                    path: preview_path,
+                });
+            }
         }
 
         let Some(doc) = self.canvas_document.as_ref() else {
@@ -5157,6 +5176,17 @@ impl AppState {
                         self.settings_ui.subagent_saving = false;
                         self.settings_ui.subagent_save_error = Some(
                             "Connection dropped while saving subagent; please retry.".to_string(),
+                        );
+                    }
+                    if self
+                        .pending_mcp_upsert_rpc
+                        .as_ref()
+                        .is_some_and(|(_, ws_id)| ws_id == &workspace_id)
+                    {
+                        self.pending_mcp_upsert_rpc = None;
+                        self.settings_ui.mcp_editor_saving = false;
+                        self.settings_ui.mcp_editor_error = Some(
+                            "Connection dropped while saving connector; please retry.".to_string(),
                         );
                     }
                     self.pending_task_questions_rpcs
@@ -6915,10 +6945,23 @@ impl AppState {
             ChatAction::ArchiveThread(thread_id) => {
                 let mut changed = false;
                 let now = self.wall_clock_ms();
+                let mut archived_entry: Option<ArchivedThreadSummary> = None;
                 if let Some(t) = self.threads.iter_mut().find(|t| t.id == thread_id) {
                     t.archived = true;
                     t.archived_at = Some(now);
                     changed = !t.draft;
+                    if !t.draft {
+                        archived_entry = Some(ArchivedThreadSummary {
+                            id: t.id.clone(),
+                            workspace_id: t.workspace_id.clone(),
+                            title: t.title.clone(),
+                            archived_at: now,
+                        });
+                    }
+                }
+                if let Some(entry) = archived_entry {
+                    self.archived_threads.retain(|t| t.id != entry.id);
+                    self.archived_threads.insert(0, entry);
                 }
                 if let Some(ws_id) = self.workspace_for_thread(&thread_id) {
                     let params = ThreadArchivedSetParams {
@@ -8913,12 +8956,15 @@ impl AppState {
                 if let Some(prev) = previous_name {
                     body.insert("previousName".to_string(), Value::String(prev));
                 }
-                let _ = self.send_ws_request(
+                let req_id = self.send_ws_request(
                     &workspace_id,
                     "cowork/mcp/server/upsert",
                     Value::Object(body),
                     false,
                 );
+                self.pending_mcp_upsert_rpc = Some((req_id, workspace_id));
+                self.settings_ui.mcp_editor_saving = true;
+                self.settings_ui.mcp_editor_error = None;
             }
             SettingsAction::DeleteMcpServer { workspace_id, name } => {
                 let cwd = self.workspace_path(&workspace_id);
@@ -8965,12 +9011,15 @@ impl AppState {
                 if let Some(prev) = previous_name.filter(|s| !s.trim().is_empty()) {
                     body.insert("previousName".to_string(), Value::String(prev));
                 }
-                let _ = self.send_ws_request(
+                let req_id = self.send_ws_request(
                     &workspace_id,
                     "cowork/mcp/server/upsert",
                     Value::Object(body),
                     false,
                 );
+                self.pending_mcp_upsert_rpc = Some((req_id, workspace_id));
+                self.settings_ui.mcp_editor_saving = true;
+                self.settings_ui.mcp_editor_error = None;
             }
             SettingsAction::DeleteScopedMcpServer {
                 workspace_id,
@@ -9939,6 +9988,7 @@ impl AppState {
                 });
                 let id = uuid::Uuid::new_v4().to_string();
                 let now = self.wall_clock_ms();
+                let had_defaults_source = self.resolve_workspace_defaults_source().is_some();
                 let ws = self.build_workspace_record_with_defaults(
                     id.clone(),
                     resolved_name,
@@ -9947,11 +9997,17 @@ impl AppState {
                     false,
                 );
                 let yolo = ws.yolo;
+                let inherited_defaults = had_defaults_source
+                    .then(|| build_inherited_defaults_apply_params(&ws))
+                    .flatten();
                 self.pending_removed_workspace_ids.remove(&id);
                 self.workspace_mutation_seq = self.workspace_mutation_seq.wrapping_add(1);
                 self.workspaces.push(ws);
                 self.workspace_order.push(id.clone());
                 self.active_workspace_id = Some(id.clone());
+                if let Some(params) = inherited_defaults {
+                    self.enqueue_pending_workspace_defaults(&id, params);
+                }
                 self.sync_active_workspace_mcp_servers();
                 self.sync_active_workspace_plugins();
                 self.sync_active_workspace_skills();
@@ -10158,6 +10214,15 @@ impl AppState {
                     self.pending_agent_profile_upsert_rpc = None;
                     self.settings_ui.subagent_saving = false;
                     self.settings_ui.subagent_save_error = None;
+                }
+                if self
+                    .pending_mcp_upsert_rpc
+                    .as_ref()
+                    .is_some_and(|(_, ws_id)| ws_id == &workspace_id)
+                {
+                    self.pending_mcp_upsert_rpc = None;
+                    self.settings_ui.mcp_editor_saving = false;
+                    self.settings_ui.mcp_editor_error = None;
                 }
                 self.sync_active_workspace_mcp_servers();
                 self.sync_active_workspace_plugins();
@@ -12223,6 +12288,72 @@ impl AppState {
             | "cowork/mcp/server/setEnabled" => {
                 let evt = payload.get("event").unwrap_or(&payload);
                 self.update_mcp_servers_from_event(workspace_id, evt);
+                if method == "cowork/mcp/server/upsert"
+                    && self
+                        .pending_mcp_upsert_rpc
+                        .as_ref()
+                        .is_none_or(|(id, _)| *id == request_id)
+                {
+                    self.pending_mcp_upsert_rpc = None;
+                    self.settings_ui.mcp_editor_open = false;
+                    self.settings_ui.mcp_editor_saving = false;
+                    self.settings_ui.mcp_editing_name = None;
+                    self.settings_ui.mcp_editing_source = None;
+                    self.settings_ui.mcp_editing_base_config = None;
+                    self.settings_ui.mcp_editor_error = None;
+                }
+            }
+            "thread/archived/set" => {
+                if let Some(thread_val) = payload.get("thread")
+                    && let Some(tid) = thread_val.get("id").and_then(Value::as_str)
+                {
+                    let archived = thread_val
+                        .get("archived")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false);
+                    let archived_at = thread_val
+                        .get("archivedAt")
+                        .and_then(Value::as_i64)
+                        .or_else(|| {
+                            thread_val
+                                .get("archivedAt")
+                                .and_then(Value::as_str)
+                                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                                .map(|dt| dt.timestamp_millis())
+                        })
+                        .unwrap_or_else(|| self.wall_clock_ms());
+                    let title = thread_val
+                        .get("title")
+                        .or_else(|| thread_val.get("name"))
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                        .or_else(|| {
+                            self.threads
+                                .iter()
+                                .find(|t| t.id == tid)
+                                .map(|t| t.title.clone())
+                        })
+                        .unwrap_or_default();
+                    if let Some(t) = self.threads.iter_mut().find(|t| t.id == tid) {
+                        t.archived = archived;
+                        t.archived_at = archived.then_some(archived_at);
+                    }
+                    self.archived_threads.retain(|t| t.id != tid);
+                    if archived {
+                        self.archived_threads.insert(
+                            0,
+                            ArchivedThreadSummary {
+                                id: tid.to_string(),
+                                workspace_id: workspace_id.to_string(),
+                                title,
+                                archived_at,
+                            },
+                        );
+                    }
+                    if !self.scene_mode {
+                        self.persist_state();
+                    }
+                }
             }
             "cowork/mcp/server/validate" => {
                 let evt = payload.get("event").unwrap_or(&payload);
@@ -12714,6 +12845,16 @@ impl AppState {
             self.pending_agent_profile_upsert_rpc = None;
             self.settings_ui.subagent_saving = false;
             self.settings_ui.subagent_save_error = Some(err.message.clone());
+        }
+        if method == "cowork/mcp/server/upsert"
+            && self
+                .pending_mcp_upsert_rpc
+                .as_ref()
+                .is_some_and(|(id, _)| *id == request_id)
+        {
+            self.pending_mcp_upsert_rpc = None;
+            self.settings_ui.mcp_editor_saving = false;
+            self.settings_ui.mcp_editor_error = Some(err.message.clone());
         }
         if matches!(
             method,
@@ -17215,6 +17356,101 @@ fn build_reasoning_effort_config_patch(provider: &str, effort: &str) -> Map<Stri
         }),
     );
     config
+}
+
+fn build_inherited_defaults_apply_params(
+    ws: &WorkspaceRecord,
+) -> Option<SessionDefaultsApplyParams> {
+    let mut raw = ws.defaults.as_object().cloned().unwrap_or_default();
+    for top in [
+        "defaultProvider",
+        "provider",
+        "defaultModel",
+        "model",
+        "defaultEnableMcp",
+        "enableMcp",
+        "yolo",
+    ] {
+        raw.remove(top);
+    }
+    raw.retain(|_, v| !v.is_null());
+    if let Some(ref v) = ws.default_preferred_child_model {
+        raw.entry("defaultPreferredChildModel".to_string())
+            .or_insert_with(|| json!(v));
+    }
+    if let Some(ref v) = ws.default_child_model_routing_mode {
+        raw.entry("defaultChildModelRoutingMode".to_string())
+            .or_insert_with(|| json!(v));
+    }
+    if let Some(ref v) = ws.default_preferred_child_model_ref {
+        raw.entry("defaultPreferredChildModelRef".to_string())
+            .or_insert_with(|| json!(v));
+    }
+    if !ws.default_allowed_child_model_refs.is_empty() {
+        raw.entry("defaultAllowedChildModelRefs".to_string())
+            .or_insert_with(|| json!(ws.default_allowed_child_model_refs));
+    }
+    raw.entry("defaultBackupsEnabled".to_string())
+        .or_insert_with(|| json!(ws.default_backups_enabled));
+    if let Some(ref v) = ws.user_name {
+        raw.entry("userName".to_string())
+            .or_insert_with(|| json!(v));
+    }
+    if let Some(ref v) = ws.user_profile
+        && !v.is_null()
+    {
+        raw.entry("userProfile".to_string())
+            .or_insert_with(|| v.clone());
+    }
+    if let Some(ref v) = ws.provider_options
+        && !v.is_null()
+    {
+        raw.entry("providerOptions".to_string())
+            .or_insert_with(|| v.clone());
+    }
+    let mut config_map = build_session_defaults_config_map(&raw);
+    if let Some(po_val) = config_map.get_mut("providerOptions") {
+        if let Some(po_obj) = po_val.as_object_mut() {
+            cowork_config::strip_provider_option_endpoints(po_obj);
+            if po_obj.is_empty() {
+                config_map.remove("providerOptions");
+            }
+        } else {
+            config_map.remove("providerOptions");
+        }
+    }
+    if let Some(tc_val) = config_map.get_mut("toolCalling") {
+        if let Some(tc_obj) = tc_val.as_object_mut() {
+            tc_obj.retain(|_, v| !v.is_null());
+            if tc_obj.is_empty() {
+                config_map.remove("toolCalling");
+            }
+        } else {
+            config_map.remove("toolCalling");
+        }
+    }
+    let (provider, model) = match (
+        ws.default_provider
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty()),
+        ws.default_model
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty()),
+    ) {
+        (Some(p), Some(m)) => (Some(p.to_string()), Some(m.to_string())),
+        _ => (None, None),
+    };
+    let config = (!config_map.is_empty()).then_some(config_map);
+    Some(SessionDefaultsApplyParams {
+        cwd: Some(ws.path.clone()),
+        thread_id: None,
+        provider,
+        model,
+        enable_mcp: Some(ws.default_enable_mcp),
+        config,
+    })
 }
 
 fn build_session_defaults_config_map(raw: &Map<String, Value>) -> Map<String, Value> {
@@ -30562,5 +30798,280 @@ mod tests {
         assert!(!state.settings_ui.subagent_saving);
         assert!(state.settings_ui.subagent_editing_id.is_none());
         assert!(state.settings_ui.subagent_save_error.is_none());
+    }
+
+    #[test]
+    fn add_workspace_queues_inherited_defaults_for_apply_on_initialize() {
+        let mut state = AppState::default();
+        let mut existing = WorkspaceRecord::new("ws-base", "Base", "/tmp/base", 1);
+        existing.default_enable_mcp = false;
+        existing.default_provider = Some("openai".to_string());
+        existing.default_model = Some("gpt-5.4".to_string());
+        existing.default_child_model_routing_mode = Some("cross-provider-allowlist".to_string());
+        existing.provider_options = Some(json!({
+            "openai": {
+                "baseURL": "https://example.invalid/v1",
+                "reasoningEffort": "high"
+            }
+        }));
+        existing.defaults = json!({
+            "defaultToolCalling": { "codeMode": true }
+        });
+        state.workspaces.push(existing);
+        state.active_workspace_id = Some("ws-base".to_string());
+
+        state.dispatch(Action::Native(NativeAction::AddWorkspace {
+            path: std::path::PathBuf::from("/tmp/new-proj"),
+            name: Some("New Project".to_string()),
+        }));
+        let new_id = state
+            .active_workspace_id
+            .clone()
+            .expect("new workspace active");
+        assert_ne!(new_id, "ws-base");
+        assert!(
+            state
+                .pending_defaults_apply_by_workspace
+                .contains_key(&new_id),
+            "AddWorkspace must enqueue inherited defaults before server initialization"
+        );
+
+        state.services.emitted_ws_commands.clear();
+        state.apply_store_event(StoreEvent::WsStateChanged {
+            workspace_id: new_id.clone(),
+            state: WsConnectionState::Connected,
+        });
+        let init_res: InitializeResult = serde_json::from_value(json!({
+            "protocolVersion": "1",
+            "serverInfo": { "name": "cowork-server" },
+            "capabilities": { "experimentalApi": true },
+            "transport": { "type": "websocket", "protocolMode": "jsonrpc-lite" }
+        }))
+        .unwrap();
+        state.apply_store_event(StoreEvent::WsInitialized {
+            workspace_id: new_id.clone(),
+            result: Box::new(init_res),
+        });
+        let applied = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .find_map(|cmd| match cmd {
+                WsCommand::SendRequest {
+                    workspace_id,
+                    method,
+                    params,
+                    ..
+                } if workspace_id == &new_id && method == "cowork/session/defaults/apply" => {
+                    Some(params.clone())
+                }
+                _ => None,
+            })
+            .expect("expected cowork/session/defaults/apply flushed on initialize");
+        assert_eq!(applied["enableMcp"], json!(false));
+        assert_eq!(applied["provider"], json!("openai"));
+        assert_eq!(applied["model"], json!("gpt-5.4"));
+        assert_eq!(
+            applied["config"]["childModelRoutingMode"],
+            json!("cross-provider-allowlist")
+        );
+        assert_eq!(applied["config"]["toolCalling"]["codeMode"], json!(true));
+        assert_eq!(
+            applied["config"]["providerOptions"]["openai"]["reasoningEffort"],
+            json!("high")
+        );
+        assert!(
+            applied["config"]["providerOptions"]["openai"]
+                .get("baseURL")
+                .is_none(),
+            "inherited providerOptions must strip endpoint overrides before defaults apply"
+        );
+    }
+
+    #[test]
+    fn mcp_upsert_retains_draft_on_failure_and_closes_on_success() {
+        let mut state = AppState::default();
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-1", "Alpha", "/tmp/a", 1));
+        state.settings_ui.mcp_editor_open = true;
+        state.settings_ui.mcp_editing_name = Some("docs".to_string());
+        state.settings_ui.mcp_editing_source = Some("user".to_string());
+        state.settings_ui.mcp_editing_base_config = Some(json!({ "extra": 1 }));
+        state.settings_ui.mcp_url_edit = TextEdit::new("https://mcp.example.com");
+
+        state.dispatch(Action::Settings(SettingsAction::UpsertScopedMcpServer {
+            workspace_id: "ws-1".to_string(),
+            name: "docs".to_string(),
+            source: "user".to_string(),
+            previous_name: None,
+            server: json!({
+                "enabled": true,
+                "transport": { "type": "http", "url": "https://mcp.example.com" }
+            }),
+        }));
+        let req_1 = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .rev()
+            .find_map(|cmd| match cmd {
+                WsCommand::SendRequest {
+                    request_id, method, ..
+                } if method == "cowork/mcp/server/upsert" => Some(*request_id),
+                _ => None,
+            })
+            .expect("expected cowork/mcp/server/upsert request");
+        assert!(state.settings_ui.mcp_editor_open);
+        assert!(state.settings_ui.mcp_editor_saving);
+
+        state.apply_ws_response(
+            "ws-1",
+            req_1,
+            "cowork/mcp/server/upsert",
+            Err(WsRpcError {
+                code: -32000,
+                message: "Permission denied writing mcp config".to_string(),
+                data: None,
+            }),
+        );
+        assert!(state.settings_ui.mcp_editor_open);
+        assert!(!state.settings_ui.mcp_editor_saving);
+        assert_eq!(state.settings_ui.mcp_editing_name.as_deref(), Some("docs"));
+        assert!(state.settings_ui.mcp_editing_base_config.is_some());
+        assert_eq!(
+            state.settings_ui.mcp_url_edit.text,
+            "https://mcp.example.com"
+        );
+        assert_eq!(
+            state.settings_ui.mcp_editor_error.as_deref(),
+            Some("Permission denied writing mcp config")
+        );
+
+        // Retry succeeds -> closes editor and resets draft metadata.
+        state.dispatch(Action::Settings(SettingsAction::UpsertScopedMcpServer {
+            workspace_id: "ws-1".to_string(),
+            name: "docs".to_string(),
+            source: "user".to_string(),
+            previous_name: None,
+            server: json!({
+                "enabled": true,
+                "transport": { "type": "http", "url": "https://mcp.example.com" }
+            }),
+        }));
+        let req_2 = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .rev()
+            .find_map(|cmd| match cmd {
+                WsCommand::SendRequest {
+                    request_id, method, ..
+                } if method == "cowork/mcp/server/upsert" => Some(*request_id),
+                _ => None,
+            })
+            .expect("expected retry cowork/mcp/server/upsert request");
+        state.apply_ws_response(
+            "ws-1",
+            req_2,
+            "cowork/mcp/server/upsert",
+            Ok(json!({ "event": { "servers": [] } })),
+        );
+        assert!(!state.settings_ui.mcp_editor_open);
+        assert!(!state.settings_ui.mcp_editor_saving);
+        assert!(state.settings_ui.mcp_editing_name.is_none());
+        assert!(state.settings_ui.mcp_editing_base_config.is_none());
+        assert!(state.settings_ui.mcp_editor_error.is_none());
+    }
+
+    #[test]
+    fn workspace_file_changed_refreshes_non_presentation_file_preview() {
+        let mut state = AppState::default();
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-1", "Alpha", "/tmp/repo", 1));
+        state.active_file_preview = Some(FilePreviewState {
+            workspace_id: "ws-1".to_string(),
+            path: "/tmp/repo/report.csv".to_string(),
+            title: "report.csv".to_string(),
+            content: Some("a,b\n1,2\n".to_string()),
+            is_binary: false,
+            is_markdown: false,
+            truncated: false,
+            error: None,
+            spreadsheet: None,
+            presentation: None,
+        });
+        state.services.emitted_native_commands.clear();
+
+        state.apply_ws_notification(
+            "ws-1",
+            "cowork/workspace/fileChanged",
+            json!({ "path": "report.csv", "kind": "changed" }),
+        );
+        assert!(
+            state
+                .services
+                .emitted_native_commands
+                .iter()
+                .any(|cmd| matches!(
+                    cmd,
+                    NativeCommand::ReadFilePreview { workspace_id, path, .. }
+                        if workspace_id == "ws-1" && path == "/tmp/repo/report.csv"
+                )),
+            "ordinary file previews must reload on cowork/workspace/fileChanged"
+        );
+    }
+
+    #[test]
+    fn archive_thread_updates_archived_chats_list_immediately_and_reconciles_response() {
+        let mut state = AppState::default();
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-1", "Alpha", "/tmp/repo", 1));
+        state.threads.push(ThreadRecord {
+            id: "th-arch".to_string(),
+            workspace_id: "ws-1".to_string(),
+            title: "Design review".to_string(),
+            ..ThreadRecord::default()
+        });
+
+        state.dispatch(Action::Chat(ChatAction::ArchiveThread(
+            "th-arch".to_string(),
+        )));
+        assert_eq!(state.archived_threads.len(), 1);
+        assert_eq!(state.archived_threads[0].id, "th-arch");
+        assert_eq!(state.archived_threads[0].title, "Design review");
+
+        // Server `thread/archived/set` response reconciles authoritative archivedAt & unarchive.
+        state.apply_ws_response(
+            "ws-1",
+            42,
+            "thread/archived/set",
+            Ok(json!({
+                "thread": {
+                    "id": "th-arch",
+                    "title": "Design review",
+                    "archived": true,
+                    "archivedAt": 1_770_000_000_000_i64
+                }
+            })),
+        );
+        assert_eq!(state.archived_threads.len(), 1);
+        assert_eq!(state.archived_threads[0].archived_at, 1_770_000_000_000_i64);
+
+        state.apply_ws_response(
+            "ws-1",
+            43,
+            "thread/archived/set",
+            Ok(json!({
+                "thread": {
+                    "id": "th-arch",
+                    "title": "Design review",
+                    "archived": false
+                }
+            })),
+        );
+        assert!(state.archived_threads.is_empty());
     }
 }

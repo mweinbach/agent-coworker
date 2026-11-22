@@ -4,7 +4,11 @@
 //! `chatLogic.ts`, `composerMentions.ts`, `feedMessageParsing.ts`, `feedWindow.ts`,
 //! `toolCards/toolCardFormatting.ts`) and `src/shared/toolCardFormatting.ts`.
 
+use std::cell::RefCell;
+use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
+use std::rc::Rc;
 
 use base64::Engine;
 use chrono::{DateTime, Datelike, Local, TimeZone};
@@ -13,7 +17,7 @@ use rune_kit::diff::{self, FileDiff};
 use serde_json::Value;
 
 use crate::state::{
-    FeedItem, FeedMessageRole, PendingSteerState, PluginSummary, ReasoningEffortValue,
+    AppState, FeedItem, FeedMessageRole, PendingSteerState, PluginSummary, ReasoningEffortValue,
     SkillSummary, ThreadAgentSummary, ToolRunStatus, WorkspaceRuntime,
 };
 
@@ -248,7 +252,7 @@ fn item_timestamp_ms(item: &FeedItem) -> i64 {
     }
 }
 
-fn item_is_streaming(item: &FeedItem) -> bool {
+pub(super) fn item_is_streaming(item: &FeedItem) -> bool {
     match item {
         FeedItem::Message { streaming, .. } | FeedItem::Reasoning { streaming, .. } => *streaming,
         FeedItem::Tool {
@@ -342,37 +346,20 @@ pub fn build_chat_render_items<'a>(
         turn_start = turn_end;
     }
 
-    // Live ownership: only the latest top-level item can be live when the thread is busy.
+    // Live ownership: keep the trailing ActivityGroup live for the duration of an active turn
+    // so inter-tool thinking gaps do not collapse/remount the card or flicker the placeholder.
     if let Some(last) = raw_groups.last_mut() {
         match last {
             ChatRenderItem::ActivityGroup(group) => {
-                apply_last_group_flags(group, thread_busy);
+                group.is_live = thread_busy;
+                let has_failures = group.error_count > 0;
+                group.is_retryable = !thread_busy && has_failures && !group.has_pending_approval;
             }
             ChatRenderItem::Row(_) => {}
         }
     }
 
     raw_groups
-}
-
-fn apply_last_group_flags(group: &mut ActivityGroup<'_>, thread_busy: bool) {
-    group.is_live = thread_busy && group.items.iter().any(|it| item_is_streaming(it));
-    let has_failures = group.error_count > 0;
-    group.is_retryable = !thread_busy && has_failures && !group.has_pending_approval;
-}
-
-/// Builds a single `ActivityGroup` directly from its member `FeedItem`s without re-scanning
-/// the full feed. Produces identical fields to `build_chat_render_items`.
-pub(super) fn build_activity_group_for_window<'a>(
-    items: Vec<&'a FeedItem>,
-    is_last_render_item: bool,
-    thread_busy: bool,
-) -> ActivityGroup<'a> {
-    let mut group = build_activity_group(items);
-    if is_last_render_item {
-        apply_last_group_flags(&mut group, thread_busy);
-    }
-    group
 }
 
 fn build_activity_group<'a>(items: Vec<&'a FeedItem>) -> ActivityGroup<'a> {
@@ -391,7 +378,7 @@ fn build_activity_group<'a>(items: Vec<&'a FeedItem>) -> ActivityGroup<'a> {
     let mut has_reasoning = false;
     let mut error_count = 0usize;
     let mut nodes: Vec<ActivityNode<'a>> = Vec::new();
-    let mut last_tool_label: Option<String> = None;
+    let mut last_tool: Option<(&str, &Value, ToolRunStatus)> = None;
     let mut cluster_idx = 0usize;
 
     let mut idx = 0usize;
@@ -409,60 +396,36 @@ fn build_activity_group<'a>(items: Vec<&'a FeedItem>) -> ActivityGroup<'a> {
             FeedItem::Tool {
                 tool_name,
                 input,
-                output,
-                error,
                 status,
                 ..
             } => {
-                let formatted =
-                    format_tool_card(tool_name, input, output.as_ref(), error.as_deref(), *status);
-                let title = formatted.title.clone();
+                let title = humanize_tool_name(tool_name);
+                let first_raw_name = tool_name.as_str();
                 let mut cluster = vec![items[idx]];
                 tool_count += 1;
                 if matches!(status, ToolRunStatus::Failed | ToolRunStatus::Declined) {
                     error_count += 1;
                 }
-                last_tool_label = Some(if formatted.subtitle.is_empty() {
-                    title.clone()
-                } else {
-                    format!("{title} · {}", formatted.subtitle)
-                });
+                last_tool = Some((first_raw_name, input, *status));
                 idx += 1;
 
                 while idx < items.len() {
                     if let FeedItem::Tool {
                         tool_name: next_name,
                         input: next_input,
-                        output: next_output,
-                        error: next_error,
                         status: next_status,
                         ..
                     } = items[idx]
+                        && (next_name == first_raw_name || humanize_tool_name(next_name) == title)
                     {
-                        let next_fmt = format_tool_card(
-                            next_name,
-                            next_input,
-                            next_output.as_ref(),
-                            next_error.as_deref(),
-                            *next_status,
-                        );
-                        if next_fmt.title == title {
-                            tool_count += 1;
-                            if matches!(
-                                next_status,
-                                ToolRunStatus::Failed | ToolRunStatus::Declined
-                            ) {
-                                error_count += 1;
-                            }
-                            last_tool_label = Some(if next_fmt.subtitle.is_empty() {
-                                next_fmt.title
-                            } else {
-                                format!("{} · {}", next_fmt.title, next_fmt.subtitle)
-                            });
-                            cluster.push(items[idx]);
-                            idx += 1;
-                            continue;
+                        tool_count += 1;
+                        if matches!(next_status, ToolRunStatus::Failed | ToolRunStatus::Declined) {
+                            error_count += 1;
                         }
+                        last_tool = Some((next_name.as_str(), next_input, *next_status));
+                        cluster.push(items[idx]);
+                        idx += 1;
+                        continue;
                     }
                     break;
                 }
@@ -480,8 +443,13 @@ fn build_activity_group<'a>(items: Vec<&'a FeedItem>) -> ActivityGroup<'a> {
         }
     }
 
-    let current_action = if let Some(label) = last_tool_label {
-        label
+    let current_action = if let Some((tool_name, input, status)) = last_tool {
+        let (title, subtitle) = format_tool_summary(tool_name, input, status);
+        if subtitle.is_empty() {
+            title
+        } else {
+            format!("{title} · {subtitle}")
+        }
     } else if has_reasoning {
         "Thinking…".to_string()
     } else {
@@ -791,6 +759,88 @@ fn value_as_string(v: &Value) -> String {
         Value::Number(n) => n.to_string(),
         _ => v.to_string(),
     }
+}
+
+/// Computes `(title, subtitle)` for a tool call without allocating its detail rows.
+pub(super) fn format_tool_summary(
+    tool_name: &str,
+    input: &Value,
+    status: ToolRunStatus,
+) -> (String, String) {
+    let lower = tool_name.to_ascii_lowercase();
+    let title = humanize_tool_name(tool_name);
+    let subtitle = match lower.as_str() {
+        "bash" | "commandexecution" | "command_execution" => {
+            let cmd = json_str(input, &["command", "cmd", "script"]).unwrap_or("");
+            let desc = json_str(input, &["description"]);
+            desc.map(|d| truncate_text(d, 72))
+                .unwrap_or_else(|| truncate_text(cmd, 64))
+        }
+        "read" | "read_file" | "readfile" | "write" | "write_file" | "writefile" | "edit"
+        | "edit_file" | "editfile" => {
+            let path = json_str(input, &["file_path", "path", "filePath"]).unwrap_or("");
+            middle_truncate_path(path, 52)
+        }
+        "websearch" | "web_search" | "nativewebsearch" => {
+            let query = json_str(input, &["query", "q"]).unwrap_or("");
+            if !query.is_empty() {
+                format!("Searching for: {}", truncate_text(query, 80))
+            } else {
+                "Searching the web".to_string()
+            }
+        }
+        "webfetch" | "web_fetch" => {
+            let url = json_str(input, &["url"]).unwrap_or("");
+            if !url.is_empty() {
+                format!("Fetching: {}", truncate_text(url, 80))
+            } else {
+                String::new()
+            }
+        }
+        "grep" | "glob" | "find" => {
+            let pattern = json_str(input, &["pattern", "query"]).unwrap_or("");
+            truncate_text(pattern, 64)
+        }
+        "todowrite" | "todo_write" => {
+            let count = json_val(input, &["todos", "items"])
+                .and_then(Value::as_array)
+                .map_or(0, Vec::len);
+            if count > 0 {
+                format!(
+                    "{count} checklist item{}",
+                    if count == 1 { "" } else { "s" }
+                )
+            } else {
+                "Updated checklist".to_string()
+            }
+        }
+        "spawnagent" | "spawn_agent" => {
+            let target = json_str(input, &["nickname", "title", "role", "agent"])
+                .or_else(|| json_str(input, &["task", "prompt"]));
+            target.map(|t| truncate_text(t, 64)).unwrap_or_default()
+        }
+        "waitforagent" | "wait_for_agent" => json_str(input, &["agentId", "id", "target"])
+            .map(|t| truncate_text(t, 56))
+            .unwrap_or_default(),
+        _ => json_str(
+            input,
+            &["path", "file_path", "url", "query", "command", "question"],
+        )
+        .map(|t| truncate_text(t, 64))
+        .unwrap_or_default(),
+    };
+    let final_subtitle = if !subtitle.is_empty() {
+        subtitle
+    } else {
+        match status {
+            ToolRunStatus::Pending => "Preparing…".to_string(),
+            ToolRunStatus::Running => "Running…".to_string(),
+            ToolRunStatus::Completed => "Completed".to_string(),
+            ToolRunStatus::Failed => "Finished with an issue".to_string(),
+            ToolRunStatus::Declined => "Denied".to_string(),
+        }
+    };
+    (title, final_subtitle)
 }
 
 /// Formats a tool call for timeline display and expandable detail cards.
@@ -1108,6 +1158,99 @@ pub fn build_mention_catalog(skills: &[SkillSummary], plugins: &[PluginSummary])
     }
 }
 
+struct CachedMentionCatalogEntry {
+    input_sig: u64,
+    catalog: Rc<MentionCatalog>,
+    catalog_sig: u64,
+}
+
+thread_local! {
+    static MENTION_CATALOG_CACHE: RefCell<Option<CachedMentionCatalogEntry>> = const { RefCell::new(None) };
+    static DAY_BUCKET_CACHE: RefCell<HashMap<i64, (i32, u32)>> = RefCell::new(HashMap::new());
+}
+
+/// Returns a thread-local cached `Rc<MentionCatalog>` together with its content signature.
+/// Fast-paths on `(s.skills_rev, s.explorer_rev)` when non-zero (plus lengths/pointers/active
+/// workspace), falling back to full skill/plugin content hashing when `skills_rev == 0`.
+pub(super) fn cached_mention_catalog_for_state(s: &AppState) -> (Rc<MentionCatalog>, u64) {
+    let mut h = DefaultHasher::new();
+    if s.skills_rev != 0 {
+        (
+            1u8,
+            s.skills_rev,
+            s.explorer_rev,
+            s.active_workspace_id.as_deref(),
+            s.skills.len(),
+            s.skills.as_ptr() as usize,
+            s.plugins.len(),
+            s.plugins.as_ptr() as usize,
+        )
+            .hash(&mut h);
+        for p in &s.plugins {
+            (
+                p.enabled,
+                p.name.as_str(),
+                p.display_name.as_deref(),
+                p.version.as_deref(),
+            )
+                .hash(&mut h);
+        }
+    } else {
+        (0u8, s.skills.len(), s.plugins.len()).hash(&mut h);
+        for sk in &s.skills {
+            (
+                sk.enabled,
+                sk.name.as_str(),
+                sk.description.as_str(),
+                sk.scope.as_str(),
+            )
+                .hash(&mut h);
+        }
+        for p in &s.plugins {
+            (
+                p.enabled,
+                p.name.as_str(),
+                p.display_name.as_deref(),
+                p.version.as_deref(),
+            )
+                .hash(&mut h);
+        }
+    }
+    let input_sig = h.finish();
+
+    MENTION_CATALOG_CACHE.with(|slot| {
+        let mut guard = slot.borrow_mut();
+        if let Some(cached) = guard.as_ref()
+            && cached.input_sig == input_sig
+        {
+            return (Rc::clone(&cached.catalog), cached.catalog_sig);
+        }
+        let catalog = Rc::new(build_mention_catalog(&s.skills, &s.plugins));
+        let mut ch = DefaultHasher::new();
+        catalog.items.hash(&mut ch);
+        let catalog_sig = ch.finish();
+        *guard = Some(CachedMentionCatalogEntry {
+            input_sig,
+            catalog: Rc::clone(&catalog),
+            catalog_sig,
+        });
+        (catalog, catalog_sig)
+    })
+}
+
+/// Zero-allocation ASCII case-insensitive substring check (`needle_lower` must already be ASCII lowercase).
+pub(super) fn ascii_contains_ignore_case(haystack: &str, needle_lower: &str) -> bool {
+    if needle_lower.is_empty() {
+        return true;
+    }
+    let hb = haystack.as_bytes();
+    let nb = needle_lower.as_bytes();
+    if nb.len() > hb.len() {
+        return false;
+    }
+    hb.windows(nb.len()).any(|w| w.eq_ignore_ascii_case(nb))
+}
+
 fn boundary_before(text: &str, byte_idx: usize) -> bool {
     if byte_idx == 0 {
         return true;
@@ -1155,15 +1298,20 @@ pub fn parse_composer_segments<'a>(
     if text.is_empty() {
         return Vec::new();
     }
+    if catalog.names.is_empty() || !text.contains('@') {
+        return vec![ComposerSegment::Text {
+            text,
+            start: 0,
+            end: text.len(),
+        }];
+    }
     let mut segments = Vec::new();
-    let has_names = !catalog.names.is_empty();
     let mut text_start = 0usize;
     let mut cursor = 0usize;
 
     while cursor < text.len() {
         let ch = text[cursor..].chars().next().unwrap_or('\0');
-        if has_names
-            && ch == '@'
+        if ch == '@'
             && boundary_before(text, cursor)
             && let Some((name, kind, end)) = match_mention_at(text, cursor, catalog)
         {
@@ -1255,9 +1403,9 @@ pub fn filter_mention_items<'a>(
         .iter()
         .filter(|item| {
             q.is_empty()
-                || item.name.to_ascii_lowercase().contains(&q)
-                || item.label.to_ascii_lowercase().contains(&q)
-                || item.description.to_ascii_lowercase().contains(&q)
+                || ascii_contains_ignore_case(&item.name, &q)
+                || ascii_contains_ignore_case(&item.label, &q)
+                || ascii_contains_ignore_case(&item.description, &q)
         })
         .take(limit)
         .collect()
@@ -1584,33 +1732,21 @@ pub struct AttachmentDisplayInfo {
     pub path: Option<String>,
 }
 
-/// Computes display filename, category, type subtitle, and decoded image bytes if inline.
-pub fn attachment_display_info(part: &TurnAttachmentInputPart) -> AttachmentDisplayInfo {
-    let (filename, mime_type, path, decoded_image_bytes) = match part {
+/// Computes attachment presentation metadata without eagerly decoding inline base64 payloads.
+pub(super) fn attachment_display_info_meta(
+    part: &TurnAttachmentInputPart,
+) -> AttachmentDisplayInfo {
+    let (filename, mime_type, path) = match part {
         TurnAttachmentInputPart::InlineFile {
             filename,
-            content_base64,
             mime_type,
-        } => {
-            let decoded = if mime_type.starts_with("image/") {
-                base64::engine::general_purpose::STANDARD
-                    .decode(content_base64.trim())
-                    .ok()
-            } else {
-                None
-            };
-            (filename.clone(), mime_type.clone(), None, decoded)
-        }
+            ..
+        } => (filename.clone(), mime_type.clone(), None),
         TurnAttachmentInputPart::UploadedFile {
             filename,
             path,
             mime_type,
-        } => (
-            filename.clone(),
-            mime_type.clone(),
-            Some(path.clone()),
-            None,
-        ),
+        } => (filename.clone(), mime_type.clone(), Some(path.clone())),
     };
 
     let ext = filename
@@ -1656,9 +1792,26 @@ pub fn attachment_display_info(part: &TurnAttachmentInputPart) -> AttachmentDisp
         mime_type,
         subtitle: subtitle.to_string(),
         category,
-        decoded_image_bytes,
+        decoded_image_bytes: None,
         path,
     }
+}
+
+/// Computes display filename, category, type subtitle, and decoded image bytes if inline.
+pub fn attachment_display_info(part: &TurnAttachmentInputPart) -> AttachmentDisplayInfo {
+    let mut info = attachment_display_info_meta(part);
+    if let TurnAttachmentInputPart::InlineFile {
+        content_base64,
+        mime_type,
+        ..
+    } = part
+        && mime_type.starts_with("image/")
+    {
+        info.decoded_image_bytes = base64::engine::general_purpose::STANDARD
+            .decode(content_base64.trim())
+            .ok();
+    }
+    info
 }
 
 /// Truncates `filename` from the middle while preserving its `.ext` suffix.
@@ -1739,8 +1892,33 @@ pub fn day_bucket_key(timestamp_ms: i64) -> Option<(i32, u32)> {
     if timestamp_ms <= 0 {
         return None;
     }
+    let minute_key = timestamp_ms / 60_000;
+    if let Some(hit) = DAY_BUCKET_CACHE.with(|cache| cache.borrow().get(&minute_key).copied()) {
+        return Some(hit);
+    }
     let dt = Local.timestamp_millis_opt(timestamp_ms).single()?;
-    Some((dt.year(), dt.ordinal()))
+    let bucket = (dt.year(), dt.ordinal());
+    DAY_BUCKET_CACHE.with(|cache| {
+        let mut map = cache.borrow_mut();
+        if map.len() >= 128 {
+            map.clear();
+        }
+        map.insert(minute_key, bucket);
+    });
+    Some(bucket)
+}
+
+/// Local-timezone `(year, ordinal_day)` bucket for `now_secs`, matching `format_day_separator`.
+pub(super) fn local_day_bucket(now_secs: f64) -> (i32, u32) {
+    let now_dt: DateTime<Local> = if now_secs > 1_000_000.0 {
+        Local
+            .timestamp_opt(now_secs as i64, 0)
+            .single()
+            .unwrap_or_else(Local::now)
+    } else {
+        Local::now()
+    };
+    (now_dt.year(), now_dt.ordinal())
 }
 
 /// Human-friendly day separator label (`Today`, `Yesterday`, or `Mon, Nov 14`).

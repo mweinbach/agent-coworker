@@ -1,9 +1,13 @@
 //! Shared composer card, model/reasoning pickers, attachments, drag/drop/paste, and `@`/`/` menus.
 
-use cowork_protocol::{CommandInfo, TurnReference};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
+
+use cowork_protocol::{CommandInfo, TurnAttachmentInputPart, TurnReference};
 use rune::{
     Align, Color, Cursor, Drag, El, Key, Phase, ScrollSpec, Side, TextEdit, auto_grow, col, el,
-    icon, row, text, text_input,
+    icon, memo, row, text, text_input,
 };
 use rune_kit::{
     Button, ButtonVariant, ComboboxEvent, ComboboxOption, ControlSize, IconButton,
@@ -19,11 +23,13 @@ use crate::state::{
 use crate::theme::ThemeTokens;
 use crate::ws::WsConnectionState;
 
-use super::attachments::file_attachment_card;
+use super::attachments::{
+    file_attachment_card_for_part, image_decode_generation, shared_waker_image_cache,
+};
 use super::icons;
 use super::model::{
-    AttachmentDisplayInfo, MentionCatalog, MentionItem, MentionKind, attachment_display_info,
-    build_mention_catalog, detect_active_mention_query, extract_references_from_text,
+    MentionCatalog, MentionItem, MentionKind, ascii_contains_ignore_case,
+    cached_mention_catalog_for_state, detect_active_mention_query, extract_references_from_text,
     filter_mention_items, is_active_child_agent,
 };
 use super::{components, state::ChatUiState};
@@ -33,8 +39,9 @@ const MENTION_POPUP_WIDTH: f32 = 384.0;
 const COMPOSER_HEIGHT_DEFAULT: f32 = 160.0;
 const COMPOSER_HEIGHT_MIN: f32 = 88.0;
 const COMPOSER_HEIGHT_MAX: f32 = 360.0;
+const DEFAULT_REASONING_EFFORTS: &[&str] = &["low", "medium", "high"];
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ResolvedComposerModel {
     pub provider_id: String,
     pub provider_name: String,
@@ -65,6 +72,55 @@ enum OwnedSuggestionPick {
     Slash { name: String },
 }
 
+fn hash_draft_attachments_sig<H: Hasher>(
+    s: &AppState,
+    key: &str,
+    draft: Option<&ComposerDraft>,
+    h: &mut H,
+) {
+    let Some(draft) = draft else {
+        0usize.hash(h);
+        return;
+    };
+    draft.attachments.len().hash(h);
+    for part in &draft.attachments {
+        match part {
+            TurnAttachmentInputPart::InlineFile {
+                filename,
+                content_base64,
+                mime_type,
+            } => (
+                0u8,
+                filename.as_str(),
+                mime_type.as_str(),
+                content_base64.len(),
+                content_base64.as_ptr() as usize,
+            )
+                .hash(h),
+            TurnAttachmentInputPart::UploadedFile {
+                filename,
+                path,
+                mime_type,
+            } => (1u8, filename.as_str(), path.as_str(), mime_type.as_str()).hash(h),
+        }
+    }
+    if let Some(previews) = s.attachment_previews_by_key.get(key) {
+        previews.len().hash(h);
+        for meta in previews {
+            (
+                meta.filename.as_str(),
+                meta.mime_type.as_str(),
+                meta.data_url
+                    .as_ref()
+                    .map(|u| (u.len(), u.as_ptr() as usize)),
+            )
+                .hash(h);
+        }
+    } else {
+        0usize.hash(h);
+    }
+}
+
 /// Renders the shared message composer used by both `ChatView` and `NewChatLanding`.
 pub fn build_composer(
     s: &AppState,
@@ -80,7 +136,7 @@ pub fn build_composer(
     let ws_id = ws.map(|w| w.id.as_str());
 
     let draft = s.composer_drafts.get(&key);
-    let catalog = build_mention_catalog(&s.skills, &s.plugins);
+    let (catalog, catalog_sig) = cached_mention_catalog_for_state(s);
     let slash_commands = ws_id
         .and_then(|id| s.commands_by_workspace.get(id))
         .map(Vec::as_slice)
@@ -132,109 +188,215 @@ pub fn build_composer(
         );
 
     let status_disconnected = !is_landing && !hydrating && !transcript_only && thread_disconnected;
-    let input_area = build_composer_input_area(
-        s,
-        k,
-        t,
-        &catalog,
-        is_landing,
-        input_disabled,
-        transcript_only,
-        status_disconnected,
-        ws_reconnecting,
-    );
-    let attachments_strip = build_draft_attachments_row(s, k, t, &key, draft, input_disabled);
-    let footer = build_composer_footer(
-        s,
-        k,
-        t,
-        overlays,
-        FooterCtx {
-            key: &key,
-            thread,
-            runtime,
-            ws,
-            draft,
-            is_landing,
-            streaming,
-            input_disabled,
-            non_draft_locked,
-            can_submit,
-            usage_hard_cap,
-            disconnected: status_disconnected,
-            ws_reconnecting,
-        },
-    );
+    let resolved_model = resolve_composer_model(s, thread, draft, ws);
 
-    if !input_disabled {
-        build_suggestion_popup(s, k, &catalog, slash_commands, is_landing, overlays);
-    }
+    let model_picker_open =
+        s.chat_ui.model_combobox.is_open() && !(input_disabled || non_draft_locked);
+    let reasoning_picker_open =
+        s.chat_ui.reasoning_open && !(input_disabled || streaming || non_draft_locked);
+    let possible_suggestion_popup = !input_disabled
+        && s.composer_edit.focused
+        && (s.composer_edit.text.starts_with('/') || s.composer_edit.text.contains('@'));
+    let has_preedit = s.composer_edit.preedit().is_some();
 
-    let radius = if is_landing { 16.0 } else { 14.0 };
-    let border_color = if s.chat_ui.composer_drop_hover && !file_drop_disabled {
-        t.accent
-    } else if s.composer_edit.focused && !input_disabled {
-        k.alpha(t.accent, if t.dark { 0.36 } else { 0.34 })
+    let root_key = if is_landing {
+        "chat-composer-landing"
     } else {
-        t.border
+        "chat-composer-dock"
     };
 
-    let mut card = col()
-        .key("chat-composer-card")
-        .w_full()
-        .radius(radius)
-        .fill(t.input_bg)
-        .border(1.0, border_color);
-    if !file_drop_disabled {
-        card = card
-            .on_drop_hover(|s: &mut AppState, over, _| {
-                s.chat_ui.composer_drop_hover = over;
-            })
-            .on_drop_files(|s: &mut AppState, files, _| {
-                s.chat_ui.composer_drop_hover = false;
-                let key = s.composer_key();
-                if !files.is_empty() {
-                    s.dispatch(Action::Native(NativeAction::IngestDroppedFiles {
-                        key,
-                        paths: files.to_vec(),
-                    }));
-                }
-            });
+    let build_inner = |overlays: &mut Vec<El>| {
+        let input_area = build_composer_input_area(
+            s,
+            k,
+            t,
+            &catalog,
+            is_landing,
+            input_disabled,
+            transcript_only,
+            status_disconnected,
+            ws_reconnecting,
+        );
+        let attachments_strip = build_draft_attachments_row(s, k, t, &key, draft, input_disabled);
+        let footer = build_composer_footer(
+            s,
+            k,
+            t,
+            overlays,
+            FooterCtx {
+                key: &key,
+                thread,
+                runtime,
+                ws,
+                draft,
+                resolved_model: resolved_model.as_ref(),
+                is_landing,
+                streaming,
+                input_disabled,
+                non_draft_locked,
+                can_submit,
+                usage_hard_cap,
+                disconnected: status_disconnected,
+                ws_reconnecting,
+            },
+        );
+
+        if !input_disabled {
+            build_suggestion_popup(s, k, &catalog, slash_commands, is_landing, overlays);
+        }
+
+        let radius = if is_landing { 16.0 } else { 14.0 };
+        let border_color = if s.chat_ui.composer_drop_hover && !file_drop_disabled {
+            t.accent
+        } else if s.composer_edit.focused && !input_disabled {
+            k.alpha(t.accent, if t.dark { 0.36 } else { 0.34 })
+        } else {
+            t.border
+        };
+
+        let mut card = col()
+            .key("chat-composer-card")
+            .w_full()
+            .radius(radius)
+            .fill(t.input_bg)
+            .border(1.0, border_color);
+        if !file_drop_disabled {
+            card = card
+                .on_drop_hover(|s: &mut AppState, over, _| {
+                    s.chat_ui.composer_drop_hover = over;
+                })
+                .on_drop_files(|s: &mut AppState, files, _| {
+                    s.chat_ui.composer_drop_hover = false;
+                    let key = s.composer_key();
+                    if !files.is_empty() {
+                        s.dispatch(Action::Native(NativeAction::IngestDroppedFiles {
+                            key,
+                            paths: files.to_vec(),
+                        }));
+                    }
+                });
+        }
+
+        if !is_landing && s.desktop_settings.developer_mode {
+            card = card.child(build_dev_resizer_bar(s, k, t));
+        }
+        if let Some(strip) = attachments_strip {
+            card = card.child(strip);
+        }
+        card = card.child(input_area).child(footer);
+
+        let mut stack = col().w_full().gap(6.0);
+        if !is_landing && let Some(banner) = build_submission_feedback(k, t, thread, runtime) {
+            stack = stack.child(banner);
+        }
+        stack = stack.child(card);
+        if !is_landing
+            && let Some(hint) =
+                build_composer_status_hint(k, t, runtime, status_disconnected, ws_reconnecting)
+        {
+            stack = stack.child(hint);
+        }
+
+        if is_landing {
+            return stack;
+        }
+
+        col()
+            .w_full()
+            .items_center()
+            .px(16.0)
+            .pt(10.0)
+            .pb(16.0)
+            .fill(t.panel_bg)
+            .child(col().w_full().max_w(COMPOSER_MAX_WIDTH).child(stack))
+    };
+
+    if model_picker_open || reasoning_picker_open || possible_suggestion_popup || has_preedit {
+        return build_inner(overlays).key(root_key);
     }
 
-    if !is_landing && s.desktop_settings.developer_mode {
-        card = card.child(build_dev_resizer_bar(s, k, t));
+    let mut h = DefaultHasher::new();
+    let ds = &s.desktop_settings;
+    (
+        is_landing,
+        key.as_str(),
+        t.dark,
+        ds.reduced_transparency,
+        ds.high_contrast,
+        ds.accent_palette,
+        ds.developer_mode,
+        s.ui_scale.to_bits(),
+        s.services.waker.is_some(),
+    )
+        .hash(&mut h);
+    (
+        s.composer_edit.text.as_str(),
+        s.composer_edit.anchor,
+        s.composer_edit.focus,
+        s.composer_edit.focused,
+        s.chat_ui.composer_drop_hover,
+        s.chat_ui.composer_height_override.map(f32::to_bits),
+    )
+        .hash(&mut h);
+    if s.composer_edit.text.contains('@') {
+        catalog_sig.hash(&mut h);
     }
-    if let Some(strip) = attachments_strip {
-        card = card.child(strip);
-    }
-    card = card.child(input_area).child(footer);
-
-    let mut stack = col().w_full().gap(6.0);
-    if !is_landing && let Some(banner) = build_submission_feedback(k, t, thread, runtime) {
-        stack = stack.child(banner);
-    }
-    stack = stack.child(card);
-    if !is_landing
-        && let Some(hint) =
-            build_composer_status_hint(k, t, runtime, status_disconnected, ws_reconnecting)
+    (
+        streaming,
+        attachment_ingesting,
+        usage_hard_cap,
+        input_disabled,
+        hydrating,
+        transcript_only,
+        file_drop_disabled,
+    )
+        .hash(&mut h);
+    (
+        thread_disconnected,
+        session_missing,
+        is_draft,
+        non_draft_locked,
+        can_submit,
+        status_disconnected,
+        ws_reconnecting,
+    )
+        .hash(&mut h);
+    (ws_id, thread.map(|tr| tr.id.as_str())).hash(&mut h);
+    resolved_model.hash(&mut h);
+    if let Some(model) = resolved_model.as_ref()
+        && let Some(efforts) = resolved_effort_refs(model)
     {
-        stack = stack.child(hint);
+        resolve_current_effort(draft, thread, ws, &efforts)
+            .as_str()
+            .hash(&mut h);
+    }
+    if let Some(rt) = runtime {
+        (
+            rt.pending_turn_count,
+            rt.pending_steer.as_ref().map(|p| p.text.as_str()),
+            streaming && rt.agents.iter().any(is_active_child_agent),
+        )
+            .hash(&mut h);
+        match rt.composer_submission.as_ref().map(|sub| &sub.status) {
+            None => 0u8.hash(&mut h),
+            Some(ComposerSubmissionStatus::Sending(id)) => (1u8, id).hash(&mut h),
+            Some(ComposerSubmissionStatus::AcceptedSteer { steer_request_id }) => {
+                (2u8, steer_request_id.as_deref()).hash(&mut h);
+            }
+            Some(ComposerSubmissionStatus::Failed(err)) => (3u8, err.as_str()).hash(&mut h),
+        }
+    } else {
+        0u8.hash(&mut h);
+    }
+    hash_draft_attachments_sig(s, &key, draft, &mut h);
+    if draft.is_some_and(|d| !d.attachments.is_empty()) {
+        image_decode_generation().hash(&mut h);
     }
 
-    if is_landing {
-        return stack;
-    }
-
-    col()
-        .key("chat-composer-dock")
-        .w_full()
-        .items_center()
-        .px(16.0)
-        .pt(10.0)
-        .pb(16.0)
-        .fill(t.panel_bg)
-        .child(col().w_full().max_w(COMPOSER_MAX_WIDTH).child(stack))
+    memo(root_key, h.finish(), || {
+        let mut ignored_overlays = Vec::new();
+        build_inner(&mut ignored_overlays)
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -280,14 +442,20 @@ fn build_composer_input_area(
             .on_edit(|s: &mut AppState| &mut s.composer_edit)
             .on_input_change(|s: &mut AppState, _| {
                 let key = s.composer_key();
-                let text = s.composer_edit.text.clone();
-                s.composer_drafts.entry(key).or_default().text = text;
-                let current_q =
-                    detect_active_mention_query(&s.composer_edit.text, s.composer_edit.focus)
-                        .map(|q| q.query);
-                if s.chat_ui.mention_dismissed_query.as_ref() != current_q.as_ref() {
-                    s.chat_ui.mention_dismissed_query = None;
-                    s.chat_ui.mention_active_index = 0;
+                s.composer_drafts
+                    .entry(key)
+                    .or_default()
+                    .text
+                    .clone_from(&s.composer_edit.text);
+                if s.composer_edit.text.contains('@') || s.chat_ui.mention_dismissed_query.is_some()
+                {
+                    let current_q =
+                        detect_active_mention_query(&s.composer_edit.text, s.composer_edit.focus)
+                            .map(|q| q.query);
+                    if s.chat_ui.mention_dismissed_query.as_ref() != current_q.as_ref() {
+                        s.chat_ui.mention_dismissed_query = None;
+                        s.chat_ui.mention_active_index = 0;
+                    }
                 }
             })
             .on_input_paste(|s: &mut AppState, content, _| {
@@ -360,7 +528,7 @@ fn active_suggestion_meta(
     s: &AppState,
     idx: usize,
 ) -> Option<(usize, String, OwnedSuggestionPick)> {
-    let catalog = build_mention_catalog(&s.skills, &s.plugins);
+    let (catalog, _) = cached_mention_catalog_for_state(s);
     let thread = s.active_thread();
     let ws_id = resolve_composer_workspace(s, thread, thread.is_none()).map(|w| w.id.as_str());
     let commands = ws_id
@@ -555,42 +723,56 @@ fn build_draft_attachments_row(
     if draft.attachments.is_empty() {
         return None;
     }
-    let previews = s.attachment_previews_by_key.get(key);
-    let mut strip = row().w_full().flex_wrap().gap(8.0).px(14.0).pt(12.0);
-    for (idx, part) in draft.attachments.iter().enumerate() {
-        let mut info: AttachmentDisplayInfo = attachment_display_info(part);
-        if info.decoded_image_bytes.is_none()
-            && let Some(meta) = previews.and_then(|list| list.get(idx))
-            && let Some(ref data_url) = meta.data_url
-            && let Some((_, b64)) = data_url.split_once("base64,")
-            && let Ok(bytes) =
-                base64::Engine::decode(&base64::engine::general_purpose::STANDARD, b64.trim())
-        {
-            info.decoded_image_bytes = Some(bytes);
+    let image_cache = shared_waker_image_cache(s.services.waker.as_ref());
+    let strip_key = format!("draft-att-strip:{key}");
+    let mut h = DefaultHasher::new();
+    let ds = &s.desktop_settings;
+    (
+        key,
+        input_disabled,
+        t.dark,
+        ds.reduced_transparency,
+        ds.high_contrast,
+        ds.accent_palette,
+        image_cache.as_ref().map(|c| Arc::as_ptr(c) as usize),
+        image_decode_generation(),
+    )
+        .hash(&mut h);
+    hash_draft_attachments_sig(s, key, Some(draft), &mut h);
+    let ver = h.finish();
+
+    Some(memo(strip_key.as_str(), ver, || {
+        let previews = s.attachment_previews_by_key.get(key);
+        let mut strip = row().w_full().flex_wrap().gap(8.0).px(14.0).pt(12.0);
+        for (idx, part) in draft.attachments.iter().enumerate() {
+            let preview_data_url = previews
+                .and_then(|list| list.get(idx))
+                .and_then(|meta| meta.data_url.as_deref());
+            let remove_key = key.to_string();
+            let remove_btn = IconButton::new(k.glyph.close)
+                .variant(IconButtonVariant::GhostMuted)
+                .control_size(ControlSize::Mini)
+                .label("Remove attachment")
+                .disabled(input_disabled)
+                .on_press(move |s: &mut AppState| {
+                    s.dispatch(Action::Chat(ChatAction::RemoveComposerAttachment {
+                        key: remove_key.clone(),
+                        index: idx,
+                    }));
+                })
+                .build(k);
+            strip = strip.child(file_attachment_card_for_part(
+                k,
+                t,
+                part,
+                preview_data_url,
+                format!("draft-att:{key}:{idx}"),
+                Some(remove_btn),
+                image_cache.as_deref(),
+            ));
         }
-        let remove_key = key.to_string();
-        let remove_btn = IconButton::new(k.glyph.close)
-            .variant(IconButtonVariant::GhostMuted)
-            .control_size(ControlSize::Mini)
-            .label("Remove attachment")
-            .disabled(input_disabled)
-            .on_press(move |s: &mut AppState| {
-                s.dispatch(Action::Chat(ChatAction::RemoveComposerAttachment {
-                    key: remove_key.clone(),
-                    index: idx,
-                }));
-            })
-            .build(k);
-        strip = strip.child(file_attachment_card(
-            k,
-            t,
-            &info,
-            format!("draft-att:{key}:{idx}"),
-            Some(remove_btn),
-            None,
-        ));
-    }
-    Some(strip)
+        strip
+    }))
 }
 
 struct FooterCtx<'a> {
@@ -599,6 +781,7 @@ struct FooterCtx<'a> {
     runtime: Option<&'a ThreadRuntime>,
     ws: Option<&'a WorkspaceRecord>,
     draft: Option<&'a ComposerDraft>,
+    resolved_model: Option<&'a ResolvedComposerModel>,
     is_landing: bool,
     streaming: bool,
     input_disabled: bool,
@@ -630,10 +813,8 @@ fn build_composer_footer(
         })
         .build(k);
 
-    let resolved_model = resolve_composer_model(s, ctx.thread, ctx.draft, ctx.ws);
-    let model_picker = build_model_selector(s, k, t, overlays, &ctx, resolved_model.as_ref());
-    let reasoning_picker =
-        build_reasoning_selector(s, k, t, overlays, &ctx, resolved_model.as_ref());
+    let model_picker = build_model_selector(s, k, t, overlays, &ctx, ctx.resolved_model);
+    let reasoning_picker = build_reasoning_selector(s, k, t, overlays, &ctx, ctx.resolved_model);
 
     let mut left_controls = row()
         .items_center()
@@ -742,19 +923,17 @@ fn provider_monogram(provider_id: &str, provider_name: &str) -> String {
     }
 }
 
-fn model_matches_query(provider: &ProviderSummary, model: &ProviderModelSummary, q: &str) -> bool {
-    let trimmed = q.trim();
-    if trimmed.is_empty() {
-        return true;
-    }
-    let hay = format!(
-        "{} {} {} {}",
-        provider.name, provider.id, model.name, model.id
-    )
-    .to_ascii_lowercase();
-    trimmed
-        .split_whitespace()
-        .all(|tok| hay.contains(&tok.to_ascii_lowercase()))
+fn model_matches_query_tokens(
+    provider: &ProviderSummary,
+    model: &ProviderModelSummary,
+    tokens: &[String],
+) -> bool {
+    tokens.iter().all(|tok| {
+        ascii_contains_ignore_case(&provider.name, tok)
+            || ascii_contains_ignore_case(&provider.id, tok)
+            || ascii_contains_ignore_case(&model.name, tok)
+            || ascii_contains_ignore_case(&model.id, tok)
+    })
 }
 
 fn filter_provider_groups<'a>(
@@ -762,7 +941,11 @@ fn filter_provider_groups<'a>(
     provider_filter: Option<&str>,
     query: &str,
 ) -> Vec<(&'a ProviderSummary, Vec<&'a ProviderModelSummary>)> {
-    let searching = !query.trim().is_empty();
+    let query_tokens: Vec<String> = query
+        .split_whitespace()
+        .map(str::to_ascii_lowercase)
+        .collect();
+    let searching = !query_tokens.is_empty();
     let mut out = Vec::new();
     for g in groups {
         if !searching
@@ -771,12 +954,15 @@ fn filter_provider_groups<'a>(
         {
             continue;
         }
-        let matched: Vec<&ProviderModelSummary> = g
-            .models
-            .iter()
-            .copied()
-            .filter(|m| model_matches_query(g.provider, m, query))
-            .collect();
+        let matched: Vec<&ProviderModelSummary> = if !searching {
+            g.models.clone()
+        } else {
+            g.models
+                .iter()
+                .copied()
+                .filter(|m| model_matches_query_tokens(g.provider, m, &query_tokens))
+                .collect()
+        };
         if !matched.is_empty() {
             out.push((g.provider, matched));
         }
@@ -847,14 +1033,14 @@ fn apply_effort_selection(
     }
 }
 
-fn resolved_raw_efforts(model: &ResolvedComposerModel) -> Vec<String> {
+fn resolved_effort_refs(model: &ResolvedComposerModel) -> Option<Vec<&str>> {
     if !model.supports_reasoning && model.reasoning_efforts.is_empty() {
-        return Vec::new();
+        return None;
     }
     if model.reasoning_efforts.is_empty() {
-        vec!["low".into(), "medium".into(), "high".into()]
+        Some(DEFAULT_REASONING_EFFORTS.to_vec())
     } else {
-        model.reasoning_efforts.clone()
+        Some(model.reasoning_efforts.iter().map(String::as_str).collect())
     }
 }
 
@@ -903,7 +1089,7 @@ fn build_effort_drag_bar(
     t: &ThemeTokens,
     key_prefix: &str,
     track_w: f32,
-    raw_efforts: &[String],
+    raw_efforts: &[&str],
     current: ReasoningEffortValue,
     composer_key: String,
     thread_id: Option<String>,
@@ -997,7 +1183,7 @@ fn build_effort_drag_bar(
 
     let use_short = raw_efforts.len() >= 5;
     let mut labels_row = row().w(track_w).h(18.0);
-    for (idx, raw) in raw_efforts.iter().enumerate() {
+    for (idx, &raw) in raw_efforts.iter().enumerate() {
         let label = if use_short {
             format_effort_short_label(raw)
         } else {
@@ -1062,8 +1248,6 @@ fn build_model_selector(
     ctx: &FooterCtx<'_>,
     resolved: Option<&ResolvedComposerModel>,
 ) -> El {
-    let settings_ws = s.resolve_provider_settings_workspace(ctx.ws);
-    let groups = configured_provider_groups(&s.provider_catalog, settings_ws);
     let current_id = resolved.map(|r| encode_model_option_id(&r.provider_id, &r.model_id));
     let model_disabled = ctx.input_disabled || ctx.non_draft_locked;
     let is_open = s.chat_ui.model_combobox.is_open() && !model_disabled;
@@ -1139,6 +1323,9 @@ fn build_model_selector(
     if !is_open {
         return trigger;
     }
+
+    let settings_ws = s.resolve_provider_settings_workspace(ctx.ws);
+    let groups = configured_provider_groups(&s.provider_catalog, settings_ws);
 
     let placement = if ctx.is_landing {
         Placement::BottomStart
@@ -1539,24 +1726,7 @@ fn build_model_selector(
         .key("composer-model-manage");
 
     let effort_footer = if let Some(active_model) = resolved {
-        let raw_efforts = resolved_raw_efforts(active_model);
-        if raw_efforts.is_empty() {
-            row()
-                .w_full()
-                .items_center()
-                .justify_between()
-                .px(12.0)
-                .py(8.0)
-                .fill(t.card_bg)
-                .border_sides([1.0, 0.0, 0.0, 0.0], t.border_muted)
-                .child(
-                    text("Reasoning not configurable for this model")
-                        .font(k.ty.text_xsmall)
-                        .color(t.text_faint),
-                )
-                .child(manage_btn)
-        } else {
-            let effort_refs: Vec<&str> = raw_efforts.iter().map(String::as_str).collect();
+        if let Some(effort_refs) = resolved_effort_refs(active_model) {
             let current_effort =
                 resolve_current_effort(ctx.draft, ctx.thread, ctx.ws, &effort_refs);
             let current_label = format_effort_label(current_effort.as_str());
@@ -1602,13 +1772,28 @@ fn build_model_selector(
                     t,
                     "model-popover-effort",
                     track_w,
-                    &raw_efforts,
+                    &effort_refs,
                     current_effort,
                     key_choose,
                     tid_choose,
                     active_model.provider_id.clone(),
                     reasoning_disabled,
                 ))
+        } else {
+            row()
+                .w_full()
+                .items_center()
+                .justify_between()
+                .px(12.0)
+                .py(8.0)
+                .fill(t.card_bg)
+                .border_sides([1.0, 0.0, 0.0, 0.0], t.border_muted)
+                .child(
+                    text("Reasoning not configurable for this model")
+                        .font(k.ty.text_xsmall)
+                        .color(t.text_faint),
+                )
+                .child(manage_btn)
         }
     } else {
         row()
@@ -1664,25 +1849,9 @@ fn build_reasoning_selector(
     resolved: Option<&ResolvedComposerModel>,
 ) -> Option<El> {
     let model = resolved?;
-    let raw_efforts = resolved_raw_efforts(model);
-    if raw_efforts.is_empty() {
-        return None;
-    }
-
-    let effort_refs: Vec<&str> = raw_efforts.iter().map(String::as_str).collect();
+    let effort_refs = resolved_effort_refs(model)?;
     let current_effort = resolve_current_effort(ctx.draft, ctx.thread, ctx.ws, &effort_refs);
     let current_label = format_effort_label(current_effort.as_str());
-    let current_desc = format_effort_description(current_effort.as_str());
-
-    let key_choose = ctx.key.to_string();
-    let tid_choose = ctx.thread.filter(|tr| !tr.draft).map(|tr| tr.id.clone());
-    let provider_choose = model.provider_id.clone();
-
-    let placement = if ctx.is_landing {
-        Placement::BottomStart
-    } else {
-        Placement::TopStart
-    };
 
     let reasoning_disabled = ctx.input_disabled || ctx.streaming || ctx.non_draft_locked;
     let is_open = s.chat_ui.reasoning_open && !reasoning_disabled;
@@ -1725,6 +1894,15 @@ fn build_reasoning_selector(
     }
 
     if is_open {
+        let current_desc = format_effort_description(current_effort.as_str());
+        let key_choose = ctx.key.to_string();
+        let tid_choose = ctx.thread.filter(|tr| !tr.draft).map(|tr| tr.id.clone());
+        let provider_choose = model.provider_id.clone();
+        let placement = if ctx.is_landing {
+            Placement::BottomStart
+        } else {
+            Placement::TopStart
+        };
         let track_w = EFFORT_POPOVER_WIDTH - 24.0;
         let surface = col()
             .key("composer-reasoning-popover")
@@ -1754,7 +1932,7 @@ fn build_reasoning_selector(
                 t,
                 "composer-reasoning",
                 track_w,
-                &raw_efforts,
+                &effort_refs,
                 current_effort,
                 key_choose,
                 tid_choose,
@@ -2151,7 +2329,7 @@ pub fn submit_composer_message(s: &mut AppState) {
         return;
     }
 
-    let catalog = build_mention_catalog(&s.skills, &s.plugins);
+    let (catalog, _) = cached_mention_catalog_for_state(s);
     let text = s.composer_edit.text.clone();
     let references: Vec<TurnReference> = extract_references_from_text(&text, &catalog);
     let busy_policy = if streaming {
@@ -2393,7 +2571,7 @@ fn detect_active_suggestions<'a>(
         let lower = sq.query.to_ascii_lowercase();
         let filtered: Vec<&CommandInfo> = commands
             .iter()
-            .filter(|cmd| lower.is_empty() || cmd.name.to_ascii_lowercase().contains(&lower))
+            .filter(|cmd| lower.is_empty() || ascii_contains_ignore_case(&cmd.name, &lower))
             .take(8)
             .collect();
         return (!filtered.is_empty()).then_some(ActiveSuggestion::Slash { commands: filtered });

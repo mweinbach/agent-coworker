@@ -2299,7 +2299,7 @@ fn mixed_plain_and_inline_math_list_items_align_horizontally() {
             .expect("bullet 1 text");
         let top_math_body = els
             .iter()
-            .find(|e| e.text.as_deref() == Some("Second "))
+            .find(|e| e.text.as_deref().is_some_and(|t| t.starts_with("Second ")))
             .expect("bullet 2 text");
         let top_math_marker = els
             .iter()
@@ -2340,7 +2340,11 @@ fn mixed_plain_and_inline_math_list_items_align_horizontally() {
             .expect("nested plain bullet");
         let nested_math_body = els
             .iter()
-            .find(|e| e.text.as_deref() == Some("Nested "))
+            .find(|e| {
+                e.text
+                    .as_deref()
+                    .is_some_and(|t| t.starts_with("Nested inline"))
+            })
             .expect("nested math bullet");
         assert!(
             (nested_math_body.rect[0] - nested_plain_body.rect[0]).abs() <= 0.5,

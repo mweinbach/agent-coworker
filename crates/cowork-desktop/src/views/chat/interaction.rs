@@ -1,6 +1,10 @@
 //! Pending `ask_user`, command execution approval, and file change approval cards.
 
+use std::cell::RefCell;
+use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
+use std::rc::Rc;
 use std::sync::LazyLock;
 
 use cowork_protocol::{JsonRpcLiteId, ServerRequestReceiptResponse};
@@ -18,9 +22,32 @@ use crate::theme::ThemeTokens;
 use super::components::{StatusPillTone, status_pill};
 use super::icons;
 use super::model::{ASK_SKIP_TOKEN, approval_risk_label, truncate_text};
+use super::row_version::ValueFp;
 
 const ASK_QUESTION_FALLBACK: &str = "The agent needs your input.";
 static EMPTY_ASK_EDIT: LazyLock<TextEdit> = LazyLock::new(TextEdit::default);
+
+thread_local! {
+    static ASK_SPEC_CACHE: RefCell<HashMap<(String, u64), Rc<AskPromptSpec>>> = RefCell::new(HashMap::new());
+}
+
+fn cached_ask_prompt_spec(req_key: &str, raw_questions: &Value) -> Rc<AskPromptSpec> {
+    let mut h = DefaultHasher::new();
+    ValueFp(raw_questions).hash(&mut h);
+    let key = (req_key.to_string(), h.finish());
+    ASK_SPEC_CACHE.with(|cache| {
+        let mut map = cache.borrow_mut();
+        if let Some(hit) = map.get(&key) {
+            return Rc::clone(hit);
+        }
+        let parsed = Rc::new(parse_ask_prompt_spec(raw_questions));
+        if map.len() >= 16 {
+            map.clear();
+        }
+        map.insert(key, Rc::clone(&parsed));
+        parsed
+    })
+}
 
 /// Normalized option inside an interactive `ask` prompt.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -662,7 +689,7 @@ fn build_user_input_card(
     error_msg: Option<&str>,
 ) -> El {
     let req_key = request_id_key(request_id);
-    let spec = parse_ask_prompt_spec(raw_questions);
+    let spec = cached_ask_prompt_spec(&req_key, raw_questions);
     let step_count = spec.questions.len().max(1);
     let active_step = s
         .chat_ui
@@ -837,7 +864,7 @@ fn build_user_input_card(
 
     let edit_change_key = q_state_key.clone();
     let req_enter = req_key.clone();
-    let spec_enter = spec.clone();
+    let spec_enter = Rc::clone(&spec);
     let ws_enter = workspace_id.clone();
     let tid_enter = thread_id.clone();
     let id_enter = request_id.clone();
@@ -907,7 +934,7 @@ fn build_user_input_card(
     footer = footer.child(spacer());
 
     let req_skip = req_key.clone();
-    let spec_skip = spec.clone();
+    let spec_skip = Rc::clone(&spec);
     let ws_skip = workspace_id.clone();
     let tid_skip = thread_id.clone();
     let id_skip = request_id.clone();

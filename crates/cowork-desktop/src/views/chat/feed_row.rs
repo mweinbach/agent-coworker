@@ -7,7 +7,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use cowork_protocol::TurnAttachmentInputPart;
-use rune::{Cursor, El, ImageCache, TextStyle, Tx, col, icon, row, spacer, text};
+use rune::{Cursor, El, ImageCache, TextStyle, Tx, col, el, icon, row, spacer, text};
 use rune_kit::{
     Button, ButtonVariant, ControlSize, IconButton, IconButtonVariant, Kit, Placement, popover,
     scrim,
@@ -257,19 +257,39 @@ fn build_assistant_message_row(
     } else {
         Cow::Borrowed(content)
     };
-    let chat_citations = to_chat_citations(citations);
+    let chat_citations = if citations.is_empty() {
+        Vec::new()
+    } else {
+        to_chat_citations(citations)
+    };
     let md_key = format!("msg:{id}");
     let md_anchor = format!("msg:{id}:md");
     let copy_key = format!("msg:{id}:assistant-copy");
     let copied = ctx.copied_key == Some(copy_key.as_str());
 
     let copied_owned = ctx.copied_key.map(str::to_owned);
-    let cit_for_click = chat_citations.clone();
-    let anchor_for_click = md_anchor.clone();
+    let on_citation_click = if chat_citations.is_empty() {
+        None
+    } else {
+        let cit_for_click = chat_citations.clone();
+        let anchor_for_click = md_anchor.clone();
+        Some(Rc::new(move |s: &mut AppState, idx: usize, _tx: &mut Tx| {
+            if idx < cit_for_click.len() {
+                s.chat_ui.active_mention_popover = None;
+                s.chat_ui.active_citation_popover = Some(CitationPopoverState {
+                    anchor_key: anchor_for_click.clone(),
+                    sources: cit_for_click.clone(),
+                    active_index: idx,
+                });
+            }
+        }) as super::markdown::CitationClickHandler)
+    };
     let hooks = MarkdownHooks {
-        is_copied: Some(Rc::new(move |key: &str| {
-            copied_owned.as_deref() == Some(key)
+        is_copied: Some(Rc::new({
+            let copied_cb = copied_owned.clone();
+            move |key: &str| copied_cb.as_deref() == Some(key)
         })),
+        active_copied_key: copied_owned,
         on_copy: Some(Rc::new(
             move |s: &mut AppState, key: String, tx: &mut Tx| {
                 let _ = &key;
@@ -277,18 +297,7 @@ fn build_assistant_message_row(
                 let _ = tx;
             },
         )),
-        on_citation_click: Some(Rc::new(
-            move |s: &mut AppState, idx: usize, _tx: &mut Tx| {
-                if idx < cit_for_click.len() {
-                    s.chat_ui.active_mention_popover = None;
-                    s.chat_ui.active_citation_popover = Some(CitationPopoverState {
-                        anchor_key: anchor_for_click.clone(),
-                        sources: cit_for_click.clone(),
-                        active_index: idx,
-                    });
-                }
-            },
-        )),
+        on_citation_click,
         math_waker: s.services.waker.clone(),
         math_scale: Some((2.0 * s.ui_scale).clamp(2.0, 4.0)),
     };
@@ -331,21 +340,26 @@ fn build_assistant_message_row(
         container = container.child(carousel);
     }
 
-    if !streaming && !body_text.trim().is_empty() {
-        container = container.child(
-            row()
-                .w_full()
-                .items_center()
-                .group_opacity(if copied { 1.0 } else { 0.0 }, 1.0)
-                .child(build_copy_chip_button(
-                    k,
-                    t,
-                    copy_key,
-                    body_text.into_owned(),
-                    copied,
-                    "Copy response",
-                )),
-        );
+    if !body_text.trim().is_empty() {
+        if !streaming {
+            container = container.child(
+                row()
+                    .w_full()
+                    .items_center()
+                    .group_opacity(if copied { 1.0 } else { 0.0 }, 1.0)
+                    .child(build_copy_chip_button(
+                        k,
+                        t,
+                        copy_key,
+                        body_text.into_owned(),
+                        copied,
+                        "Copy response",
+                    )),
+            );
+        } else {
+            // Reserve the copy-action bar's height during streaming to prevent a layout jump on completion.
+            container = container.child(el().w_full().h(24.0).a11y_hidden());
+        }
     }
 
     container
@@ -361,7 +375,8 @@ fn build_error_row(
     ctx: &FeedRowContext<'_>,
 ) -> El {
     let expanded = s.chat_ui.expanded_errors.contains(id);
-    let is_long = message.chars().count() > MAX_COLLAPSED_ERROR_CHARS;
+    let is_long = message.len() > MAX_COLLAPSED_ERROR_CHARS
+        && message.chars().count() > MAX_COLLAPSED_ERROR_CHARS;
     let shown_text = if expanded || !is_long {
         message.to_string()
     } else {

@@ -1,11 +1,14 @@
 //! Desktop Markdown wrapper over `rune_kit::Markdown` plus citation chips and sources strip.
 
-use std::cell::OnceCell;
+use std::borrow::Cow;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 use std::sync::Arc;
 
 use rune::{
-    Color, Cursor, El, ImageCache, LinkPaint, Span, TextStyle, Tx, col, icon, row, spacer, text,
+    Color, Cursor, El, ImageCache, LinkPaint, Span, TextStyle, Tx, col, icon, memo, row, spacer,
+    text,
 };
 use rune_kit::{Button, ButtonVariant, ControlSize, Kit, Markdown, MarkdownStyle};
 
@@ -14,14 +17,15 @@ use crate::state::AppState;
 use crate::theme::ThemeTokens;
 
 use super::attachments::{
-    CanonicalBase, decode_image_from_uri, resolve_safe_local_path,
-    resolve_safe_local_path_with_base,
+    decode_image_from_uri, image_decode_generation, resolve_lexical_local_path,
+    resolve_safe_local_path,
 };
 use super::icons;
 use super::math::{
     MathBlockSegment, MathChunk, MathParagraphKind, markdown_ends_with_list_item,
-    markdown_starts_with_list_item, render_display_math_block, render_inline_math_paragraph,
-    render_streaming_math_block, split_inline_math_chunks, split_math_blocks,
+    markdown_starts_with_list_item, raster_generation, render_display_math_block,
+    render_inline_math_paragraph, render_streaming_math_block, split_inline_math_chunks,
+    split_math_blocks,
 };
 use super::model::display_domain;
 use super::state::CitationSource;
@@ -39,6 +43,8 @@ type CitationClickRef<'a> = &'a dyn Fn(&mut AppState, usize, &mut Tx);
 pub struct MarkdownHooks {
     /// Returns true when the given block copy key (`"{msg_key}:code:{idx}"`) recently copied.
     pub is_copied: Option<CopyStateCheck>,
+    /// Currently active copied key, if any, used to scope block-level streaming memo invalidation.
+    pub active_copied_key: Option<String>,
     /// Called after copying a code or mermaid source block.
     pub on_copy: Option<CopyHandler>,
     /// Called when clicking a `cowork-citation:<index>` link chip.
@@ -124,18 +130,6 @@ pub fn markdown_style(
 
 /// Checks whether inline code looks like a workspace-relative or local path safe to preview.
 pub fn resolve_workspace_code_link(raw_code: &str, base_path: Option<&str>) -> Option<String> {
-    let path_only = extract_workspace_code_path(raw_code)?;
-    let resolved = resolve_safe_local_path(path_only, base_path)?;
-    Some(format!("{WORKSPACE_FILE_SCHEME}{}", resolved.display()))
-}
-
-fn resolve_workspace_code_link_with_base(raw_code: &str, base: &CanonicalBase) -> Option<String> {
-    let path_only = extract_workspace_code_path(raw_code)?;
-    let resolved = resolve_safe_local_path_with_base(path_only, base)?;
-    Some(format!("{WORKSPACE_FILE_SCHEME}{}", resolved.display()))
-}
-
-fn extract_workspace_code_path(raw_code: &str) -> Option<&str> {
     let token = raw_code.trim();
     if token.is_empty()
         || token.len() > 260
@@ -174,7 +168,12 @@ fn extract_workspace_code_path(raw_code: &str) -> Option<&str> {
                     | "sql"
             )
         );
-    looks_like_path.then_some(path_only)
+    if !looks_like_path {
+        return None;
+    }
+
+    let resolved = resolve_lexical_local_path(path_only, base_path)?;
+    Some(format!("{WORKSPACE_FILE_SCHEME}{}", resolved.display()))
 }
 
 fn strip_line_col_suffix(token: &str) -> (&str, Option<&str>) {
@@ -196,9 +195,13 @@ fn strip_line_col_suffix(token: &str) -> (&str, Option<&str>) {
 /// Rewrites `[label](url)` links matching `citations` into `cowork-citation:<index>` pill targets
 /// and strips unrendered provider citation PUA tokens (`\u{e200}cite...\u{e201}`) outside fences.
 pub fn normalize_citation_links(src: &str, citations: &[CitationSource]) -> String {
+    normalize_citation_links_cow(src, citations).into_owned()
+}
+
+fn normalize_citation_links_cow<'a>(src: &'a str, citations: &[CitationSource]) -> Cow<'a, str> {
     let has_pua_cite = src.contains('\u{e200}');
     if !has_pua_cite && (citations.is_empty() || !src.contains("](")) {
-        return src.to_string();
+        return Cow::Borrowed(src);
     }
 
     let mut out = String::with_capacity(src.len());
@@ -214,10 +217,10 @@ pub fn normalize_citation_links(src: &str, citations: &[CitationSource]) -> Stri
             out.push_str(segment);
             continue;
         }
-        let cleaned = if has_pua_cite {
-            strip_pua_citation_tokens(segment)
+        let cleaned: Cow<'_, str> = if has_pua_cite && segment.contains('\u{e200}') {
+            Cow::Owned(strip_pua_citation_tokens(segment))
         } else {
-            segment.to_string()
+            Cow::Borrowed(segment)
         };
         if !citations.is_empty() && cleaned.contains("](") {
             out.push_str(&rewrite_line_citations(&cleaned, citations));
@@ -225,7 +228,7 @@ pub fn normalize_citation_links(src: &str, citations: &[CitationSource]) -> Stri
             out.push_str(&cleaned);
         }
     }
-    out
+    Cow::Owned(out)
 }
 
 fn strip_pua_citation_tokens(segment: &str) -> String {
@@ -291,6 +294,477 @@ fn rewrite_line_citations(line: &str, citations: &[CitationSource]) -> String {
     result
 }
 
+fn color_bits(c: Color) -> (u32, u32, u32, u32) {
+    (c.r.to_bits(), c.g.to_bits(), c.b.to_bits(), c.a.to_bits())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn markdown_context_signature(
+    t: &ThemeTokens,
+    compact: bool,
+    reduce_motion: bool,
+    workspace_id: Option<&str>,
+    workspace_path: Option<&str>,
+    citations: &[CitationSource],
+    external_cache: Option<&Arc<ImageCache>>,
+    hooks: &MarkdownHooks,
+) -> u64 {
+    let mut h = DefaultHasher::new();
+    (
+        t.dark,
+        color_bits(t.text_base),
+        color_bits(t.text_muted),
+        color_bits(t.accent),
+        color_bits(t.code_bg),
+        color_bits(t.card_bg),
+        color_bits(t.border_muted),
+        color_bits(t.panel_bg),
+        color_bits(t.selection_bg),
+    )
+        .hash(&mut h);
+    (
+        compact,
+        reduce_motion,
+        workspace_id,
+        workspace_path,
+        external_cache.map(|c| Arc::as_ptr(c) as usize),
+        hooks.math_waker.is_some(),
+        hooks.math_scale.map(f32::to_bits),
+    )
+        .hash(&mut h);
+    citations.len().hash(&mut h);
+    for c in citations {
+        c.url.hash(&mut h);
+        c.title.hash(&mut h);
+    }
+    h.finish()
+}
+
+fn md_leading_spaces_up_to_3(s: &str) -> Option<&str> {
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() && bytes[i] == b' ' {
+        i += 1;
+        if i > 3 {
+            return None;
+        }
+    }
+    if bytes.get(i) == Some(&b'\t') {
+        return None;
+    }
+    Some(&s[i..])
+}
+
+fn md_strip_list_marker(trimmed: &str) -> Option<&str> {
+    if let Some(rest) = trimmed
+        .strip_prefix("- ")
+        .or_else(|| trimmed.strip_prefix("* "))
+        .or_else(|| trimmed.strip_prefix("+ "))
+        .or_else(|| trimmed.strip_prefix("-\t"))
+        .or_else(|| trimmed.strip_prefix("*\t"))
+        .or_else(|| trimmed.strip_prefix("+\t"))
+    {
+        return Some(rest);
+    }
+    if matches!(trimmed, "-" | "*" | "+") {
+        return Some("");
+    }
+    let digits = trimmed.bytes().take_while(|b| b.is_ascii_digit()).count();
+    if (1..=9).contains(&digits) {
+        let after = &trimmed.as_bytes()[digits..];
+        if let Some(&delim) = after.first()
+            && (delim == b'.' || delim == b')')
+        {
+            return match after.get(1) {
+                None => Some(""),
+                Some(b' ' | b'\t') => Some(&trimmed[digits + 2..]),
+                _ => None,
+            };
+        }
+    }
+    None
+}
+
+/// Strips CommonMark blockquote (`>`) and list-item (`- `, `1. `) container prefixes together with
+/// valid leading indentation. Returns `None` for top-level 4+ space indented code lines outside
+/// lists/blockquotes so indented code blocks are not misclassified as fences or reference defs.
+fn md_strip_containers(stripped: &str, in_list: bool) -> Option<(&str, bool)> {
+    let mut cur = stripped;
+    let mut in_container = in_list;
+    loop {
+        if let Some(after_sp) = md_leading_spaces_up_to_3(cur)
+            && let Some(after_gt) = after_sp.strip_prefix('>')
+        {
+            cur = after_gt.strip_prefix(' ').unwrap_or(after_gt);
+            in_container = true;
+            continue;
+        }
+        let trimmed_sp = if in_container {
+            cur.trim_start_matches([' ', '\t'])
+        } else {
+            md_leading_spaces_up_to_3(cur)?
+        };
+        if let Some(after_marker) = md_strip_list_marker(trimmed_sp) {
+            cur = after_marker;
+            in_container = true;
+            continue;
+        }
+        return Some((trimmed_sp, in_container));
+    }
+}
+
+fn md_fence_opener(stripped: &str, in_list: bool) -> Option<(u8, usize, bool)> {
+    let (rest, in_container) = md_strip_containers(stripped, in_list)?;
+    let bytes = rest.as_bytes();
+    let ch = *bytes.first()?;
+    if ch != b'`' && ch != b'~' {
+        return None;
+    }
+    let count = bytes.iter().take_while(|&&b| b == ch).count();
+    if count < 3 {
+        return None;
+    }
+    if ch == b'`' && bytes[count..].contains(&b'`') {
+        return None;
+    }
+    Some((ch, count, in_container))
+}
+
+fn md_fence_closer(stripped: &str, ch: u8, min_len: usize, in_container: bool) -> bool {
+    let mut cur = stripped;
+    while let Some(after_sp) = md_leading_spaces_up_to_3(cur)
+        && let Some(after_gt) = after_sp.strip_prefix('>')
+    {
+        cur = after_gt.strip_prefix(' ').unwrap_or(after_gt);
+    }
+    let rest = if in_container {
+        cur.trim_start_matches([' ', '\t'])
+    } else {
+        match md_leading_spaces_up_to_3(cur) {
+            Some(r) => r,
+            None => return false,
+        }
+    };
+    let bytes = rest.as_bytes();
+    let count = bytes.iter().take_while(|&&b| b == ch).count();
+    count >= min_len && bytes[count..].iter().all(|&b| b == b' ' || b == b'\t')
+}
+
+fn md_is_display_math_fence(stripped: &str, in_list: bool) -> bool {
+    let Some((rest, _)) = md_strip_containers(stripped, in_list) else {
+        return false;
+    };
+    let Some(after) = rest.strip_prefix("$$") else {
+        return false;
+    };
+    after.bytes().all(|b| b == b' ' || b == b'\t')
+}
+
+fn md_is_list_item(stripped: &str) -> bool {
+    let trimmed = stripped.trim_start_matches(' ');
+    md_strip_list_marker(trimmed).is_some()
+}
+
+fn md_is_quote_line(stripped: &str) -> bool {
+    md_leading_spaces_up_to_3(stripped).is_some_and(|rest| rest.starts_with('>'))
+}
+
+fn md_has_link_ref_def(lines: &[(usize, &str)]) -> bool {
+    let mut scan_fence: Option<(u8, usize, bool)> = None;
+    let mut scan_in_list = false;
+    let mut scan_after_blank = false;
+    let mut open_ref_label = false;
+
+    for &(_, line) in lines {
+        let stripped = line.trim_end_matches(['\n', '\r']);
+        let is_blank = stripped.bytes().all(|b| b == b' ' || b == b'\t');
+        if let Some((ch, min_len, in_container)) = scan_fence {
+            if md_fence_closer(stripped, ch, min_len, in_container) {
+                scan_fence = None;
+            }
+            continue;
+        }
+        if is_blank {
+            scan_after_blank = true;
+            open_ref_label = false;
+            continue;
+        }
+        if scan_after_blank
+            && !stripped.starts_with("  ")
+            && !stripped.starts_with('\t')
+            && !md_is_list_item(stripped)
+        {
+            scan_in_list = false;
+        }
+        scan_after_blank = false;
+        if md_is_list_item(stripped) {
+            scan_in_list = true;
+        }
+        if let Some(open) = md_fence_opener(stripped, scan_in_list) {
+            scan_fence = Some(open);
+            open_ref_label = false;
+            continue;
+        }
+        let Some((rest, _)) = md_strip_containers(stripped, scan_in_list) else {
+            open_ref_label = false;
+            continue;
+        };
+        if rest.starts_with('[') {
+            if rest.contains("]:") {
+                return true;
+            }
+            open_ref_label = !rest.contains(']');
+        } else if open_ref_label {
+            if rest.contains("]:") {
+                return true;
+            }
+            if rest.contains(']') {
+                open_ref_label = false;
+            }
+        }
+    }
+    false
+}
+
+/// Splits Markdown into stable top-level byte ranges `(start, end)` at blank lines outside open
+/// code fences, display math blocks, loose lists, blockquotes, and indented continuations.
+/// Keeps documents containing reference link/footnote definitions (`[id]: ...`) intact as one range.
+pub(super) fn split_markdown_block_ranges(src: &str) -> Vec<(usize, usize)> {
+    if src.is_empty() {
+        return Vec::new();
+    }
+    if !src.contains('\n') {
+        return vec![(0, src.len())];
+    }
+
+    let mut lines: Vec<(usize, &str)> = Vec::new();
+    let mut offset = 0usize;
+    for line in src.split_inclusive('\n') {
+        lines.push((offset, line));
+        offset += line.len();
+    }
+
+    // If the document contains reference-style link or footnote definitions outside fences,
+    // keep it intact so cross-block references resolve.
+    if md_has_link_ref_def(&lines) {
+        return vec![(0, src.len())];
+    }
+
+    let mut blocks: Vec<(usize, usize)> = Vec::new();
+    let mut fence: Option<(u8, usize, bool)> = None;
+    let mut in_display_math = false;
+    let mut block_start: Option<usize> = None;
+    let mut block_end = 0usize;
+    let mut in_list = false;
+    let mut in_quote = false;
+
+    for (idx, &(line_start, line)) in lines.iter().enumerate() {
+        let stripped = line.trim_end_matches(['\n', '\r']);
+        let is_blank = stripped.bytes().all(|b| b == b' ' || b == b'\t');
+
+        if let Some((ch, min_len, in_container)) = fence {
+            if block_start.is_none() {
+                block_start = Some(line_start);
+            }
+            block_end = line_start + line.len();
+            if md_fence_closer(stripped, ch, min_len, in_container) {
+                fence = None;
+            }
+            continue;
+        }
+
+        if in_display_math {
+            if block_start.is_none() {
+                block_start = Some(line_start);
+            }
+            block_end = line_start + line.len();
+            if md_is_display_math_fence(stripped, in_list) {
+                in_display_math = false;
+            }
+            continue;
+        }
+
+        if is_blank {
+            if let Some(start) = block_start {
+                let next_non_blank = lines[idx + 1..].iter().find_map(|&(_, next_line)| {
+                    let s = next_line.trim_end_matches(['\n', '\r']);
+                    (!s.bytes().all(|b| b == b' ' || b == b'\t')).then_some(s)
+                });
+                if let Some(next_s) = next_non_blank {
+                    let indented_cont = next_s.starts_with("  ") || next_s.starts_with('\t');
+                    let list_cont = in_list && (md_is_list_item(next_s) || indented_cont);
+                    let quote_cont = in_quote && md_is_quote_line(next_s);
+                    if !indented_cont && !list_cont && !quote_cont {
+                        let slice = src[start..block_end].trim_end_matches(['\n', '\r']);
+                        if !slice.is_empty() {
+                            blocks.push((start, start + slice.len()));
+                        }
+                        block_start = None;
+                        in_list = false;
+                        in_quote = false;
+                    }
+                }
+            }
+            continue;
+        }
+
+        if block_start.is_none() {
+            block_start = Some(line_start);
+            in_list = md_is_list_item(stripped);
+            in_quote = md_is_quote_line(stripped);
+        } else {
+            if md_is_list_item(stripped) {
+                in_list = true;
+            }
+            if md_is_quote_line(stripped) {
+                in_quote = true;
+            }
+        }
+
+        if let Some(open) = md_fence_opener(stripped, in_list) {
+            fence = Some(open);
+        } else if md_is_display_math_fence(stripped, in_list) {
+            in_display_math = true;
+        }
+        block_end = line_start + line.len();
+    }
+
+    if let Some(start) = block_start {
+        let tail = &src[start..];
+        if !tail.trim().is_empty() {
+            blocks.push((start, src.len()));
+        }
+    }
+
+    if blocks.is_empty() {
+        vec![(0, src.len())]
+    } else {
+        blocks
+    }
+}
+
+/// Splits streaming Markdown into stable top-level blocks so settled prefix blocks can be
+/// memoized while only the active tail re-parses per delta.
+fn split_streaming_markdown_blocks(src: &str) -> Vec<&str> {
+    split_markdown_block_ranges(src)
+        .into_iter()
+        .map(|(start, end)| &src[start..end])
+        .collect()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_plain_markdown(
+    k: &Kit,
+    t: &ThemeTokens,
+    normalized: Cow<'_, str>,
+    key_prefix: &str,
+    compact: bool,
+    streaming: bool,
+    reduce_motion: bool,
+    workspace_id: Option<&str>,
+    workspace_path: Option<&str>,
+    citations: &[CitationSource],
+    external_cache: Option<Arc<ImageCache>>,
+    hooks: &MarkdownHooks,
+) -> El {
+    if streaming {
+        let blocks = split_streaming_markdown_blocks(&normalized);
+        if blocks.len() > 1 {
+            let ctx_sig = markdown_context_signature(
+                t,
+                compact,
+                reduce_motion,
+                workspace_id,
+                workspace_path,
+                citations,
+                external_cache.as_ref(),
+                hooks,
+            );
+            let last_idx = blocks.len() - 1;
+            let mut stack = col()
+                .key(format!("{key_prefix}:stream-blocks"))
+                .w_full()
+                .gap(if compact { 6.0 } else { 10.0 });
+            for (idx, block_str) in blocks.into_iter().enumerate() {
+                let block_key = format!("{key_prefix}:sb:{idx}");
+                if idx < last_idx {
+                    let scoped_copied = hooks
+                        .active_copied_key
+                        .as_deref()
+                        .filter(|ck| ck.starts_with(&block_key));
+                    let img_gen = if block_str.contains("![") {
+                        image_decode_generation()
+                    } else {
+                        0
+                    };
+                    let mut h = DefaultHasher::new();
+                    (ctx_sig, block_str, scoped_copied, img_gen).hash(&mut h);
+                    let ver = h.finish();
+                    let block_el = memo(block_key.as_str(), ver, || {
+                        col().w_full().child(desktop_markdown_chunk(
+                            k,
+                            t,
+                            block_str.to_owned(),
+                            &block_key,
+                            compact,
+                            false,
+                            reduce_motion,
+                            workspace_id,
+                            workspace_path,
+                            citations,
+                            external_cache.clone(),
+                            hooks,
+                        ))
+                    });
+                    stack = stack.child(block_el);
+                } else {
+                    let tail_el =
+                        col()
+                            .key(block_key.as_str())
+                            .w_full()
+                            .child(desktop_markdown_chunk(
+                                k,
+                                t,
+                                block_str.to_owned(),
+                                &block_key,
+                                compact,
+                                true,
+                                reduce_motion,
+                                workspace_id,
+                                workspace_path,
+                                citations,
+                                external_cache.clone(),
+                                hooks,
+                            ));
+                    stack = stack.child(tail_el);
+                }
+            }
+            return stack;
+        }
+    }
+
+    desktop_markdown_chunk(
+        k,
+        t,
+        normalized.into_owned(),
+        key_prefix,
+        compact,
+        streaming,
+        reduce_motion,
+        workspace_id,
+        workspace_path,
+        citations,
+        external_cache,
+        hooks,
+    )
+}
+
+enum PreparedMathBlock {
+    DisplayMath(String),
+    StreamingMath(String),
+    Chunks(Vec<MathChunk>),
+}
+
 /// Renders assistant, reasoning, or tool Markdown with syntax-highlighted code copy headers,
 /// native Mermaid diagram frames, workspace path links, external URL confirmation, and citation chips.
 #[allow(clippy::too_many_arguments)]
@@ -308,18 +782,49 @@ pub fn desktop_markdown(
     external_cache: Option<Arc<ImageCache>>,
     hooks: MarkdownHooks,
 ) -> El {
-    let normalized = normalize_citation_links(src, citations);
+    let normalized = normalize_citation_links_cow(src, citations);
     if normalized.contains("$$") {
         let block_segments = split_math_blocks(&normalized, streaming);
-        let fast_plain = matches!(
-            block_segments.as_slice(),
-            [MathBlockSegment::Markdown(md)]
-                if matches!(
-                    split_inline_math_chunks(md, streaming).as_slice(),
-                    [MathChunk::Markdown(inner)] if inner == md
+        let prepared_blocks: Option<Vec<PreparedMathBlock>> = if block_segments.len() == 1
+            && let MathBlockSegment::Markdown(md) = &block_segments[0]
+        {
+            let chunks = split_inline_math_chunks(md, streaming);
+            if matches!(chunks.as_slice(), [MathChunk::Markdown(inner)] if inner == md) {
+                None
+            } else {
+                Some(vec![PreparedMathBlock::Chunks(chunks)])
+            }
+        } else {
+            Some(
+                block_segments
+                    .into_iter()
+                    .map(|seg| match seg {
+                        MathBlockSegment::DisplayMath(tex) => PreparedMathBlock::DisplayMath(tex),
+                        MathBlockSegment::StreamingMath(tex) => {
+                            PreparedMathBlock::StreamingMath(tex)
+                        }
+                        MathBlockSegment::Markdown(md) => {
+                            PreparedMathBlock::Chunks(split_inline_math_chunks(&md, streaming))
+                        }
+                    })
+                    .collect(),
+            )
+        };
+
+        if let Some(prepared_blocks) = prepared_blocks {
+            let ctx_sig = streaming.then(|| {
+                markdown_context_signature(
+                    t,
+                    compact,
+                    reduce_motion,
+                    workspace_id,
+                    workspace_path,
+                    citations,
+                    external_cache.as_ref(),
+                    &hooks,
                 )
-        );
-        if !fast_plain {
+            });
+            let raster_gen = if streaming { raster_generation() } else { 0 };
             let ws_id_cb = workspace_id.map(str::to_owned);
             let ws_path_cb = workspace_path.map(str::to_owned);
             let on_cit_cb = hooks.on_citation_click.clone();
@@ -348,10 +853,26 @@ pub fn desktop_markdown(
                 prev_ended_list = ends_list;
             };
 
-            for (b_idx, block) in block_segments.into_iter().enumerate() {
+            let last_b = prepared_blocks.len().saturating_sub(1);
+            for (b_idx, block) in prepared_blocks.into_iter().enumerate() {
                 match block {
-                    MathBlockSegment::DisplayMath(tex) => {
-                        push_child(
+                    PreparedMathBlock::DisplayMath(tex) => {
+                        let block_key = format!("{key_prefix}:math:{b_idx}");
+                        let node = if let Some(csig) = ctx_sig {
+                            let mut h = DefaultHasher::new();
+                            (csig, &tex, raster_gen).hash(&mut h);
+                            memo(block_key.as_str(), h.finish(), || {
+                                render_display_math_block(
+                                    k,
+                                    t,
+                                    &tex,
+                                    compact,
+                                    hooks.math_scale,
+                                    hooks.math_waker.as_ref(),
+                                    &block_key,
+                                )
+                            })
+                        } else {
                             render_display_math_block(
                                 k,
                                 t,
@@ -359,13 +880,12 @@ pub fn desktop_markdown(
                                 compact,
                                 hooks.math_scale,
                                 hooks.math_waker.as_ref(),
-                                &format!("{key_prefix}:math:{b_idx}"),
-                            ),
-                            false,
-                            false,
-                        );
+                                &block_key,
+                            )
+                        };
+                        push_child(node, false, false);
                     }
-                    MathBlockSegment::StreamingMath(tex) => {
+                    PreparedMathBlock::StreamingMath(tex) => {
                         push_child(
                             render_streaming_math_block(
                                 k,
@@ -377,11 +897,10 @@ pub fn desktop_markdown(
                             false,
                         );
                     }
-                    MathBlockSegment::Markdown(md_chunk) => {
-                        for (c_idx, chunk) in split_inline_math_chunks(&md_chunk, streaming)
-                            .into_iter()
-                            .enumerate()
-                        {
+                    PreparedMathBlock::Chunks(chunks) => {
+                        let last_c = chunks.len().saturating_sub(1);
+                        for (c_idx, chunk) in chunks.into_iter().enumerate() {
+                            let is_settled = streaming && (b_idx < last_b || c_idx < last_c);
                             match chunk {
                                 MathChunk::Markdown(sub_md) => {
                                     if sub_md.trim().is_empty() {
@@ -389,12 +908,41 @@ pub fn desktop_markdown(
                                     }
                                     let starts_list = markdown_starts_with_list_item(&sub_md);
                                     let ends_list = markdown_ends_with_list_item(&sub_md);
-                                    push_child(
-                                        desktop_markdown_chunk(
+                                    let chunk_key = format!("{key_prefix}:mc:{b_idx}:{c_idx}");
+                                    let node = if is_settled && let Some(csig) = ctx_sig {
+                                        let scoped_copied = hooks
+                                            .active_copied_key
+                                            .as_deref()
+                                            .filter(|ck| ck.starts_with(&chunk_key));
+                                        let img_gen = if sub_md.contains("![") {
+                                            image_decode_generation()
+                                        } else {
+                                            0
+                                        };
+                                        let mut h = DefaultHasher::new();
+                                        (csig, &sub_md, scoped_copied, img_gen).hash(&mut h);
+                                        memo(chunk_key.as_str(), h.finish(), || {
+                                            col().w_full().child(desktop_markdown_chunk(
+                                                k,
+                                                t,
+                                                sub_md.clone(),
+                                                &chunk_key,
+                                                compact,
+                                                false,
+                                                reduce_motion,
+                                                workspace_id,
+                                                workspace_path,
+                                                citations,
+                                                external_cache.clone(),
+                                                &hooks,
+                                            ))
+                                        })
+                                    } else {
+                                        render_plain_markdown(
                                             k,
                                             t,
-                                            sub_md,
-                                            &format!("{key_prefix}:mc:{b_idx}:{c_idx}"),
+                                            Cow::Owned(sub_md),
+                                            &chunk_key,
                                             compact,
                                             streaming,
                                             reduce_motion,
@@ -403,10 +951,9 @@ pub fn desktop_markdown(
                                             citations,
                                             external_cache.clone(),
                                             &hooks,
-                                        ),
-                                        starts_list,
-                                        ends_list,
-                                    );
+                                        )
+                                    };
+                                    push_child(node, starts_list, ends_list);
                                 }
                                 MathChunk::IndentedMarkdown {
                                     indent_level,
@@ -416,20 +963,51 @@ pub fn desktop_markdown(
                                     if sub_md.trim().is_empty() {
                                         continue;
                                     }
-                                    let chunk_el = desktop_markdown_chunk(
-                                        k,
-                                        t,
-                                        sub_md,
-                                        &format!("{key_prefix}:imc:{b_idx}:{c_idx}"),
-                                        compact,
-                                        streaming,
-                                        reduce_motion,
-                                        workspace_id,
-                                        workspace_path,
-                                        citations,
-                                        external_cache.clone(),
-                                        &hooks,
-                                    );
+                                    let chunk_key = format!("{key_prefix}:imc:{b_idx}:{c_idx}");
+                                    let chunk_el = if is_settled && let Some(csig) = ctx_sig {
+                                        let scoped_copied = hooks
+                                            .active_copied_key
+                                            .as_deref()
+                                            .filter(|ck| ck.starts_with(&chunk_key));
+                                        let img_gen = if sub_md.contains("![") {
+                                            image_decode_generation()
+                                        } else {
+                                            0
+                                        };
+                                        let mut h = DefaultHasher::new();
+                                        (csig, &sub_md, scoped_copied, img_gen).hash(&mut h);
+                                        memo(chunk_key.as_str(), h.finish(), || {
+                                            col().w_full().child(desktop_markdown_chunk(
+                                                k,
+                                                t,
+                                                sub_md.clone(),
+                                                &chunk_key,
+                                                compact,
+                                                false,
+                                                reduce_motion,
+                                                workspace_id,
+                                                workspace_path,
+                                                citations,
+                                                external_cache.clone(),
+                                                &hooks,
+                                            ))
+                                        })
+                                    } else {
+                                        desktop_markdown_chunk(
+                                            k,
+                                            t,
+                                            sub_md,
+                                            &chunk_key,
+                                            compact,
+                                            streaming,
+                                            reduce_motion,
+                                            workspace_id,
+                                            workspace_path,
+                                            citations,
+                                            external_cache.clone(),
+                                            &hooks,
+                                        )
+                                    };
                                     push_child(
                                         col()
                                             .key(format!("{key_prefix}:imw:{b_idx}:{c_idx}"))
@@ -443,7 +1021,30 @@ pub fn desktop_markdown(
                                 MathChunk::InlineMathParagraph { kind, spans } => {
                                     let is_list =
                                         matches!(kind, MathParagraphKind::ListItem { .. });
-                                    push_child(
+                                    let imp_key = format!("{key_prefix}:imp:{b_idx}:{c_idx}");
+                                    let node = if is_settled && let Some(csig) = ctx_sig {
+                                        let mut h = DefaultHasher::new();
+                                        (csig, &kind, &spans, raster_gen).hash(&mut h);
+                                        let imp_memo_key = match kind {
+                                            MathParagraphKind::Paragraph => {
+                                                format!("{imp_key}:flow")
+                                            }
+                                            _ => imp_key.clone(),
+                                        };
+                                        memo(imp_memo_key.as_str(), h.finish(), || {
+                                            render_inline_math_paragraph(
+                                                k,
+                                                t,
+                                                &kind,
+                                                &spans,
+                                                compact,
+                                                hooks.math_scale,
+                                                hooks.math_waker.as_ref(),
+                                                &imp_key,
+                                                &on_link,
+                                            )
+                                        })
+                                    } else {
                                         render_inline_math_paragraph(
                                             k,
                                             t,
@@ -452,12 +1053,11 @@ pub fn desktop_markdown(
                                             compact,
                                             hooks.math_scale,
                                             hooks.math_waker.as_ref(),
-                                            &format!("{key_prefix}:imp:{b_idx}:{c_idx}"),
+                                            &imp_key,
                                             &on_link,
-                                        ),
-                                        is_list,
-                                        is_list,
-                                    );
+                                        )
+                                    };
+                                    push_child(node, is_list, is_list);
                                 }
                             }
                         }
@@ -471,7 +1071,7 @@ pub fn desktop_markdown(
         }
     }
 
-    desktop_markdown_chunk(
+    render_plain_markdown(
         k,
         t,
         normalized,
@@ -510,7 +1110,6 @@ fn desktop_markdown_chunk(
     let ws_path_img = workspace_path.map(str::to_owned);
     let ws_path_img_decode = ws_path_img.clone();
     let ws_path_code = workspace_path.map(str::to_owned);
-    let cached_code_base: OnceCell<Option<CanonicalBase>> = OnceCell::new();
     let citations_help: Vec<CitationSource> = citations.to_vec();
     let hooks_link = hooks.clone();
 
@@ -546,10 +1145,7 @@ fn desktop_markdown_chunk(
         .selectable(true)
         .scroll_wide(true)
         .code_link(t.accent, move |inline_code| {
-            let base = cached_code_base
-                .get_or_init(|| ws_path_code.as_deref().and_then(CanonicalBase::from_path))
-                .as_ref()?;
-            resolve_workspace_code_link_with_base(inline_code, base)
+            resolve_workspace_code_link(inline_code, ws_path_code.as_deref())
         })
         .link_style(move |dest| {
             if dest.starts_with(CITATION_SCHEME) {
@@ -601,9 +1197,11 @@ fn desktop_markdown_chunk(
                 .max_h(420.0)
                 .radius(8.0)
                 .border(1.0, Color::TRANSPARENT);
-            let can_open = is_allowed_external_url(frame.src)
-                || resolve_safe_workspace_file_link(frame.src, ws_path_img.as_deref()).is_some()
-                || resolve_safe_local_path(frame.src, ws_path_img.as_deref()).is_some();
+            let can_open = !frame.src.trim_start().starts_with("data:")
+                && (is_allowed_external_url(frame.src)
+                    || resolve_safe_workspace_file_link(frame.src, ws_path_img.as_deref())
+                        .is_some()
+                    || resolve_safe_local_path(frame.src, ws_path_img.as_deref()).is_some());
             if !can_open {
                 return styled;
             }
@@ -957,5 +1555,46 @@ mod tests {
             resolve_safe_workspace_file_link("cowork-file:/repo/src/main.rs", None),
             None
         );
+    }
+
+    #[test]
+    fn split_streaming_markdown_blocks_preserves_fences_lists_and_ref_links() {
+        let doc = "Intro para.\n\n```rust\nfn a() {\n\n    1\n}\n```\n\n- one\n\n- two\n\nTail";
+        let blocks = split_streaming_markdown_blocks(doc);
+        assert_eq!(blocks.len(), 4);
+        assert_eq!(blocks[0], "Intro para.");
+        assert!(blocks[1].starts_with("```rust") && blocks[1].ends_with("```"));
+        assert!(blocks[2].contains("- one") && blocks[2].contains("- two"));
+        assert_eq!(blocks[3], "Tail");
+
+        let ref_doc = "See [docs][ref].\n\n[ref]: https://example.com\n";
+        assert_eq!(split_streaming_markdown_blocks(ref_doc), vec![ref_doc]);
+
+        // List-item-line and 4-space list-nested code fences must not split mid-fence.
+        let list_fence = "Intro\n\n- ```rust\n  fn a() {}\n\nfn b() {}\n  ```\n\nTail";
+        let lf_blocks = split_streaming_markdown_blocks(list_fence);
+        assert_eq!(lf_blocks.len(), 3);
+        assert_eq!(lf_blocks[0], "Intro");
+        assert!(lf_blocks[1].contains("fn a()") && lf_blocks[1].contains("fn b()"));
+        assert_eq!(lf_blocks[2], "Tail");
+
+        let nested_fence = "10. Steps:\n\n    ```rust\n    fn a() {}\n\nfn b() {}\n    ```\n\nDone";
+        let nf_blocks = split_streaming_markdown_blocks(nested_fence);
+        assert_eq!(nf_blocks.len(), 2);
+        assert!(nf_blocks[0].contains("fn a()") && nf_blocks[0].contains("fn b()"));
+        assert_eq!(nf_blocks[1], "Done");
+
+        // Indented, blockquoted, and multi-line link reference definitions keep doc whole.
+        let multi_ref = "See [multi\nline].\n\n[multi\nline]: https://example.com\n";
+        assert_eq!(split_streaming_markdown_blocks(multi_ref), vec![multi_ref]);
+
+        let quoted_ref = "> [r]: https://example.com\n\nSee [docs][r].\n";
+        assert_eq!(
+            split_streaming_markdown_blocks(quoted_ref),
+            vec![quoted_ref]
+        );
+
+        let list_ref = "- item\n\n    [r]: https://example.com\n\nSee [docs][r].\n";
+        assert_eq!(split_streaming_markdown_blocks(list_ref), vec![list_ref]);
     }
 }

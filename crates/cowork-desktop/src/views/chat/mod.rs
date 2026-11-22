@@ -26,24 +26,54 @@ pub mod state;
 pub use canvas::{canvas_pane, is_canvas_document_path, is_canvas_maximized};
 pub use state::ChatUiState;
 
+use std::cell::Cell;
+
 use rune::{Cx, col, row};
 use rune_kit::Kit;
 
 use crate::state::{AppState, ServerLifecycleState, ThreadStatus};
-use crate::theme;
+use crate::theme::{self, AccentPalette, ThemeTokens};
 use crate::views::SubviewOutput;
 
 use self::agent_run_viewer::build_agent_run_drawer;
+use self::attachments::shared_waker_image_cache;
 use self::components::{locked_task_bar, read_only_notice_bar};
 use self::dialogs::{build_cancel_subagents_dialog, build_transcript_recovery_banner};
-use self::feed::{ChatFeedProps, FeedSource, build_chat_feed};
+use self::feed::{ChatFeedProps, FeedSource, build_chat_feed_surface};
 use self::feed_row::render_active_feed_popovers;
 use self::model::workspace_is_reconnecting;
+
+type ChatTokensCacheKey = (bool, bool, bool, AccentPalette);
+
+thread_local! {
+    static CACHED_CHAT_TOKENS: Cell<Option<(ChatTokensCacheKey, ThemeTokens)>> =
+        const { Cell::new(None) };
+}
+
+pub(super) fn resolve_cached_tokens(
+    dark: bool,
+    reduced_transparency: bool,
+    high_contrast: bool,
+    accent: AccentPalette,
+) -> ThemeTokens {
+    let key = (dark, reduced_transparency, high_contrast, accent);
+    CACHED_CHAT_TOKENS.with(|slot| {
+        if let Some((cached_key, cached_tokens)) = slot.get()
+            && cached_key == key
+        {
+            return cached_tokens;
+        }
+        let tokens =
+            theme::resolve_tokens_with_accent(dark, reduced_transparency, high_contrast, accent);
+        slot.set(Some((key, tokens)));
+        tokens
+    })
+}
 
 /// Renders the active chat landing view or thread transcript + composer + subagent drawer + overlays.
 pub fn view(s: &AppState, cx: &mut Cx<AppState>, k: &Kit) -> SubviewOutput {
     let dark = s.effective_dark(cx.system_dark());
-    let t = theme::resolve_tokens_with_accent(
+    let t = resolve_cached_tokens(
         dark,
         s.desktop_settings.reduced_transparency,
         s.desktop_settings.high_contrast,
@@ -79,7 +109,7 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>, k: &Kit) -> SubviewOutput {
             ));
         }
 
-        let feed_el = build_chat_feed(
+        let feed_wrap = build_chat_feed_surface(
             s,
             k,
             &t,
@@ -96,20 +126,14 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>, k: &Kit) -> SubviewOutput {
                     .unwrap_or(&EMPTY_INTERACTION_ERRORS),
                 workspace_id: Some(thread.workspace_id.as_str()),
                 workspace_path: ws.map(|w| w.path.as_str()),
-                external_cache: None,
+                external_cache: shared_waker_image_cache(s.services.waker.as_ref()),
                 is_agent_viewer: false,
                 scroll_area_key: "chat-feed-area",
                 viewport_key: "chat-feed-scroll",
                 frame_key: "chat-feed-frame",
             },
+            "chat-feed-surface",
         );
-
-        let feed_wrap = col()
-            .key("chat-feed-surface")
-            .w_full()
-            .grow(1.0)
-            .min_h(0.0)
-            .child(feed_el);
         main_col = main_col.child(feed_wrap);
 
         if let Some(failure) = rt.and_then(|r| r.transcript_delivery_failure.as_ref()) {

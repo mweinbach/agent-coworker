@@ -1,11 +1,14 @@
 //! Collapsible activity group timeline, clustered tools, reasoning sections, and native `DiffView` blocks.
 
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 use std::sync::Arc;
 
-use rune::{Cursor, Direction, El, ImageCache, Tx, col, icon, row, spacer, text};
+use rune::{Cursor, Direction, El, ImageCache, Tx, col, icon, memo, row, spacer, text};
 use rune_kit::diff::{DiffMode, DiffState, DiffView, FileDiff, LineKind};
 use rune_kit::{Button, ButtonVariant, ControlSize, Kit};
+use serde::Serialize;
 use serde_json::Value;
 
 use crate::actions::{Action, ChatAction, ShellAction};
@@ -20,8 +23,13 @@ use super::icons;
 use super::markdown::{MarkdownHooks, desktop_markdown};
 use super::model::{
     ActivityGroup, ActivityNode, active_child_agent_labels, extract_tool_diff,
-    format_duration_compact, format_tool_card, middle_truncate_path, parse_reasoning_sections,
-    tool_icon_category, truncate_text,
+    format_duration_compact, format_tool_card, format_tool_summary, item_is_streaming,
+    middle_truncate_path, parse_reasoning_sections, tool_icon_category, truncate_text,
+};
+use super::row_version::{
+    hash_feed_item_or_rev, node_agents_signature, node_copied_key, node_has_active_diff_state,
+    node_has_images, node_has_math, node_interactions_signature, node_ui_signature,
+    resolve_item_rev_by_ptr,
 };
 
 const RAW_JSON_PREVIEW_LIMIT: usize = 12_000;
@@ -31,10 +39,68 @@ pub struct ActivityCardContext<'a> {
     pub thread_id: &'a str,
     pub workspace_id: Option<&'a str>,
     pub workspace_path: Option<&'a str>,
+    pub feed: &'a [FeedItem],
+    pub item_revs: &'a [u64],
     pub pending_interactions: &'a [ChatInteraction],
     pub agents: &'a [ThreadAgentSummary],
     pub external_cache: Option<Arc<ImageCache>>,
     pub copied_key: Option<&'a str>,
+    pub shared_version: u64,
+}
+
+fn node_is_streaming(node: &ActivityNode<'_>) -> bool {
+    match node {
+        ActivityNode::Reasoning(item) | ActivityNode::ProgressMessage(item) => {
+            item_is_streaming(item)
+        }
+        ActivityNode::ToolCluster { items, .. } => items.iter().copied().any(item_is_streaming),
+    }
+}
+
+fn node_memo_version(
+    s: &AppState,
+    group_id: &str,
+    pos: (usize, usize),
+    node: &ActivityNode<'_>,
+    ctx: &ActivityCardContext<'_>,
+) -> u64 {
+    let mut h = DefaultHasher::new();
+    let (node_idx, total_nodes) = pos;
+    (ctx.shared_version, node_idx, node_idx + 1 == total_nodes).hash(&mut h);
+    match node {
+        ActivityNode::Reasoning(item) => {
+            0u8.hash(&mut h);
+            let rev = resolve_item_rev_by_ptr(ctx.feed, ctx.item_revs, item);
+            hash_feed_item_or_rev(item, rev, &mut h);
+        }
+        ActivityNode::ProgressMessage(item) => {
+            1u8.hash(&mut h);
+            let rev = resolve_item_rev_by_ptr(ctx.feed, ctx.item_revs, item);
+            hash_feed_item_or_rev(item, rev, &mut h);
+        }
+        ActivityNode::ToolCluster {
+            cluster_id,
+            title,
+            items,
+        } => {
+            (2u8, cluster_id.as_str(), title.as_str(), items.len()).hash(&mut h);
+            for item in items {
+                let rev = resolve_item_rev_by_ptr(ctx.feed, ctx.item_revs, item);
+                hash_feed_item_or_rev(item, rev, &mut h);
+            }
+        }
+    }
+    node_copied_key(ctx.copied_key, node).hash(&mut h);
+    node_ui_signature(&s.chat_ui, group_id, node).hash(&mut h);
+    node_interactions_signature(ctx.pending_interactions, node).hash(&mut h);
+    node_agents_signature(ctx.agents, node).hash(&mut h);
+    if node_has_math(node) {
+        super::math::raster_generation().hash(&mut h);
+    }
+    if node_has_images(node) {
+        super::attachments::image_decode_generation().hash(&mut h);
+    }
+    h.finish()
 }
 
 /// Renders one collapsible `ActivityGroup` card (either compact live run or completed separator).
@@ -64,21 +130,30 @@ pub fn build_activity_group_card(
 
     if expanded && !group.nodes.is_empty() {
         let total_nodes = group.nodes.len();
+        let memoize_settled_children = group.is_live
+            || super::row_version::group_has_active_diff_state(
+                &s.chat_ui,
+                group,
+                ctx.pending_interactions,
+            );
         let mut timeline = col()
             .key(format!("group-body:{}", group.id))
             .w_full()
             .pl(6.0)
             .gap(2.0);
         for (idx, node) in group.nodes.iter().enumerate() {
-            timeline = timeline.child(build_activity_node(
-                s,
-                k,
-                t,
-                &group.id,
-                (idx, total_nodes),
-                node,
-                ctx,
-            ));
+            let child = if memoize_settled_children
+                && !node_is_streaming(node)
+                && !node_has_active_diff_state(&s.chat_ui, node, ctx.pending_interactions)
+            {
+                let ver = node_memo_version(s, &group.id, (idx, total_nodes), node, ctx);
+                memo(format!("{}:node:{idx}", group.id), ver, || {
+                    build_activity_node(s, k, t, &group.id, (idx, total_nodes), node, ctx)
+                })
+            } else {
+                build_activity_node(s, k, t, &group.id, (idx, total_nodes), node, ctx)
+            };
+            timeline = timeline.child(child);
         }
         card = card.child(timeline);
     }
@@ -568,26 +643,27 @@ fn build_tool_cluster_card(
         None
     };
 
-    let preview_lines: Vec<String> = items
-        .iter()
-        .rev()
-        .take(2)
-        .filter_map(|item| match item {
-            FeedItem::Tool {
-                tool_name,
-                input,
-                output,
-                error,
-                status,
-                ..
-            } => {
-                let fmt =
-                    format_tool_card(tool_name, input, output.as_ref(), error.as_deref(), *status);
-                (!fmt.subtitle.is_empty()).then_some(fmt.subtitle)
-            }
-            _ => None,
-        })
-        .collect();
+    let preview_lines: Vec<String> = if expanded {
+        Vec::new()
+    } else {
+        items
+            .iter()
+            .rev()
+            .take(2)
+            .filter_map(|item| match item {
+                FeedItem::Tool {
+                    tool_name,
+                    input,
+                    status,
+                    ..
+                } => {
+                    let (_, subtitle) = format_tool_summary(tool_name, input, *status);
+                    (!subtitle.is_empty()).then_some(subtitle)
+                }
+                _ => None,
+            })
+            .collect()
+    };
 
     let chevron = if expanded {
         &icons::CHEVRON_DOWN
@@ -705,7 +781,6 @@ fn build_tool_card(
 
     let default_open = awaiting_approval || matches!(status, ToolRunStatus::Failed);
     let expanded = s.chat_ui.is_tool_expanded(id, default_open);
-    let diff_files = extract_tool_diff(tool_name, input, output.as_ref(), diff.as_deref());
 
     let display_subtitle = if !formatted.subtitle.is_empty() {
         formatted.subtitle.clone()
@@ -714,7 +789,7 @@ fn build_tool_card(
     };
 
     let toggle_id = id.clone();
-    let preload_diff = diff_files.clone();
+    let toggle_thread_id = ctx.thread_id.to_string();
     let chevron = if expanded {
         &icons::CHEVRON_DOWN
     } else {
@@ -749,11 +824,8 @@ fn build_tool_card(
         .label(formatted.title.clone())
         .on_press(move |s: &mut AppState| {
             s.chat_ui.toggle_tool(&toggle_id, expanded);
-            if !expanded && let Some(files) = &preload_diff {
-                s.chat_ui
-                    .tool_diff_states
-                    .entry(toggle_id.clone())
-                    .or_insert_with(|| DiffState::new(files.clone()));
+            if !expanded {
+                ensure_tool_diff_state_loaded(s, &toggle_thread_id, &toggle_id);
             }
         })
         .child(
@@ -896,8 +968,12 @@ fn build_tool_card(
             ));
         }
 
-        if let Some(files) = diff_files {
-            details_col = details_col.child(build_diff_section(s, k, t, id, &files));
+        if s.chat_ui.tool_diff_states.contains_key(id) {
+            details_col = details_col.child(build_diff_section_interactive(s, k, t, id));
+        } else if let Some(files) =
+            extract_tool_diff(tool_name, input, output.as_ref(), diff.as_deref())
+        {
+            details_col = details_col.child(build_diff_section_preview(k, t, id, &files));
         }
 
         details_col = details_col.child(build_raw_io_section(
@@ -916,105 +992,166 @@ fn build_tool_card(
     card
 }
 
-fn build_diff_section(
-    s: &AppState,
-    k: &Kit,
-    t: &ThemeTokens,
-    tool_id: &str,
-    files: &[FileDiff],
-) -> El {
+fn diff_meta_counts(files: &[FileDiff]) -> (usize, usize) {
     let total_lines: usize = files
         .iter()
         .map(|f| f.hunks.iter().map(|h| h.lines.len() + 2).sum::<usize>() + 2)
         .sum();
-    let bounded_h = ((total_lines as f32) * 20.0 + 52.0).clamp(120.0, 320.0);
+    (files.len(), total_lines)
+}
 
-    if let Some(diff_state) = s.chat_ui.tool_diff_states.get(tool_id) {
-        let current_mode = diff_state.mode();
-        let id_unified = tool_id.to_string();
-        let id_split = tool_id.to_string();
-        let id_get = tool_id.to_string();
-        let id_get_mut = tool_id.to_string();
-
-        let mode_bar = row()
-            .w_full()
-            .items_center()
-            .gap(6.0)
-            .child(
-                text(format!(
-                    "{} {}",
-                    files.len(),
-                    if files.len() == 1 {
-                        "file changed"
-                    } else {
-                        "files changed"
-                    }
-                ))
-                .font(k.ty.small_medium)
-                .color(t.text_muted),
-            )
-            .child(spacer())
-            .child(
-                Button::new("Unified")
-                    .variant(if current_mode == DiffMode::Unified {
-                        ButtonVariant::Neutral
-                    } else {
-                        ButtonVariant::Ghost
-                    })
-                    .control_size(ControlSize::Small)
-                    .on_press(move |s: &mut AppState| {
-                        if let Some(st) = s.chat_ui.tool_diff_states.get_mut(&id_unified) {
-                            st.set_mode(DiffMode::Unified);
-                        }
-                    })
-                    .build(k)
-                    .key(format!("diff-unified:{tool_id}")),
-            )
-            .child(
-                Button::new("Split")
-                    .variant(if current_mode == DiffMode::Split {
-                        ButtonVariant::Neutral
-                    } else {
-                        ButtonVariant::Ghost
-                    })
-                    .control_size(ControlSize::Small)
-                    .on_press(move |s: &mut AppState| {
-                        if let Some(st) = s.chat_ui.tool_diff_states.get_mut(&id_split) {
-                            st.set_mode(DiffMode::Split);
-                        }
-                    })
-                    .build(k)
-                    .key(format!("diff-split:{tool_id}")),
-            );
-
-        let diff_view = DiffView::new(
-            move |s: &AppState| {
-                s.chat_ui
-                    .tool_diff_states
-                    .get(&id_get)
-                    .unwrap_or(&s.chat_ui.empty_diff_state)
-            },
-            move |s: &mut AppState| {
-                s.chat_ui
-                    .tool_diff_states
-                    .entry(id_get_mut.clone())
-                    .or_insert_with(|| DiffState::new(Vec::new()))
-            },
-        )
-        .key(format!("diffview:{tool_id}"))
-        .build(s, k);
-
-        return col().w_full().gap(6.0).child(mode_bar).child(
-            col()
-                .w_full()
-                .h(bounded_h)
-                .min_h(120.0)
-                .radius(8.0)
-                .border(1.0, t.border_muted)
-                .child(diff_view),
-        );
+fn find_tool_item_in_state<'a>(
+    s: &'a AppState,
+    thread_id: &str,
+    tool_id: &str,
+) -> Option<&'a FeedItem> {
+    let find_in = |feed: &'a [FeedItem]| {
+        feed.iter()
+            .rev()
+            .find(|item| matches!(item, FeedItem::Tool { id, .. } if id == tool_id))
+    };
+    if let Some(agent_id) = thread_id.strip_prefix("agent:") {
+        if let Some(rt) = s.thread_runtime_by_id.get(agent_id)
+            && let Some(found) = find_in(&rt.feed)
+        {
+            return Some(found);
+        }
+        if let Some(viewer) = s.agent_viewer.as_ref()
+            && let Some(rt) = s.thread_runtime_by_id.get(&viewer.thread_id)
+            && let Some(feed) = rt.agent_run_feeds.get(agent_id)
+            && let Some(found) = find_in(feed)
+        {
+            return Some(found);
+        }
     }
+    s.thread_runtime_by_id
+        .get(thread_id)
+        .and_then(|rt| find_in(&rt.feed))
+}
 
+fn ensure_tool_diff_state_loaded(s: &mut AppState, thread_id: &str, tool_id: &str) {
+    if s.chat_ui.tool_diff_states.contains_key(tool_id) {
+        return;
+    }
+    let extracted = find_tool_item_in_state(s, thread_id, tool_id).and_then(|item| match item {
+        FeedItem::Tool {
+            tool_name,
+            input,
+            output,
+            diff,
+            ..
+        } => extract_tool_diff(tool_name, input, output.as_ref(), diff.as_deref()),
+        _ => None,
+    });
+    if let Some(files) = extracted {
+        let meta = diff_meta_counts(&files);
+        s.chat_ui
+            .tool_diff_states
+            .insert(tool_id.to_string(), DiffState::new(files));
+        s.chat_ui.tool_diff_meta.insert(tool_id.to_string(), meta);
+        s.chat_ui.bump_tool_diff_rev(tool_id);
+    }
+}
+
+fn build_diff_section_interactive(s: &AppState, k: &Kit, t: &ThemeTokens, tool_id: &str) -> El {
+    let Some(diff_state) = s.chat_ui.tool_diff_states.get(tool_id) else {
+        return col().w_full();
+    };
+    let (file_count, total_lines) = s
+        .chat_ui
+        .tool_diff_meta
+        .get(tool_id)
+        .copied()
+        .unwrap_or((1, 10));
+    let bounded_h = ((total_lines as f32) * 20.0 + 52.0).clamp(120.0, 320.0);
+    let current_mode = diff_state.mode();
+    let id_unified = tool_id.to_string();
+    let id_split = tool_id.to_string();
+    let id_get = tool_id.to_string();
+    let id_get_mut = tool_id.to_string();
+
+    let mode_bar = row()
+        .w_full()
+        .items_center()
+        .gap(6.0)
+        .child(
+            text(format!(
+                "{file_count} {}",
+                if file_count == 1 {
+                    "file changed"
+                } else {
+                    "files changed"
+                }
+            ))
+            .font(k.ty.small_medium)
+            .color(t.text_muted),
+        )
+        .child(spacer())
+        .child(
+            Button::new("Unified")
+                .variant(if current_mode == DiffMode::Unified {
+                    ButtonVariant::Neutral
+                } else {
+                    ButtonVariant::Ghost
+                })
+                .control_size(ControlSize::Small)
+                .on_press(move |s: &mut AppState| {
+                    if let Some(st) = s.chat_ui.tool_diff_states.get_mut(&id_unified) {
+                        st.set_mode(DiffMode::Unified);
+                        s.chat_ui.bump_tool_diff_rev(&id_unified);
+                    }
+                })
+                .build(k)
+                .key(format!("diff-unified:{tool_id}")),
+        )
+        .child(
+            Button::new("Split")
+                .variant(if current_mode == DiffMode::Split {
+                    ButtonVariant::Neutral
+                } else {
+                    ButtonVariant::Ghost
+                })
+                .control_size(ControlSize::Small)
+                .on_press(move |s: &mut AppState| {
+                    if let Some(st) = s.chat_ui.tool_diff_states.get_mut(&id_split) {
+                        st.set_mode(DiffMode::Split);
+                        s.chat_ui.bump_tool_diff_rev(&id_split);
+                    }
+                })
+                .build(k)
+                .key(format!("diff-split:{tool_id}")),
+        );
+
+    let diff_view = DiffView::new(
+        move |s: &AppState| {
+            s.chat_ui
+                .tool_diff_states
+                .get(&id_get)
+                .unwrap_or(&s.chat_ui.empty_diff_state)
+        },
+        move |s: &mut AppState| {
+            s.chat_ui
+                .tool_diff_states
+                .entry(id_get_mut.clone())
+                .or_insert_with(|| DiffState::new(Vec::new()))
+        },
+    )
+    .key(format!("diffview:{tool_id}"))
+    .build(s, k);
+
+    col().w_full().gap(6.0).child(mode_bar).child(
+        col()
+            .w_full()
+            .h(bounded_h)
+            .min_h(120.0)
+            .radius(8.0)
+            .border(1.0, t.border_muted)
+            .child(diff_view),
+    )
+}
+
+fn build_diff_section_preview(k: &Kit, t: &ThemeTokens, tool_id: &str, files: &[FileDiff]) -> El {
+    let meta = diff_meta_counts(files);
     // Fallback compact static preview when pre-expanded before first user click.
     let init_id = tool_id.to_string();
     let init_files = files.to_vec();
@@ -1043,6 +1180,8 @@ fn build_diff_section(
                             s.chat_ui
                                 .tool_diff_states
                                 .insert(init_id.clone(), DiffState::new(init_files.clone()));
+                            s.chat_ui.tool_diff_meta.insert(init_id.clone(), meta);
+                            s.chat_ui.bump_tool_diff_rev(&init_id);
                         })
                         .build(k)
                         .key(format!("diff-open:{tool_id}")),
@@ -1115,11 +1254,17 @@ fn build_raw_io_section(
         return root;
     }
 
-    let payload = serde_json::json!({
-        "input": input,
-        "output": output.unwrap_or(&Value::Null),
-    });
-    let pretty = serde_json::to_string_pretty(&payload).unwrap_or_else(|_| payload.to_string());
+    #[derive(Serialize)]
+    struct RawToolPayload<'a> {
+        input: &'a Value,
+        output: &'a Value,
+    }
+    let payload = RawToolPayload {
+        input,
+        output: output.unwrap_or(&Value::Null),
+    };
+    let pretty = serde_json::to_string_pretty(&payload)
+        .unwrap_or_else(|_| serde_json::to_string(&payload).unwrap_or_default());
     let truncated = truncate_text(&pretty, RAW_JSON_PREVIEW_LIMIT);
     let copy_key = format!("tool:{tool_id}:raw");
     let copied = copied_key == Some(copy_key.as_str());
@@ -1182,7 +1327,7 @@ fn extract_child_agent_ref(
     output: Option<&Value>,
     agents: &[ThreadAgentSummary],
 ) -> Option<(String, Option<String>)> {
-    if !tool_name.to_ascii_lowercase().contains("agent") {
+    if !super::model::ascii_contains_ignore_case(tool_name, "agent") {
         return None;
     }
     let id_from_val = |v: &Value| -> Option<String> {
@@ -1209,9 +1354,11 @@ fn extract_child_agent_ref(
 fn activity_markdown_hooks(s: &AppState, copied_key: Option<&str>) -> MarkdownHooks {
     let copied_owned = copied_key.map(str::to_owned);
     MarkdownHooks {
-        is_copied: Some(Rc::new(move |key: &str| {
-            copied_owned.as_deref() == Some(key)
+        is_copied: Some(Rc::new({
+            let copied_cb = copied_owned.clone();
+            move |key: &str| copied_cb.as_deref() == Some(key)
         })),
+        active_copied_key: copied_owned,
         on_copy: Some(Rc::new(|s: &mut AppState, key: String, _tx: &mut Tx| {
             s.chat_ui.mark_copied(&key, s.now_secs);
         })),

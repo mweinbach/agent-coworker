@@ -4,13 +4,17 @@
 //! Markdown formatting toolbar, dirty/save/conflict/truncation states, native Save As
 //! dialog, external reload confirmation, and `<canvas_request>` collaborative edits.
 
+use std::borrow::Cow;
+use std::cell::RefCell;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
+use std::sync::Arc;
 
 use rune::{
-    Color, Cx, El, Key, KeyEvent, ScrollSpec, TextEdit, TextStyle, Tx, auto_grow, col, el, icon,
-    row, spacer, text, text_input,
+    Color, Cx, El, GrowthSpec, ImageCache, Key, KeyEvent, ScrollSpec, TextEdit, TextStyle, Tx,
+    auto_grow, col, el, icon, memo, row, spacer, text, text_input,
 };
 use rune_kit::{
     Button, ButtonVariant, ControlSize, Dialog, IconButton, IconButtonVariant, Kit,
@@ -20,19 +24,22 @@ use rune_kit::{
 use crate::actions::{Action, ChatAction, NativeAction, ShellAction};
 use crate::native::dialogs::build_save_canvas_dialog;
 use crate::state::{AppState, CanvasDocumentStatus, ServerLifecycleState, ThreadBusyPolicy};
-use crate::theme::{self, ThemeTokens};
+use crate::theme::ThemeTokens;
 use crate::views::SubviewOutput;
 
+use super::attachments::{image_decode_generation, shared_waker_image_cache};
 use super::components::{StatusPillTone, status_pill};
 use super::icons;
-use super::markdown::{MarkdownHooks, desktop_markdown};
+use super::markdown::{MarkdownHooks, desktop_markdown, split_markdown_block_ranges};
+use super::math::raster_generation;
 use super::model::{
-    build_mention_catalog, extract_references_from_text, workspace_is_reconnecting,
+    cached_mention_catalog_for_state, extract_references_from_text, workspace_is_reconnecting,
 };
+use super::resolve_cached_tokens;
 use super::state::{CanvasLifecycleKind, CanvasTab, CanvasUiState};
 
 /// Document file categories rendered inside the Canvas pane.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum CanvasFileKind {
     Markdown,
     Text,
@@ -433,7 +440,7 @@ pub fn build_canvas_document_prompt(
     lines.join("\n")
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Hash)]
 struct LiveSessionMeta {
     document_id: String,
     generation: u64,
@@ -447,9 +454,10 @@ struct ResolvedCanvasDoc {
     workspace_id: String,
     path: String,
     title: String,
-    disk_content: String,
-    draft_content: String,
+    disk_content: Rc<str>,
+    draft_content: Rc<str>,
     disk_hash: u64,
+    draft_hash: u64,
     kind: CanvasFileKind,
     truncated: bool,
     lifecycle: CanvasLifecycleKind,
@@ -463,6 +471,57 @@ fn hash_text(text: &str) -> u64 {
     hasher.finish()
 }
 
+const VIRTUALIZE_MARKDOWN_MIN_BYTES: usize = 2048;
+
+type CanvasTextSlot = Option<(u64, Rc<str>)>;
+type CanvasBlockRanges = Arc<Vec<(usize, usize)>>;
+type CanvasBlockRangesSlot = Option<(u64, Rc<str>, CanvasBlockRanges)>;
+
+thread_local! {
+    /// Three-slot `Rc<str>` cache (`0 = disk_content`, `1 = draft_content`, `2 = live_text`) so
+    /// steady-state commits never reallocate 20 KB+ Canvas document buffers while remaining 100%
+    /// exact via hash + equality check.
+    static CANVAS_TEXT_CACHE: RefCell<[CanvasTextSlot; 3]> =
+        const { RefCell::new([None, None, None]) };
+    /// Two-slot cache of top-level Markdown block byte ranges verified by hash + exact string match.
+    static CANVAS_BLOCK_RANGES_CACHE: RefCell<[CanvasBlockRangesSlot; 2]> =
+        const { RefCell::new([None, None]) };
+}
+
+fn cached_canvas_text(slot: usize, text: &str) -> (u64, Rc<str>) {
+    let hash = hash_text(text);
+    CANVAS_TEXT_CACHE.with(|cache| {
+        let mut slots = cache.borrow_mut();
+        if let Some((cached_hash, cached_rc)) = slots[slot].as_ref()
+            && *cached_hash == hash
+            && cached_rc.as_ref() == text
+        {
+            return (hash, Rc::clone(cached_rc));
+        }
+        let rc: Rc<str> = Rc::from(text);
+        slots[slot] = Some((hash, Rc::clone(&rc)));
+        (hash, rc)
+    })
+}
+
+fn cached_canvas_block_ranges(hash: u64, text_rc: &Rc<str>) -> CanvasBlockRanges {
+    CANVAS_BLOCK_RANGES_CACHE.with(|cache| {
+        let mut slots = cache.borrow_mut();
+        for slot in slots.iter() {
+            if let Some((h, cached_rc, ranges)) = slot.as_ref()
+                && *h == hash
+                && (Rc::ptr_eq(cached_rc, text_rc) || cached_rc.as_ref() == text_rc.as_ref())
+            {
+                return Arc::clone(ranges);
+            }
+        }
+        let ranges = Arc::new(split_markdown_block_ranges(text_rc.as_ref()));
+        slots[1] = slots[0].take();
+        slots[0] = Some((hash, Rc::clone(text_rc), Arc::clone(&ranges)));
+        ranges
+    })
+}
+
 fn title_for_path(path: &str) -> String {
     Path::new(path)
         .file_name()
@@ -472,7 +531,7 @@ fn title_for_path(path: &str) -> String {
         .to_string()
 }
 
-fn resolve_active_canvas_doc(s: &AppState) -> Option<ResolvedCanvasDoc> {
+fn resolve_active_canvas_doc(s: &AppState) -> Option<Rc<ResolvedCanvasDoc>> {
     if let Some(ref fx) = s.chat_ui.canvas.fixture {
         let kind = if fx.is_markdown {
             CanvasFileKind::Markdown
@@ -484,21 +543,24 @@ fn resolve_active_canvas_doc(s: &AppState) -> Option<ResolvedCanvasDoc> {
         } else {
             fx.title.clone()
         };
-        return Some(ResolvedCanvasDoc {
+        let (disk_hash, disk_content) = cached_canvas_text(0, &fx.content);
+        let draft_content = Rc::clone(&disk_content);
+        return Some(Rc::new(ResolvedCanvasDoc {
             doc_identity: format!("fixture\0{}\0{}", fx.workspace_id, fx.path),
             session_key: format!("fixture\0{}\0{}", fx.workspace_id, fx.path),
             workspace_id: fx.workspace_id.clone(),
             path: fx.path.clone(),
             title,
-            disk_hash: hash_text(&fx.content),
-            disk_content: fx.content.clone(),
-            draft_content: fx.content.clone(),
+            disk_hash,
+            draft_hash: disk_hash,
+            disk_content,
+            draft_content,
             kind,
             truncated: fx.truncated,
             lifecycle: fx.lifecycle,
             error_message: fx.message.clone(),
             live_session: None,
-        });
+        }));
     }
 
     // Electron parity (#110): Canvas activates when `feature_flags["canvas"] == true`
@@ -531,7 +593,13 @@ fn resolve_active_canvas_doc(s: &AppState) -> Option<ResolvedCanvasDoc> {
             | CanvasDocumentStatus::Conflict { .. } => 2u8,
         };
         let kind = classify_canvas_path(&doc.path).unwrap_or(CanvasFileKind::Text);
-        return Some(ResolvedCanvasDoc {
+        let (disk_hash, disk_content) = cached_canvas_text(0, &doc.disk_content);
+        let (draft_hash, draft_content) = if doc.draft_content == doc.disk_content {
+            (disk_hash, Rc::clone(&disk_content))
+        } else {
+            cached_canvas_text(1, &doc.draft_content)
+        };
+        return Some(Rc::new(ResolvedCanvasDoc {
             doc_identity: format!("session\0{}\0{}", doc.workspace_id, doc.document_id),
             session_key: format!(
                 "session\0{}\0{}\0{}\0{ready_phase}",
@@ -540,9 +608,10 @@ fn resolve_active_canvas_doc(s: &AppState) -> Option<ResolvedCanvasDoc> {
             workspace_id: doc.workspace_id.clone(),
             path: doc.path.clone(),
             title: title_for_path(&doc.path),
-            disk_hash: hash_text(&doc.disk_content),
-            disk_content: doc.disk_content.clone(),
-            draft_content: doc.draft_content.clone(),
+            disk_hash,
+            draft_hash,
+            disk_content,
+            draft_content,
             kind,
             truncated: doc.truncated,
             lifecycle,
@@ -552,7 +621,7 @@ fn resolve_active_canvas_doc(s: &AppState) -> Option<ResolvedCanvasDoc> {
                 generation: doc.generation,
                 dirty: doc.dirty(),
             }),
-        });
+        }));
     }
 
     let preview = s.active_file_preview.as_ref()?;
@@ -560,7 +629,9 @@ fn resolve_active_canvas_doc(s: &AppState) -> Option<ResolvedCanvasDoc> {
         return None;
     }
     let kind = classify_canvas_path(&preview.path)?;
-    let disk_content = preview.content.clone().unwrap_or_default();
+    let raw_content = preview.content.as_deref().unwrap_or("");
+    let (disk_hash, disk_content) = cached_canvas_text(0, raw_content);
+    let draft_content = Rc::clone(&disk_content);
     let lifecycle = if preview.error.is_some() {
         CanvasLifecycleKind::LoadError
     } else if preview.content.is_none() && !preview.truncated {
@@ -569,21 +640,22 @@ fn resolve_active_canvas_doc(s: &AppState) -> Option<ResolvedCanvasDoc> {
         CanvasLifecycleKind::Ready
     };
 
-    Some(ResolvedCanvasDoc {
+    Some(Rc::new(ResolvedCanvasDoc {
         doc_identity: format!("preview\0{}\0{}", preview.workspace_id, preview.path),
         session_key: format!("preview\0{}\0{}", preview.workspace_id, preview.path),
         workspace_id: preview.workspace_id.clone(),
         path: preview.path.clone(),
         title: preview.title.clone(),
-        disk_hash: hash_text(&disk_content),
-        draft_content: disk_content.clone(),
+        disk_hash,
+        draft_hash: disk_hash,
+        draft_content,
         disk_content,
         kind,
         truncated: preview.truncated,
         lifecycle,
         error_message: preview.error.clone(),
         live_session: None,
-    })
+    }))
 }
 
 fn ensure_canvas_synced(ui: &mut CanvasUiState, doc: &ResolvedCanvasDoc, force_reset: bool) {
@@ -614,13 +686,13 @@ fn sync_live_draft(s: &mut AppState, doc: &ResolvedCanvasDoc) {
     if s.chat_ui.canvas.synced_session_key.as_deref() != Some(doc.session_key.as_str()) {
         return;
     }
-    let next = s.chat_ui.canvas.source_edit.text.clone();
     let needs_dispatch = s.canvas_document.as_ref().is_some_and(|session| {
         session.document_id == live.document_id
             && session.generation == live.generation
-            && session.draft_content != next
+            && session.draft_content != s.chat_ui.canvas.source_edit.text
     });
     if needs_dispatch {
+        let next = s.chat_ui.canvas.source_edit.text.clone();
         s.dispatch(Action::Chat(ChatAction::UpdateCanvasDraft {
             document_id: live.document_id.clone(),
             generation: live.generation,
@@ -671,13 +743,13 @@ fn trigger_save(s: &mut AppState, doc: &ResolvedCanvasDoc) {
     );
 }
 
-fn trigger_save_as_dialog(s: &AppState, tx: &mut Tx, doc: &ResolvedCanvasDoc) {
+fn trigger_save_as_dialog(s: &AppState, tx: &mut Tx, doc: &Rc<ResolvedCanvasDoc>) {
     if doc.truncated {
         return;
     }
     let suggested = resolve_canvas_abs_path(s, &doc.workspace_id, &doc.path);
     let opts = build_save_canvas_dialog(&suggested);
-    let doc_for_cb = doc.clone();
+    let doc_for_cb = Rc::clone(doc);
     tx.save_file(opts, move |s: &mut AppState, result, _| {
         ensure_canvas_synced(&mut s.chat_ui.canvas, &doc_for_cb, false);
         match result {
@@ -774,8 +846,22 @@ fn trigger_close(s: &mut AppState) {
     }
 }
 
-fn active_selection_excerpt<'a>(ui: &'a CanvasUiState, doc: &ResolvedCanvasDoc) -> Option<&'a str> {
+fn canvas_view_synced(ui: &CanvasUiState, doc: &ResolvedCanvasDoc) -> bool {
     if ui.synced_session_key.as_deref() != Some(doc.session_key.as_str()) {
+        return false;
+    }
+    // Own save completions (including undo-during-save) update `doc.disk_content` without
+    // changing `doc.draft_content`, so `source_edit.text == *doc.draft_content` stays true and
+    // must keep `source_edit` mounted and focused. Only flag out-of-sync when an external
+    // disk+draft refresh diverges from a clean UI buffer.
+    let disk_changed_while_ui_clean = ui.synced_disk_hash != Some(doc.disk_hash)
+        && !ui.is_dirty()
+        && ui.source_edit.text != *doc.draft_content;
+    !disk_changed_while_ui_clean
+}
+
+fn active_selection_excerpt<'a>(ui: &'a CanvasUiState, doc: &ResolvedCanvasDoc) -> Option<&'a str> {
+    if !canvas_view_synced(ui, doc) {
         return None;
     }
     let (a, b) = ui.source_edit.range();
@@ -815,7 +901,7 @@ fn submit_canvas_prompt(s: &mut AppState, doc: &ResolvedCanvasDoc) {
         &request,
     );
 
-    let catalog = build_mention_catalog(&s.skills, &s.plugins);
+    let (catalog, _) = cached_mention_catalog_for_state(s);
     let references = extract_references_from_text(&request, &catalog);
     let busy_policy = if streaming {
         ThreadBusyPolicy::Steer
@@ -855,28 +941,33 @@ fn save_badge_meta(doc: &ResolvedCanvasDoc, dirty: bool) -> (&'static str, Statu
     }
 }
 
+struct CanvasDocTabMemoInputs<'a> {
+    ws_path: Option<&'a str>,
+    live_text_rc: Rc<str>,
+    live_text_hash: u64,
+    active_copied_key: Option<&'a str>,
+    doc_math_gen: u64,
+    doc_img_gen: u64,
+    dark: bool,
+}
+
 /// Renders the right-rail (or maximized) Canvas document pane when a supported document is active
 /// and the `"canvas"` feature flag (or a headless Canvas fixture) is enabled.
 pub fn canvas_pane(s: &AppState, cx: &mut Cx<AppState>, k: &Kit) -> Option<SubviewOutput> {
     let doc = resolve_active_canvas_doc(s)?;
     let dark = s.effective_dark(cx.system_dark());
-    let t = theme::resolve_tokens_with_accent(
+    let t = resolve_cached_tokens(
         dark,
         s.desktop_settings.reduced_transparency,
         s.desktop_settings.high_contrast,
         s.desktop_settings.accent_palette,
     );
 
-    let synced = s.chat_ui.canvas.synced_session_key.as_deref() == Some(doc.session_key.as_str());
     let same_doc =
         s.chat_ui.canvas.synced_doc_identity.as_deref() == Some(doc.doc_identity.as_str());
-    let disk_changed_while_ui_clean = synced
-        && doc.live_session.is_some()
-        && s.chat_ui.canvas.synced_disk_hash != Some(doc.disk_hash)
-        && !s.chat_ui.canvas.is_dirty();
-    let view_synced = synced && !disk_changed_while_ui_clean;
+    let view_synced = canvas_view_synced(&s.chat_ui.canvas, &doc);
     let dirty = if let Some(ref live) = doc.live_session {
-        live.dirty || (view_synced && s.chat_ui.canvas.source_edit.text != doc.draft_content)
+        live.dirty || (view_synced && s.chat_ui.canvas.source_edit.text != *doc.draft_content)
     } else if view_synced {
         s.chat_ui.canvas.is_dirty()
     } else {
@@ -889,45 +980,100 @@ pub fn canvas_pane(s: &AppState, cx: &mut Cx<AppState>, k: &Kit) -> Option<Subvi
     } else {
         CanvasTab::Source
     };
-    let live_text = if view_synced {
-        s.chat_ui.canvas.source_edit.text.as_str()
-    } else {
-        doc.draft_content.as_str()
-    };
+    let (live_text_hash, live_text_rc) =
+        if !view_synced || s.chat_ui.canvas.source_edit.text == *doc.draft_content {
+            (doc.draft_hash, Rc::clone(&doc.draft_content))
+        } else {
+            cached_canvas_text(2, &s.chat_ui.canvas.source_edit.text)
+        };
+    let live_text = live_text_rc.as_ref();
 
     let mut overlays = Vec::new();
     build_reload_confirm_dialog(s, k, &doc, dirty, &mut overlays);
     build_discard_confirm_dialog(s, k, &doc, &mut overlays);
 
-    let mut root = col()
-        .key("canvas-pane")
-        .w_full()
-        .h_full()
-        .grow(1.0)
-        .min_w(0.0)
-        .min_h(0.0)
-        .fill(t.panel_bg)
-        .child(build_header_row(s, k, &t, &doc, dirty))
-        .child(build_toolbar_row(s, k, &t, &doc, active_tab, dirty));
+    let ws_path = s
+        .workspaces
+        .iter()
+        .find(|w| w.id == doc.workspace_id)
+        .map(|w| w.path.as_str());
+    let thread = s.active_thread();
+    let rt = s.active_thread_runtime();
+    let ws_rt = thread.and_then(|tr| s.workspace_runtime_by_id.get(&tr.workspace_id));
+    let transcript_only = rt.is_some_and(|r| r.transcript_only);
+    let disconnected = thread.is_none()
+        || ws_rt.is_some_and(|w| !matches!(w.server_state, ServerLifecycleState::Running { .. }));
+    let reconnecting = workspace_is_reconnecting(ws_rt);
 
-    if doc.kind == CanvasFileKind::Markdown
-        && active_tab == CanvasTab::Source
-        && s.chat_ui.canvas.show_formatting_bar
-        && !doc.truncated
-        && !matches!(
-            doc.lifecycle,
-            CanvasLifecycleKind::Loading | CanvasLifecycleKind::LoadError
-        )
-    {
-        root = root.child(build_formatting_bar(k, &t, &doc));
-    }
+    let is_markdown_doc_tab =
+        active_tab == CanvasTab::Document && doc.kind == CanvasFileKind::Markdown;
+    let active_copied_key = if is_markdown_doc_tab {
+        s.chat_ui
+            .copied_feedback
+            .as_ref()
+            .filter(|(key, exp)| {
+                s.now_secs < *exp
+                    && key
+                        .strip_prefix("canvas:")
+                        .is_some_and(|rest| rest.starts_with(doc.session_key.as_str()))
+            })
+            .map(|(key, _)| key.as_str())
+    } else {
+        None
+    };
+    let doc_math_gen = if is_markdown_doc_tab && live_text.contains("$$") {
+        raster_generation()
+    } else {
+        0
+    };
+    let doc_img_gen =
+        if is_markdown_doc_tab && (live_text.contains("![") || live_text.contains("<img")) {
+            image_decode_generation()
+        } else {
+            0
+        };
 
-    if let Some(banners) = build_banners(s, k, &t, &doc, dirty) {
-        root = root.child(banners);
-    }
+    let doc_tab_inputs = CanvasDocTabMemoInputs {
+        ws_path,
+        live_text_rc: Rc::clone(&live_text_rc),
+        live_text_hash,
+        active_copied_key,
+        doc_math_gen,
+        doc_img_gen,
+        dark,
+    };
 
-    root = root
-        .child(build_body(
+    let has_preedit = s.chat_ui.canvas.source_edit.preedit().is_some()
+        || s.chat_ui.canvas.prompt_edit.preedit().is_some();
+
+    let build_root = || {
+        let mut root = col()
+            .w_full()
+            .h_full()
+            .grow(1.0)
+            .min_w(0.0)
+            .min_h(0.0)
+            .fill(t.panel_bg)
+            .child(build_header_row(s, k, &t, &doc, dirty))
+            .child(build_toolbar_row(s, k, &t, &doc, active_tab, dirty));
+
+        if doc.kind == CanvasFileKind::Markdown
+            && active_tab == CanvasTab::Source
+            && s.chat_ui.canvas.show_formatting_bar
+            && !doc.truncated
+            && !matches!(
+                doc.lifecycle,
+                CanvasLifecycleKind::Loading | CanvasLifecycleKind::LoadError
+            )
+        {
+            root = root.child(build_formatting_bar(k, &t, &doc));
+        }
+
+        if let Some(banners) = build_banners(s, k, &t, &doc, dirty) {
+            root = root.child(banners);
+        }
+
+        root.child(build_body(
             s,
             k,
             &t,
@@ -935,13 +1081,63 @@ pub fn canvas_pane(s: &AppState, cx: &mut Cx<AppState>, k: &Kit) -> Option<Subvi
             view_synced,
             active_tab,
             live_text,
+            &doc_tab_inputs,
         ))
-        .child(build_prompt_footer(s, k, &t, &doc, view_synced));
+        .child(build_prompt_footer(s, k, &t, &doc, view_synced))
+    };
 
-    Some(SubviewOutput {
-        content: root,
-        overlays,
-    })
+    let content = if has_preedit {
+        build_root().key("canvas-pane")
+    } else {
+        let mut h = DefaultHasher::new();
+        doc.doc_identity.hash(&mut h);
+        doc.session_key.hash(&mut h);
+        doc.workspace_id.hash(&mut h);
+        doc.path.hash(&mut h);
+        doc.title.hash(&mut h);
+        doc.disk_hash.hash(&mut h);
+        doc.draft_hash.hash(&mut h);
+        doc.kind.hash(&mut h);
+        doc.truncated.hash(&mut h);
+        doc.lifecycle.hash(&mut h);
+        doc.error_message.hash(&mut h);
+        doc.live_session.hash(&mut h);
+        view_synced.hash(&mut h);
+        dirty.hash(&mut h);
+        active_tab.hash(&mut h);
+        live_text_hash.hash(&mut h);
+        live_text.len().hash(&mut h);
+        s.chat_ui.canvas.maximized.hash(&mut h);
+        s.chat_ui.canvas.show_formatting_bar.hash(&mut h);
+        s.chat_ui.canvas.local_error.hash(&mut h);
+        if view_synced {
+            s.chat_ui.canvas.source_edit.anchor.hash(&mut h);
+            s.chat_ui.canvas.source_edit.focus.hash(&mut h);
+            s.chat_ui.canvas.source_edit.focused.hash(&mut h);
+        }
+        s.chat_ui.canvas.prompt_edit.text.hash(&mut h);
+        s.chat_ui.canvas.prompt_edit.anchor.hash(&mut h);
+        s.chat_ui.canvas.prompt_edit.focus.hash(&mut h);
+        s.chat_ui.canvas.prompt_edit.focused.hash(&mut h);
+        ws_path.hash(&mut h);
+        thread.map(|tr| tr.id.as_str()).hash(&mut h);
+        transcript_only.hash(&mut h);
+        disconnected.hash(&mut h);
+        reconnecting.hash(&mut h);
+        dark.hash(&mut h);
+        s.desktop_settings.reduced_transparency.hash(&mut h);
+        s.desktop_settings.high_contrast.hash(&mut h);
+        s.desktop_settings.accent_palette.hash(&mut h);
+        s.desktop_settings.reduce_motion.hash(&mut h);
+        s.ui_scale.to_bits().hash(&mut h);
+        s.services.waker.is_some().hash(&mut h);
+        active_copied_key.hash(&mut h);
+        doc_math_gen.hash(&mut h);
+        doc_img_gen.hash(&mut h);
+        memo("canvas-pane", h.finish(), build_root)
+    };
+
+    Some(SubviewOutput { content, overlays })
 }
 
 fn build_header_row(
@@ -1024,7 +1220,7 @@ fn build_toolbar_row(
     s: &AppState,
     k: &Kit,
     t: &ThemeTokens,
-    doc: &ResolvedCanvasDoc,
+    doc: &Rc<ResolvedCanvasDoc>,
     active_tab: CanvasTab,
     dirty: bool,
 ) -> El {
@@ -1032,7 +1228,7 @@ fn build_toolbar_row(
         CanvasTab::Document => 0,
         CanvasTab::Source => 1,
     };
-    let doc_tabs = doc.clone();
+    let doc_tabs = Rc::clone(doc);
     let disabled_tabs = matches!(
         doc.lifecycle,
         CanvasLifecycleKind::Loading | CanvasLifecycleKind::LoadError
@@ -1067,7 +1263,7 @@ fn build_toolbar_row(
 
     if doc.kind == CanvasFileKind::Markdown && active_tab == CanvasTab::Source {
         let formatting_on = s.chat_ui.canvas.show_formatting_bar;
-        let doc_fmt = doc.clone();
+        let doc_fmt = Rc::clone(doc);
         left_group = left_group.child(
             Button::new("Styling")
                 .variant(if formatting_on {
@@ -1101,8 +1297,8 @@ fn build_toolbar_row(
             doc.lifecycle,
             CanvasLifecycleKind::Loading | CanvasLifecycleKind::LoadError
         );
-    let doc_save = doc.clone();
-    let doc_save_as = doc.clone();
+    let doc_save = Rc::clone(doc);
+    let doc_save_as = Rc::clone(doc);
 
     let save_label = if doc.lifecycle == CanvasLifecycleKind::Saving {
         "Saving..."
@@ -1167,13 +1363,13 @@ fn build_toolbar_row(
 
 fn format_icon_btn(
     k: &Kit,
-    doc: &ResolvedCanvasDoc,
+    doc: &Rc<ResolvedCanvasDoc>,
     key: &'static str,
     glyph: &'static rune::Icon,
     help: impl Into<String>,
     kind: MarkdownFormatKind,
 ) -> El {
-    let doc_cb = doc.clone();
+    let doc_cb = Rc::clone(doc);
     let help = help.into();
     IconButton::new(glyph)
         .variant(IconButtonVariant::Ghost)
@@ -1189,13 +1385,13 @@ fn format_icon_btn(
 
 fn format_text_btn(
     k: &Kit,
-    doc: &ResolvedCanvasDoc,
+    doc: &Rc<ResolvedCanvasDoc>,
     key: &'static str,
     label: &'static str,
     help: &'static str,
     kind: MarkdownFormatKind,
 ) -> El {
-    let doc_cb = doc.clone();
+    let doc_cb = Rc::clone(doc);
     Button::new(label)
         .variant(ButtonVariant::Ghost)
         .control_size(ControlSize::Mini)
@@ -1227,7 +1423,7 @@ fn apply_canvas_format_action(
     }
 }
 
-fn build_formatting_bar(k: &Kit, t: &ThemeTokens, doc: &ResolvedCanvasDoc) -> El {
+fn build_formatting_bar(k: &Kit, t: &ThemeTokens, doc: &Rc<ResolvedCanvasDoc>) -> El {
     let sep = || {
         el().w(1.0)
             .h(14.0)
@@ -1317,7 +1513,7 @@ fn build_banners(
     s: &AppState,
     k: &Kit,
     t: &ThemeTokens,
-    doc: &ResolvedCanvasDoc,
+    doc: &Rc<ResolvedCanvasDoc>,
     dirty: bool,
 ) -> Option<El> {
     let mut stack = col()
@@ -1333,8 +1529,8 @@ fn build_banners(
         let msg = doc.error_message.clone().unwrap_or_else(|| {
             "File changed on disk. Your unsaved edits were not overwritten.".to_string()
         });
-        let doc_reload = doc.clone();
-        let doc_save_as = doc.clone();
+        let doc_reload = Rc::clone(doc);
+        let doc_save_as = Rc::clone(doc);
         stack = stack.child(
             alert_banner(
                 k,
@@ -1386,8 +1582,8 @@ fn build_banners(
             .error_message
             .clone()
             .unwrap_or_else(|| "Failed to save changes.".to_string());
-        let doc_retry = doc.clone();
-        let doc_save_as = doc.clone();
+        let doc_retry = Rc::clone(doc);
+        let doc_save_as = Rc::clone(doc);
         stack = stack.child(
             alert_banner(
                 k,
@@ -1508,14 +1704,16 @@ fn alert_banner(
         )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_body(
     s: &AppState,
     k: &Kit,
     t: &ThemeTokens,
-    doc: &ResolvedCanvasDoc,
+    doc: &Rc<ResolvedCanvasDoc>,
     synced: bool,
     active_tab: CanvasTab,
     live_text: &str,
+    doc_tab_inputs: &CanvasDocTabMemoInputs<'_>,
 ) -> El {
     if doc.lifecycle == CanvasLifecycleKind::Loading {
         return col()
@@ -1538,7 +1736,7 @@ fn build_body(
             .error_message
             .clone()
             .unwrap_or_else(|| "Unable to open this file in Canvas.".to_string());
-        let doc_retry = doc.clone();
+        let doc_retry = Rc::clone(doc);
         return col()
             .key("canvas-load-error")
             .w_full()
@@ -1602,8 +1800,116 @@ fn build_body(
     }
 
     match active_tab {
-        CanvasTab::Document => build_document_tab(s, k, t, doc, live_text),
+        CanvasTab::Document => build_document_tab(s, k, t, doc, live_text, doc_tab_inputs),
         CanvasTab::Source => build_source_tab(s, k, t, doc, synced, live_text),
+    }
+}
+
+fn estimate_canvas_block_height(text: &str, ranges: &[(usize, usize)]) -> f32 {
+    if ranges.is_empty() {
+        return 64.0;
+    }
+    let mut sum = 0.0_f32;
+    for &(start, end) in ranges {
+        let block = text.get(start..end).unwrap_or("");
+        let newlines = block.as_bytes().iter().filter(|&&b| b == b'\n').count() as f32;
+        let wrapped = (block.len() as f32 / 78.0).max(1.0);
+        let est = (16.0 + wrapped.max(newlines + 1.0) * 22.0).clamp(32.0, 360.0);
+        sum += est;
+    }
+    (sum / ranges.len() as f32).clamp(48.0, 180.0)
+}
+
+struct CanvasDocBlocks {
+    live_text: Rc<str>,
+    ranges: CanvasBlockRanges,
+    session_key: String,
+    workspace_id: String,
+    ws_path: Option<String>,
+    reduce_motion: bool,
+    ui_scale: f32,
+    active_copied_key: Option<String>,
+    doc_math_gen: u64,
+    doc_img_gen: u64,
+    external_cache: Option<Arc<ImageCache>>,
+    math_waker: Option<Arc<dyn Fn() + Send + Sync>>,
+    shared_ver: u64,
+    kit: Kit,
+    tokens: ThemeTokens,
+}
+
+impl CanvasDocBlocks {
+    fn build(&self, _s: &AppState, idx: usize) -> El {
+        let blk_key = format!("canvas-blk:{}:{idx}", self.session_key);
+        let Some(&(start, end)) = self.ranges.get(idx) else {
+            return col().key(blk_key);
+        };
+        let Some(block_src) = self.live_text.get(start..end) else {
+            return col().key(blk_key);
+        };
+        let md_prefix = format!("canvas:{}:blk:{idx}", self.session_key);
+        let scoped_copied = self.active_copied_key.as_deref().filter(|ck| {
+            ck.strip_prefix(md_prefix.as_str())
+                .is_some_and(|rest| rest.is_empty() || rest.starts_with(':'))
+        });
+        let math_gen = if block_src.contains("$$") {
+            self.doc_math_gen
+        } else {
+            0
+        };
+        let img_gen = if block_src.contains("![") || block_src.contains("<img") {
+            self.doc_img_gen
+        } else {
+            0
+        };
+        let mut h = DefaultHasher::new();
+        (
+            self.shared_ver,
+            idx,
+            block_src,
+            scoped_copied,
+            math_gen,
+            img_gen,
+        )
+            .hash(&mut h);
+        memo(blk_key.as_str(), h.finish(), || {
+            let active_copied = scoped_copied.map(str::to_string);
+            let active_copied_check = active_copied.clone();
+            let rendered = desktop_markdown(
+                &self.kit,
+                &self.tokens,
+                block_src,
+                &md_prefix,
+                false,
+                false,
+                self.reduce_motion,
+                Some(self.workspace_id.as_str()),
+                self.ws_path.as_deref(),
+                &[],
+                self.external_cache.clone(),
+                MarkdownHooks {
+                    is_copied: Some(Rc::new(move |key: &str| {
+                        active_copied_check.as_deref() == Some(key)
+                    })),
+                    active_copied_key: active_copied,
+                    on_copy: Some(Rc::new(
+                        move |state: &mut AppState, key: String, _tx: &mut Tx| {
+                            let now = state.now_secs;
+                            state.chat_ui.mark_copied(key, now);
+                        },
+                    )),
+                    on_citation_click: None,
+                    math_waker: self.math_waker.clone(),
+                    math_scale: Some((2.0 * self.ui_scale).clamp(2.0, 4.0)),
+                },
+            );
+            col()
+                .w_full()
+                .max_w(840.0)
+                .min_w(0.0)
+                .child(rendered)
+                .arrives_whole()
+        })
     }
 }
 
@@ -1613,68 +1919,158 @@ fn build_document_tab(
     t: &ThemeTokens,
     doc: &ResolvedCanvasDoc,
     live_text: &str,
+    inputs: &CanvasDocTabMemoInputs<'_>,
 ) -> El {
-    let ws_path = s
-        .workspaces
-        .iter()
-        .find(|w| w.id == doc.workspace_id)
-        .map(|w| w.path.as_str());
-    let now_secs = s.now_secs;
-    let copied_fb = s.chat_ui.copied_feedback.clone();
-
-    let rendered = if live_text.trim().is_empty() {
-        text("This document is empty. Switch to Source to start writing.")
-            .font(t.body)
-            .color(t.text_faint)
-            .wrap()
-    } else if doc.kind == CanvasFileKind::Markdown {
-        desktop_markdown(
-            k,
-            t,
-            live_text,
-            &format!("canvas:{}", doc.session_key),
-            false,
-            false,
-            s.desktop_settings.reduce_motion,
-            Some(&doc.workspace_id),
-            ws_path,
-            &[],
-            None,
-            MarkdownHooks {
-                is_copied: Some(std::rc::Rc::new(move |key: &str| {
-                    matches!(
-                        copied_fb.as_ref(),
-                        Some((active, exp)) if active == key && now_secs < *exp
-                    )
-                })),
-                on_copy: Some(std::rc::Rc::new(
-                    move |state: &mut AppState, key: String, _tx: &mut Tx| {
-                        state.chat_ui.mark_copied(key, now_secs);
-                    },
-                )),
-                on_citation_click: None,
-                math_waker: s.services.waker.clone(),
-                math_scale: Some((2.0 * s.ui_scale).clamp(2.0, 4.0)),
-            },
-        )
-    } else {
-        col()
-            .w_full()
-            .min_w(0.0)
-            .padding(14.0)
-            .radius(8.0)
-            .fill(t.code_bg)
-            .border(1.0, t.border_muted)
-            .child(
-                text(live_text.to_string())
-                    .font(t.code)
-                    .color(t.text_base)
-                    .w_full()
-                    .min_w(0.0)
-                    .wrap()
-                    .selectable(true),
+    if doc.kind == CanvasFileKind::Markdown && live_text.len() > VIRTUALIZE_MARKDOWN_MIN_BYTES {
+        let ranges = cached_canvas_block_ranges(inputs.live_text_hash, &inputs.live_text_rc);
+        if ranges.len() > 1 {
+            let external_cache = shared_waker_image_cache(s.services.waker.as_ref());
+            let mut sh = DefaultHasher::new();
+            (
+                doc.session_key.as_str(),
+                doc.workspace_id.as_str(),
+                inputs.ws_path,
+                inputs.dark,
+                s.desktop_settings.reduced_transparency,
+                s.desktop_settings.high_contrast,
+                s.desktop_settings.accent_palette,
+                s.desktop_settings.reduce_motion,
+                s.ui_scale.to_bits(),
+                s.services.waker.is_some(),
+                external_cache.as_ref().map(|c| Arc::as_ptr(c) as usize),
             )
-    };
+                .hash(&mut sh);
+            let shared_ver = sh.finish();
+
+            let block_count = ranges.len();
+            let est_h = estimate_canvas_block_height(live_text, &ranges);
+            let session_key_for_keys = doc.session_key.clone();
+            let blocks = Rc::new(CanvasDocBlocks {
+                live_text: Rc::clone(&inputs.live_text_rc),
+                ranges,
+                session_key: doc.session_key.clone(),
+                workspace_id: doc.workspace_id.clone(),
+                ws_path: inputs.ws_path.map(str::to_string),
+                reduce_motion: s.desktop_settings.reduce_motion,
+                ui_scale: s.ui_scale,
+                active_copied_key: inputs.active_copied_key.map(str::to_string),
+                doc_math_gen: inputs.doc_math_gen,
+                doc_img_gen: inputs.doc_img_gen,
+                external_cache,
+                math_waker: s.services.waker.clone(),
+                shared_ver,
+                kit: k.clone(),
+                tokens: *t,
+            });
+
+            let blocks_stack = col()
+                .key("canvas-doc-body")
+                .w_full()
+                .min_w(0.0)
+                .items_center()
+                .px(20.0)
+                .py(18.0)
+                .gap(10.0)
+                .growth(GrowthSpec::default())
+                .virtual_rows(
+                    block_count,
+                    est_h,
+                    move |_: &AppState, i| {
+                        Cow::Owned(format!("canvas-blk:{session_key_for_keys}:{i}"))
+                    },
+                    move |s: &AppState, i| blocks.build(s, i),
+                );
+
+            return col()
+                .key("canvas-document-tab")
+                .w_full()
+                .grow(1.0)
+                .min_w(0.0)
+                .min_h(0.0)
+                .scroll(ScrollSpec {
+                    stick_bottom: false,
+                })
+                .child(blocks_stack);
+        }
+    }
+
+    let mut h = DefaultHasher::new();
+    doc.session_key.hash(&mut h);
+    doc.workspace_id.hash(&mut h);
+    doc.kind.hash(&mut h);
+    inputs.ws_path.hash(&mut h);
+    inputs.live_text_hash.hash(&mut h);
+    live_text.len().hash(&mut h);
+    inputs.active_copied_key.hash(&mut h);
+    inputs.doc_math_gen.hash(&mut h);
+    inputs.doc_img_gen.hash(&mut h);
+    inputs.dark.hash(&mut h);
+    s.desktop_settings.reduced_transparency.hash(&mut h);
+    s.desktop_settings.high_contrast.hash(&mut h);
+    s.desktop_settings.accent_palette.hash(&mut h);
+    s.desktop_settings.reduce_motion.hash(&mut h);
+    s.ui_scale.to_bits().hash(&mut h);
+    s.services.waker.is_some().hash(&mut h);
+    let body_ver = h.finish();
+
+    let rendered = memo("canvas-doc-body", body_ver, || {
+        let inner = if live_text.trim().is_empty() {
+            text("This document is empty. Switch to Source to start writing.")
+                .font(t.body)
+                .color(t.text_faint)
+                .wrap()
+        } else if doc.kind == CanvasFileKind::Markdown {
+            let active_copied = inputs.active_copied_key.map(str::to_string);
+            let active_copied_check = active_copied.clone();
+            let external_cache = shared_waker_image_cache(s.services.waker.as_ref());
+            desktop_markdown(
+                k,
+                t,
+                live_text,
+                &format!("canvas:{}", doc.session_key),
+                false,
+                false,
+                s.desktop_settings.reduce_motion,
+                Some(&doc.workspace_id),
+                inputs.ws_path,
+                &[],
+                external_cache,
+                MarkdownHooks {
+                    is_copied: Some(Rc::new(move |key: &str| {
+                        active_copied_check.as_deref() == Some(key)
+                    })),
+                    active_copied_key: active_copied,
+                    on_copy: Some(Rc::new(
+                        move |state: &mut AppState, key: String, _tx: &mut Tx| {
+                            let now = state.now_secs;
+                            state.chat_ui.mark_copied(key, now);
+                        },
+                    )),
+                    on_citation_click: None,
+                    math_waker: s.services.waker.clone(),
+                    math_scale: Some((2.0 * s.ui_scale).clamp(2.0, 4.0)),
+                },
+            )
+        } else {
+            col()
+                .w_full()
+                .min_w(0.0)
+                .padding(14.0)
+                .radius(8.0)
+                .fill(t.code_bg)
+                .border(1.0, t.border_muted)
+                .child(
+                    text(live_text.to_string())
+                        .font(t.code)
+                        .color(t.text_base)
+                        .w_full()
+                        .min_w(0.0)
+                        .wrap()
+                        .selectable(true),
+                )
+        };
+        col().w_full().min_w(0.0).child(inner)
+    });
 
     col()
         .key("canvas-document-tab")
@@ -1700,7 +2096,7 @@ fn build_source_tab(
     s: &AppState,
     k: &Kit,
     t: &ThemeTokens,
-    doc: &ResolvedCanvasDoc,
+    doc: &Rc<ResolvedCanvasDoc>,
     synced: bool,
     live_text: &str,
 ) -> El {
@@ -1708,13 +2104,13 @@ fn build_source_tab(
     let edit_ref = if synced {
         &s.chat_ui.canvas.source_edit
     } else {
-        fallback_edit = TextEdit::new(&doc.draft_content);
+        fallback_edit = TextEdit::new(doc.draft_content.as_ref());
         &fallback_edit
     };
     let read_only = doc.truncated || doc.lifecycle == CanvasLifecycleKind::Loading;
-    let doc_edit = doc.clone();
-    let doc_change = doc.clone();
-    let doc_key = doc.clone();
+    let doc_edit = Rc::clone(doc);
+    let doc_change = Rc::clone(doc);
+    let doc_key = Rc::clone(doc);
 
     let mut field = text_input(
         edit_ref,
@@ -1747,11 +2143,15 @@ fn build_source_tab(
             });
     }
 
-    let char_count = live_text.chars().count();
+    let char_count = if live_text.is_ascii() {
+        live_text.len()
+    } else {
+        live_text.chars().count()
+    };
     let line_count = if live_text.is_empty() {
         1
     } else {
-        live_text.split('\n').count()
+        live_text.as_bytes().iter().filter(|&&b| b == b'\n').count() + 1
     };
     let char_unit = if char_count == 1 { "char" } else { "chars" };
     let line_unit = if line_count == 1 { "line" } else { "lines" };
@@ -1861,7 +2261,7 @@ fn build_prompt_footer(
     s: &AppState,
     k: &Kit,
     t: &ThemeTokens,
-    doc: &ResolvedCanvasDoc,
+    doc: &Rc<ResolvedCanvasDoc>,
     synced: bool,
 ) -> El {
     let thread = s.active_thread();
@@ -1888,8 +2288,8 @@ fn build_prompt_footer(
         "Ask model to edit this document..."
     };
 
-    let doc_submit = doc.clone();
-    let doc_send = doc.clone();
+    let doc_submit = Rc::clone(doc);
+    let doc_send = Rc::clone(doc);
 
     let mut prompt_field = text_input(&s.chat_ui.canvas.prompt_edit, t.body)
         .key("canvas-prompt-input")
@@ -1937,7 +2337,11 @@ fn build_prompt_footer(
         .fill(t.panel_bg);
 
     if synced && let Some(sel) = active_selection_excerpt(&s.chat_ui.canvas, doc) {
-        let sel_len = sel.chars().count();
+        let sel_len = if sel.is_ascii() {
+            sel.len()
+        } else {
+            sel.chars().count()
+        };
         container = container.child(
             row()
                 .key("canvas-selection-chip")
@@ -2001,14 +2405,14 @@ fn build_prompt_footer(
 fn build_reload_confirm_dialog(
     s: &AppState,
     k: &Kit,
-    doc: &ResolvedCanvasDoc,
+    doc: &Rc<ResolvedCanvasDoc>,
     dirty: bool,
     overlays: &mut Vec<El>,
 ) {
     if !s.chat_ui.canvas.reload_confirm_open {
         return;
     }
-    let doc_reload = doc.clone();
+    let doc_reload = Rc::clone(doc);
     let msg = if dirty {
         "You have unsaved edits in this Canvas document. Reloading from disk will discard your local changes and load the latest file contents."
     } else {
@@ -2309,5 +2713,57 @@ mod tests {
             source_shortcut_hint_for_platform(CanvasFileKind::Markdown, true, false),
             "Read-only preview"
         );
+    }
+
+    #[test]
+    fn canvas_sync_preserves_undo_during_save_and_syncs_external_clean_updates() {
+        let make_doc = |disk: &str, draft: &str| ResolvedCanvasDoc {
+            doc_identity: "session\x00ws\x00doc-1".to_string(),
+            session_key: "session\x00ws\x00doc-1\x001\x002".to_string(),
+            workspace_id: "ws".to_string(),
+            path: "/ws/doc.md".to_string(),
+            title: "doc.md".to_string(),
+            disk_hash: hash_text(disk),
+            draft_hash: hash_text(draft),
+            disk_content: Rc::from(disk),
+            draft_content: Rc::from(draft),
+            kind: CanvasFileKind::Markdown,
+            truncated: false,
+            lifecycle: CanvasLifecycleKind::Ready,
+            error_message: None,
+            live_session: Some(LiveSessionMeta {
+                document_id: "doc-1".to_string(),
+                generation: 1,
+                dirty: disk != draft,
+            }),
+        };
+
+        let mut ui = CanvasUiState::default();
+        let initial = make_doc("v1", "v1");
+        ensure_canvas_synced(&mut ui, &initial, false);
+        ui.source_edit.set_selection(0, 2);
+
+        // Undo-during-save: user edited v1 -> v12, saved v12, then undid back to v1 while save
+        // was in-flight; save completes with disk="v12", draft="v1".
+        let after_undo_save = make_doc("v12", "v1");
+        assert!(canvas_view_synced(&ui, &after_undo_save));
+        assert_eq!(active_selection_excerpt(&ui, &after_undo_save), Some("v1"));
+        ensure_canvas_synced(&mut ui, &after_undo_save, false);
+        assert_eq!(ui.synced_disk_content, "v12");
+        assert_eq!(ui.source_edit.text, "v1");
+        assert!(ui.is_dirty());
+
+        // External disk+draft update while UI is clean hides stale selection and syncs source_edit.
+        let mut clean_ui = CanvasUiState::default();
+        ensure_canvas_synced(&mut clean_ui, &initial, false);
+        clean_ui.source_edit.set_selection(0, 2);
+        let external_v2 = make_doc("v2", "v2");
+        assert!(!canvas_view_synced(&clean_ui, &external_v2));
+        assert_eq!(active_selection_excerpt(&clean_ui, &external_v2), None);
+        ensure_canvas_synced(&mut clean_ui, &external_v2, false);
+        assert_eq!(clean_ui.source_edit.text, "v2");
+        assert_eq!(clean_ui.synced_disk_content, "v2");
+        assert!(!clean_ui.is_dirty());
+        assert!(canvas_view_synced(&clean_ui, &external_v2));
     }
 }

@@ -1,6 +1,6 @@
 //! New-chat landing surface (`NewChatLanding`): workspace picker, hero composer, and starter prompts.
 
-use rune::{Align, Cursor, El, ScrollSpec, Side, TextEdit, col, icon, row, text};
+use rune::{Align, Cursor, El, ScrollSpec, Side, TextEdit, col, el, icon, row, text};
 use rune_kit::{Kit, PopupItem, PopupList};
 
 use crate::actions::{Action, ChatAction, NativeAction, ShellAction};
@@ -218,6 +218,14 @@ fn starter_icon(id: &str) -> &'static rune::Icon {
 }
 
 fn build_starter_prompts(k: &Kit, t: &ThemeTokens, has_workspace: bool, hidden: bool) -> El {
+    if hidden {
+        return el()
+            .key("landing-starters-hidden")
+            .w_full()
+            .h(136.0)
+            .layer_opacity(0.0)
+            .disabled(true);
+    }
     let prompts = landing_starter_prompts(has_workspace);
     let mut grid = row().w_full().flex_wrap().gap(10.0);
 
@@ -262,27 +270,22 @@ fn build_starter_prompts(k: &Kit, t: &ThemeTokens, has_workspace: bool, hidden: 
                     .truncate(),
             );
 
-        if !hidden {
-            card = card
-                .hover(t.elevated_bg)
-                .cursor(Cursor::Pointer)
-                .help("Insert starter prompt")
-                .on_press(move |s: &mut AppState| {
-                    let key = s.composer_key();
-                    s.composer_edit = TextEdit::new(&prompt_text);
-                    s.composer_edit.focused = true;
-                    s.dispatch(Action::Chat(ChatAction::SetComposerDraftText {
-                        key,
-                        text: prompt_text.clone(),
-                    }));
-                });
-        }
+        card = card
+            .hover(t.elevated_bg)
+            .cursor(Cursor::Pointer)
+            .help("Insert starter prompt")
+            .on_press(move |s: &mut AppState| {
+                let key = s.composer_key();
+                s.composer_edit = TextEdit::new(&prompt_text);
+                s.composer_edit.focused = true;
+                s.dispatch(Action::Chat(ChatAction::SetComposerDraftText {
+                    key,
+                    text: prompt_text.clone(),
+                }));
+            });
 
         grid = grid.child(card);
     }
 
-    if hidden {
-        grid = grid.layer_opacity(0.0).disabled(true);
-    }
     grid
 }

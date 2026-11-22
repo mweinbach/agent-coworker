@@ -17,7 +17,7 @@ pub const FEED_OLDER_PAGE_SIZE: usize = 60;
 const COPY_FEEDBACK_DURATION_SECS: f64 = 1.6;
 
 /// Resolved external source attached to an assistant citation chip or sources drawer.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub struct CitationSource {
     pub url: String,
     pub title: Option<String>,
@@ -39,7 +39,7 @@ pub struct MentionPopoverState {
 }
 
 /// Active view mode inside the Canvas pane.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum CanvasTab {
     #[default]
     Document,
@@ -47,7 +47,7 @@ pub enum CanvasTab {
 }
 
 /// Lifecycle phase displayed by a Canvas fixture or document session.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum CanvasLifecycleKind {
     Loading,
     #[default]
@@ -141,16 +141,26 @@ impl CanvasUiState {
         let same_session = self.synced_session_key.as_deref() == Some(session_key);
 
         if !force_reset && same_session {
-            if self.synced_disk_hash != Some(disk_hash) {
+            if self.synced_disk_hash != Some(disk_hash) || self.synced_disk_content != disk_content
+            {
+                let ui_was_clean = !self.is_dirty();
                 if is_live {
                     // Save/SaveAs updates `disk_content` without bumping `generation`; refresh
                     // the clean disk baseline in place so caret and in-flight typing stay intact.
+                    // When external disk/draft content replaces a clean buffer without bumping
+                    // `generation`, sync `source_edit` alongside `synced_disk_content` so the
+                    // editor never reverts back to stale text.
                     self.synced_disk_hash = Some(disk_hash);
                     self.synced_disk_content = disk_content.to_string();
-                } else if !self.is_dirty() {
+                    if ui_was_clean && self.source_edit.text != initial_text {
+                        self.source_edit.replace_text(initial_text);
+                    }
+                } else if ui_was_clean {
                     self.synced_disk_hash = Some(disk_hash);
                     self.synced_disk_content = disk_content.to_string();
-                    self.source_edit.replace_text(initial_text);
+                    if self.source_edit.text != initial_text {
+                        self.source_edit.replace_text(initial_text);
+                    }
                 }
             }
             return;
@@ -203,6 +213,10 @@ pub struct ChatUiState {
     pub expanded_raw_io: HashSet<String>,
     /// Interactive `DiffView` state cache keyed by tool item ID.
     pub tool_diff_states: HashMap<String, DiffState>,
+    /// Cached `(file_count, total_lines)` per interactive diff tool ID so expanded cards don't re-run `extract_tool_diff`.
+    pub tool_diff_meta: HashMap<String, (usize, usize)>,
+    /// Per-tool revision counter bumped when `tool_diff_states` is created or switched between Unified/Split.
+    pub tool_diff_rev: HashMap<String, u64>,
     /// Immutable empty fallback used by `DiffView` closures if a state entry is cleared mid-frame.
     pub(super) empty_diff_state: DiffState,
     /// Error feed row IDs whose full text is expanded.
@@ -272,6 +286,8 @@ impl Default for ChatUiState {
             expanded_tool_details: HashMap::new(),
             expanded_raw_io: HashSet::new(),
             tool_diff_states: HashMap::new(),
+            tool_diff_meta: HashMap::new(),
+            tool_diff_rev: HashMap::new(),
             empty_diff_state: DiffState::new(Vec::new()),
             expanded_errors: HashSet::new(),
             open_citation_sources: HashSet::new(),
@@ -360,6 +376,12 @@ impl ChatUiState {
     pub fn toggle_tool(&mut self, tool_id: &str, currently_open: bool) {
         self.expanded_tool_details
             .insert(tool_id.to_string(), !currently_open);
+    }
+
+    /// Bumps the memo revision for an interactive diff tool card.
+    pub fn bump_tool_diff_rev(&mut self, tool_id: &str) {
+        let entry = self.tool_diff_rev.entry(tool_id.to_string()).or_insert(0);
+        *entry = entry.wrapping_add(1);
     }
 
     /// Returns the number of tail feed items visible for `thread_key`.

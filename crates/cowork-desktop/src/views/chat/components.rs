@@ -32,6 +32,9 @@ pub fn composer_mention_spans(
     k: &Kit,
     t: &ThemeTokens,
 ) -> Vec<Span> {
+    if catalog.names.is_empty() || !input_text.contains('@') {
+        return Vec::new();
+    }
     let chip_bg = k.alpha(t.accent, if t.dark { 0.18 } else { 0.12 });
     parse_composer_segments(input_text, catalog)
         .into_iter()

@@ -2,7 +2,7 @@
 //! `@streamdown/math` (`singleDollarTextMath: false`) and streaming fallbacks.
 
 use std::borrow::Cow;
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, mpsc};
 
@@ -18,7 +18,10 @@ use crate::theme::ThemeTokens;
 const DISPLAY_EM_PT: f32 = 16.5;
 const INLINE_EM_PT: f32 = 15.0;
 const DEFAULT_RENDER_SCALE: f32 = 2.0;
-const MAX_CACHE_ENTRIES: usize = 512;
+const MAX_CACHE_ENTRIES: usize = 1024;
+const MAX_LAYOUT_CACHE_ENTRIES: usize = 1024;
+const MAX_WORKER_BATCH: usize = 16;
+const INLINE_WORD_CHUNK_SOFT_MAX: usize = 18;
 
 /// A top-level segment produced by scanning Markdown for fenced display math.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -533,7 +536,7 @@ pub fn tex_to_unicode_fallback(tex: &str) -> String {
 }
 
 /// Kind of block-level container for a paragraph/line rendered with inline math.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum MathParagraphKind {
     Paragraph,
     Heading { level: u8 },
@@ -542,7 +545,7 @@ pub enum MathParagraphKind {
 }
 
 /// Typed inline span parsed from a Markdown block containing inline math.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum MathInlineSpan {
     Text {
         text: String,
@@ -578,19 +581,23 @@ pub enum MathChunk {
     },
 }
 
-fn has_inline_math_part(s: &str, streaming: bool) -> bool {
-    s.contains("$$")
-        && split_inline_math(s, streaming).iter().any(|p| {
-            matches!(
-                p,
-                InlineMathPart::Math(_) | InlineMathPart::StreamingMath(_)
-            )
-        })
+fn try_split_inline_math(s: &str, streaming: bool) -> Option<Vec<InlineMathPart>> {
+    if !s.contains("$$") {
+        return None;
+    }
+    let parts = split_inline_math(s, streaming);
+    let has_math = parts.iter().any(|p| {
+        matches!(
+            p,
+            InlineMathPart::Math(_) | InlineMathPart::StreamingMath(_)
+        )
+    });
+    has_math.then_some(parts)
 }
 
-fn rewrite_inline_math_to_unicode(s: &str, streaming: bool) -> String {
-    let mut out = String::with_capacity(s.len());
-    for part in split_inline_math(s, streaming) {
+fn rewrite_inline_math_parts_to_unicode(parts: Vec<InlineMathPart>, capacity: usize) -> String {
+    let mut out = String::with_capacity(capacity);
+    for part in parts {
         match part {
             InlineMathPart::Text(t) => out.push_str(&t),
             InlineMathPart::Math(tex) => out.push_str(&tex_to_unicode_fallback(&tex)),
@@ -777,7 +784,7 @@ pub fn split_inline_math_chunks(src: &str, streaming: bool) -> Vec<MathChunk> {
     if src.is_empty() {
         return Vec::new();
     }
-    if !has_inline_math_part(src, streaming) {
+    if !src.contains("$$") {
         return vec![MathChunk::Markdown(src.to_string())];
     }
 
@@ -787,6 +794,7 @@ pub fn split_inline_math_chunks(src: &str, streaming: bool) -> Vec<MathChunk> {
     let mut tracker = CodeBlockTracker::new();
     let mut list_stack: Vec<usize> = Vec::new();
     let mut idx = 0;
+    let mut found_any_math = false;
 
     while idx < lines.len() {
         let line = lines[idx];
@@ -819,10 +827,11 @@ pub fn split_inline_math_chunks(src: &str, streaming: bool) -> Vec<MathChunk> {
         // Headings: single line block.
         if let Some((level, content)) = parse_atx_heading(stripped) {
             list_stack.clear();
-            if has_inline_math_part(content, streaming) {
+            if let Some(parts) = try_split_inline_math(content, streaming) {
+                found_any_math = true;
                 out.push(MathChunk::InlineMathParagraph {
                     kind: MathParagraphKind::Heading { level },
-                    spans: parse_inline_markdown_spans(content, streaming),
+                    spans: parse_inline_markdown_spans_from_parts(parts, content.len()),
                 });
             } else {
                 push_markdown_chunk(line, &mut out);
@@ -847,8 +856,9 @@ pub fn split_inline_math_chunks(src: &str, streaming: bool) -> Vec<MathChunk> {
                 idx += 1;
             }
             let table_raw: String = lines[start..idx].concat();
-            let table_md = if has_inline_math_part(&table_raw, streaming) {
-                rewrite_inline_math_to_unicode(&table_raw, streaming)
+            let table_md = if let Some(parts) = try_split_inline_math(&table_raw, streaming) {
+                found_any_math = true;
+                rewrite_inline_math_parts_to_unicode(parts, table_raw.len())
             } else {
                 table_raw
             };
@@ -880,10 +890,11 @@ pub fn split_inline_math_chunks(src: &str, streaming: bool) -> Vec<MathChunk> {
                     break;
                 }
             }
-            if has_inline_math_part(&inner, streaming) {
+            if let Some(parts) = try_split_inline_math(&inner, streaming) {
+                found_any_math = true;
                 out.push(MathChunk::InlineMathParagraph {
                     kind: MathParagraphKind::Blockquote,
-                    spans: parse_inline_markdown_spans(&inner, streaming),
+                    spans: parse_inline_markdown_spans_from_parts(parts, inner.len()),
                 });
             } else {
                 push_markdown_chunk(&lines[start..idx].concat(), &mut out);
@@ -921,13 +932,14 @@ pub fn split_inline_math_chunks(src: &str, streaming: bool) -> Vec<MathChunk> {
                 body.push_str(next_s.trim());
                 idx += 1;
             }
-            if has_inline_math_part(&body, streaming) {
+            if let Some(parts) = try_split_inline_math(&body, streaming) {
+                found_any_math = true;
                 out.push(MathChunk::InlineMathParagraph {
                     kind: MathParagraphKind::ListItem {
                         indent_level,
                         marker,
                     },
-                    spans: parse_inline_markdown_spans(&body, streaming),
+                    spans: parse_inline_markdown_spans_from_parts(parts, body.len()),
                 });
             } else {
                 push_list_markdown_chunk(
@@ -965,14 +977,19 @@ pub fn split_inline_math_chunks(src: &str, streaming: bool) -> Vec<MathChunk> {
             para.push_str(next_s);
             idx += 1;
         }
-        if has_inline_math_part(&para, streaming) {
+        if let Some(parts) = try_split_inline_math(&para, streaming) {
+            found_any_math = true;
             out.push(MathChunk::InlineMathParagraph {
                 kind: MathParagraphKind::Paragraph,
-                spans: parse_inline_markdown_spans(&para, streaming),
+                spans: parse_inline_markdown_spans_from_parts(parts, para.len()),
             });
         } else {
             push_markdown_chunk(&lines[start..idx].concat(), &mut out);
         }
+    }
+
+    if !found_any_math {
+        return vec![MathChunk::Markdown(src.to_string())];
     }
 
     out.retain(|chunk| match chunk {
@@ -986,10 +1003,17 @@ pub fn split_inline_math_chunks(src: &str, streaming: bool) -> Vec<MathChunk> {
 
 /// Parses inline Markdown formatting (`**bold**`, `*italic*`, `` `code` ``, `[label](url)`)
 /// around `$$math$$` / streaming `$$...` runs using non-colliding private-use sentinels.
+#[cfg(test)]
 pub fn parse_inline_markdown_spans(raw: &str, streaming: bool) -> Vec<MathInlineSpan> {
-    let parts = split_inline_math(raw, streaming);
+    parse_inline_markdown_spans_from_parts(split_inline_math(raw, streaming), raw.len())
+}
+
+fn parse_inline_markdown_spans_from_parts(
+    parts: Vec<InlineMathPart>,
+    raw_len: usize,
+) -> Vec<MathInlineSpan> {
     let mut math_payloads: Vec<(bool, String)> = Vec::new();
-    let mut combined = String::with_capacity(raw.len());
+    let mut combined = String::with_capacity(raw_len);
 
     for part in parts {
         match part {
@@ -1241,7 +1265,10 @@ struct MathCacheKey {
     display: bool,
     rgba32: u32,
     px_per_em_bits: u32,
+    render_scale_q: u16,
 }
+
+const MAX_CACHE_ENTRIES_BURST: usize = 4096;
 
 #[derive(Clone)]
 enum CachedMathEntry {
@@ -1289,21 +1316,121 @@ struct RasterJob {
     waker: Arc<dyn Fn() + Send + Sync>,
 }
 
+struct LruMap<K, V> {
+    cap: usize,
+    tick: u64,
+    map: HashMap<K, (u64, V)>,
+}
+
+impl<K, V> LruMap<K, V>
+where
+    K: Eq + std::hash::Hash + Clone,
+{
+    fn new(cap: usize) -> Self {
+        Self {
+            cap: cap.max(1),
+            tick: 0,
+            map: HashMap::new(),
+        }
+    }
+
+    fn get(&mut self, key: &K) -> Option<&V> {
+        let next_tick = self.tick.wrapping_add(1);
+        let entry = self.map.get_mut(key)?;
+        self.tick = next_tick;
+        entry.0 = next_tick;
+        Some(&entry.1)
+    }
+
+    fn insert(&mut self, key: K, val: V) {
+        self.tick = self.tick.wrapping_add(1);
+        let now_tick = self.tick;
+        if !self.map.contains_key(&key)
+            && self.map.len() >= self.cap
+            && let Some(oldest_key) = self
+                .map
+                .iter()
+                .min_by_key(|(_, (t, _))| *t)
+                .map(|(k, _)| k.clone())
+        {
+            self.map.remove(&oldest_key);
+        }
+        self.map.insert(key, (now_tick, val));
+    }
+}
+
+type KatexLayoutCache = LruMap<(String, bool), Option<Arc<KatexLayout>>>;
+
+struct MathEntryCache {
+    soft_cap: usize,
+    hard_cap: usize,
+    tick: u64,
+    map: HashMap<MathCacheKey, (u64, u64, CachedMathEntry)>,
+}
+
+impl MathEntryCache {
+    fn new(soft_cap: usize, hard_cap: usize) -> Self {
+        Self {
+            soft_cap: soft_cap.max(1),
+            hard_cap: hard_cap.max(soft_cap.max(1)),
+            tick: 0,
+            map: HashMap::new(),
+        }
+    }
+
+    fn get(&mut self, key: &MathCacheKey, current_gen: u64) -> Option<&CachedMathEntry> {
+        let next_tick = self.tick.wrapping_add(1);
+        let entry = self.map.get_mut(key)?;
+        self.tick = next_tick;
+        entry.0 = next_tick;
+        entry.1 = current_gen;
+        Some(&entry.2)
+    }
+
+    /// Inserts an entry while evicting stale entries from earlier raster generations.
+    /// Avoids evicting entries touched in `current_gen` up to `hard_cap` so frames mounting
+    /// more than 1024 unique formulas settle without an eviction/wakeup thrash loop; returns `false`
+    /// if `hard_cap` live same-generation entries are already present.
+    fn insert(&mut self, key: MathCacheKey, val: CachedMathEntry, current_gen: u64) -> bool {
+        self.tick = self.tick.wrapping_add(1);
+        let now_tick = self.tick;
+        if let Some(existing) = self.map.get_mut(&key) {
+            *existing = (now_tick, current_gen, val);
+            return true;
+        }
+        while self.map.len() >= self.soft_cap
+            && let Some(stale_key) = self
+                .map
+                .iter()
+                .filter(|(_, (_, g, _))| *g != current_gen)
+                .min_by_key(|(_, (t, _, _))| *t)
+                .map(|(k, _)| k.clone())
+        {
+            self.map.remove(&stale_key);
+        }
+        if self.map.len() >= self.hard_cap {
+            return false;
+        }
+        self.map.insert(key, (now_tick, current_gen, val));
+        true
+    }
+}
+
 struct MathRasterCache {
     ctx: KatexContext,
-    entries: Mutex<(
-        HashMap<MathCacheKey, CachedMathEntry>,
-        VecDeque<MathCacheKey>,
-    )>,
+    /// Color- and scale-independent parsed KaTeX layout cache (`None` caches parse failures).
+    layouts: Mutex<KatexLayoutCache>,
+    /// Rasterized RGBA `Pixels` cache keyed by `(tex, display, rgba32, px_per_em, render_scale_q)`.
+    entries: Mutex<MathEntryCache>,
     worker_tx: mpsc::Sender<RasterJob>,
 }
 
-/// Bumped each time the raster worker finishes a formula. A memoized feed row that drew a
-/// formula's pending placeholder (estimated size) puts this in its version so it builds again
-/// at the final size.
+/// Bumped each time the raster worker finishes a batch of formulas. A memoized feed row that
+/// drew a formula's pending placeholder (estimated size) puts this in its version so it builds
+/// again at the final size.
 static RASTER_GENERATION: AtomicU64 = AtomicU64::new(0);
 
-/// How many background rasterizations have finished; see [`RASTER_GENERATION`].
+/// How many background rasterization batches have finished; see [`RASTER_GENERATION`].
 pub fn raster_generation() -> u64 {
     RASTER_GENERATION.load(Ordering::Acquire)
 }
@@ -1315,44 +1442,76 @@ fn global_math_cache() -> &'static MathRasterCache {
         let _ = std::thread::Builder::new()
             .name("cowork-math-raster".into())
             .spawn(move || {
-                while let Ok(job) = rx.recv() {
-                    let entry = rasterize_layout_to_entry(
-                        &job.layout,
-                        job.px_per_em,
-                        job.color,
-                        job.render_scale,
-                        Some(job.pixels),
-                    );
-                    if let Some(cache) = CACHE.get() {
-                        cache.insert_entry(job.key, entry);
+                while let Ok(first_job) = rx.recv() {
+                    let mut wakers: Vec<Arc<dyn Fn() + Send + Sync>> = Vec::new();
+                    let mut run_job = |job: RasterJob| {
+                        let entry = rasterize_layout_to_entry(
+                            &job.layout,
+                            job.px_per_em,
+                            job.color,
+                            job.render_scale,
+                            Some(job.pixels),
+                        );
+                        if let Some(cache) = CACHE.get() {
+                            let raster_gen = RASTER_GENERATION.load(Ordering::Relaxed);
+                            let _ = cache.insert_entry(job.key, entry, raster_gen);
+                        }
+                        let ptr = Arc::as_ptr(&job.waker) as *const () as usize;
+                        if !wakers
+                            .iter()
+                            .any(|w| Arc::as_ptr(w) as *const () as usize == ptr)
+                        {
+                            wakers.push(job.waker);
+                        }
+                    };
+                    run_job(first_job);
+                    let mut batched = 1usize;
+                    while batched < MAX_WORKER_BATCH
+                        && let Ok(next_job) = rx.try_recv()
+                    {
+                        run_job(next_job);
+                        batched += 1;
                     }
                     RASTER_GENERATION.fetch_add(1, Ordering::Release);
-                    (job.waker)();
+                    for wake in wakers {
+                        (wake)();
+                    }
                 }
             });
         MathRasterCache {
             ctx: KatexContext::default(),
-            entries: Mutex::new((HashMap::new(), VecDeque::new())),
+            layouts: Mutex::new(LruMap::new(MAX_LAYOUT_CACHE_ENTRIES)),
+            entries: Mutex::new(MathEntryCache::new(
+                MAX_CACHE_ENTRIES,
+                MAX_CACHE_ENTRIES_BURST,
+            )),
             worker_tx: tx,
         }
     })
 }
 
 impl MathRasterCache {
-    fn insert_entry(&self, key: MathCacheKey, entry: CachedMathEntry) {
+    fn insert_entry(&self, key: MathCacheKey, entry: CachedMathEntry, current_gen: u64) -> bool {
         let Ok(mut guard) = self.entries.lock() else {
-            return;
+            return false;
         };
-        let (map, order) = &mut *guard;
-        if !map.contains_key(&key) {
-            if order.len() >= MAX_CACHE_ENTRIES
-                && let Some(evicted) = order.pop_front()
-            {
-                map.remove(&evicted);
-            }
-            order.push_back(key.clone());
+        guard.insert(key, entry, current_gen)
+    }
+
+    fn resolve_layout(&self, tex: &str, display: bool) -> Option<Arc<KatexLayout>> {
+        let layout_key = (tex.to_string(), display);
+        if let Ok(mut guard) = self.layouts.lock()
+            && let Some(hit) = guard.get(&layout_key)
+        {
+            return hit.clone();
         }
-        map.insert(key, entry);
+        let parsed = katex_native::layout(&self.ctx, tex, display)
+            .ok()
+            .map(Arc::new);
+        if let Ok(mut guard) = self.layouts.lock() {
+            guard.insert(layout_key, parsed.clone());
+        }
+        parsed
     }
 }
 
@@ -1418,7 +1577,9 @@ pub fn resolve_math_formula(
         return MathRenderOutcome::Empty;
     }
 
-    let render_scale = scale.unwrap_or(DEFAULT_RENDER_SCALE).clamp(1.0, 4.0);
+    let render_scale_raw = scale.unwrap_or(DEFAULT_RENDER_SCALE).clamp(1.0, 4.0);
+    let render_scale_q = (render_scale_raw * 100.0).round() as u16;
+    let render_scale = render_scale_q as f32 / 100.0;
     let px_per_em = (em_pt * render_scale) as f64;
     let k_color = color_to_katex_srgb(ink);
     let rgba32 = u32::from_be_bytes([k_color.r, k_color.g, k_color.b, k_color.a]);
@@ -1427,11 +1588,13 @@ pub fn resolve_math_formula(
         display,
         rgba32,
         px_per_em_bits: (px_per_em as f32).to_bits(),
+        render_scale_q,
     };
 
+    let current_gen = RASTER_GENERATION.load(Ordering::Relaxed);
     let cache = global_math_cache();
-    if let Ok(guard) = cache.entries.lock()
-        && let Some(hit) = guard.0.get(&key)
+    if let Ok(mut guard) = cache.entries.lock()
+        && let Some(hit) = guard.get(&key, current_gen)
     {
         return match hit {
             CachedMathEntry::Ready {
@@ -1461,12 +1624,9 @@ pub fn resolve_math_formula(
         };
     }
 
-    let layout = match katex_native::layout(&cache.ctx, trimmed, display) {
-        Ok(layout) => Arc::new(layout),
-        Err(_) => {
-            cache.insert_entry(key, CachedMathEntry::Failed);
-            return MathRenderOutcome::Failed;
-        }
+    let Some(layout) = cache.resolve_layout(trimmed, display) else {
+        let _ = cache.insert_entry(key, CachedMathEntry::Failed, current_gen);
+        return MathRenderOutcome::Failed;
     };
 
     if let Some(wake) = waker {
@@ -1474,7 +1634,7 @@ pub fn resolve_math_formula(
         let width_pt = ((layout.width as f32 * em_pt) + 2.0).max(4.0);
         let height_pt = (((layout.height + layout.depth) as f32 * em_pt) + 2.0).max(em_pt);
         let baseline_pt = ((layout.height as f32 * em_pt) + 1.0).clamp(0.0, height_pt);
-        cache.insert_entry(
+        if !cache.insert_entry(
             key.clone(),
             CachedMathEntry::Pending {
                 pixels: pixels.clone(),
@@ -1482,7 +1642,10 @@ pub fn resolve_math_formula(
                 height_pt,
                 baseline_pt,
             },
-        );
+            current_gen,
+        ) {
+            return MathRenderOutcome::Failed;
+        }
         let job = RasterJob {
             key,
             layout,
@@ -1519,7 +1682,7 @@ pub fn resolve_math_formula(
         CachedMathEntry::Empty => MathRenderOutcome::Empty,
         _ => MathRenderOutcome::Failed,
     };
-    cache.insert_entry(key, entry);
+    let _ = cache.insert_entry(key, entry, current_gen);
     outcome
 }
 
@@ -1635,26 +1798,44 @@ pub fn render_streaming_math_block(k: &Kit, t: &ThemeTokens, tex: &str, key_pref
     render_math_code_block_fallback(k, t, tex, true, key_prefix)
 }
 
-fn split_word_atoms(s: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut start = 0usize;
-    let bytes = s.as_bytes();
-    let mut i = 0usize;
-    while i < bytes.len() {
-        if bytes[i] == b' ' {
-            while i < bytes.len() && bytes[i] == b' ' {
-                i += 1;
-            }
-            out.push(s[start..i].to_string());
-            start = i;
-        } else {
-            i += 1;
+struct WordChunkIter<'a> {
+    s: &'a str,
+    pos: usize,
+}
+
+impl<'a> Iterator for WordChunkIter<'a> {
+    type Item = &'a str;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let bytes = self.s.as_bytes();
+        if self.pos >= bytes.len() {
+            return None;
         }
+        let chunk_start = self.pos;
+        let mut chunk_end = chunk_start;
+        while self.pos < bytes.len() {
+            let mut word_end = self.pos;
+            while word_end < bytes.len() && bytes[word_end] != b' ' {
+                word_end += 1;
+            }
+            while word_end < bytes.len() && bytes[word_end] == b' ' {
+                word_end += 1;
+            }
+            if chunk_end > chunk_start && word_end - chunk_start > INLINE_WORD_CHUNK_SOFT_MAX {
+                break;
+            }
+            chunk_end = word_end;
+            self.pos = word_end;
+            if chunk_end - chunk_start >= INLINE_WORD_CHUNK_SOFT_MAX {
+                break;
+            }
+        }
+        Some(&self.s[chunk_start..chunk_end])
     }
-    if start < s.len() {
-        out.push(s[start..].to_string());
-    }
-    out
+}
+
+fn iter_word_chunks(s: &str) -> WordChunkIter<'_> {
+    WordChunkIter { s, pos: 0 }
 }
 
 fn heading_style(t: &ThemeTokens, level: u8, compact: bool) -> (TextStyle, f32) {
@@ -1693,32 +1874,39 @@ fn append_inline_node_with_punct(
     ink: Color,
     carry_leading_space: &mut bool,
 ) -> (El, usize) {
-    if let Some(MathInlineSpan::Text { text: next_t, .. }) = spans.get(idx + 1) {
+    if let Some(MathInlineSpan::Text {
+        text: next_t,
+        bold,
+        italic,
+    }) = spans.get(idx + 1)
+    {
         if let Some(first_ch) = next_t.chars().next()
             && matches!(first_ch, '.' | ',' | ';' | ':' | '!' | '?' | ')')
         {
             let punct_len = next_t.find(' ').unwrap_or(next_t.len());
             let punct = &next_t[..punct_len];
             let has_space_after = next_t[punct_len..].starts_with(' ');
+            let mut punct_el = text(punct.to_string()).font(base_font).color(ink);
+            if let Some(sp) = apply_span_style(punct, *bold, *italic) {
+                punct_el = punct_el.spans(sp);
+            }
             let mut grouped = row()
                 .key(format!("{key_prefix}:g:{idx}"))
                 .items_center()
                 .child(node)
-                .child(text(punct.to_string()).font(base_font).color(ink));
+                .child(punct_el);
             if has_space_after {
                 grouped = grouped.mr(3.5);
             }
             flow = flow.child(grouped);
             let rest = next_t[punct_len..].trim_start_matches(' ');
-            if !rest.is_empty()
-                && let MathInlineSpan::Text { bold, italic, .. } = &spans[idx + 1]
-            {
-                for (w_i, atom) in split_word_atoms(rest).into_iter().enumerate() {
+            if !rest.is_empty() {
+                for (w_i, atom) in iter_word_chunks(rest).enumerate() {
                     if atom.is_empty() {
                         continue;
                     }
-                    let mut w_el = text(atom.clone()).font(base_font).color(ink);
-                    if let Some(sp) = apply_span_style(&atom, *bold, *italic) {
+                    let mut w_el = text(atom).font(base_font).color(ink);
+                    if let Some(sp) = apply_span_style(atom, *bold, *italic) {
                         w_el = w_el.spans(sp);
                     }
                     flow = flow.child(w_el.key(format!("{key_prefix}:w:{}:{w_i}", idx + 1)));
@@ -1800,12 +1988,12 @@ where
                     slice = slice.trim_start_matches(' ');
                     carry_leading_space = false;
                 }
-                for (w_i, atom) in split_word_atoms(slice).into_iter().enumerate() {
+                for (w_i, atom) in iter_word_chunks(slice).enumerate() {
                     if atom.is_empty() {
                         continue;
                     }
-                    let mut el_word = text(atom.clone()).font(base_font).color(ink);
-                    if let Some(sp) = apply_span_style(&atom, *bold, *italic) {
+                    let mut el_word = text(atom).font(base_font).color(ink);
+                    if let Some(sp) = apply_span_style(atom, *bold, *italic) {
                         el_word = el_word.spans(sp);
                     }
                     flow = flow.child(el_word.key(format!("{key_prefix}:w:{idx}:{w_i}")));
@@ -2356,5 +2544,36 @@ Result is **$$E = mc^2$$** in `foo_bar` ([spec](cit://1)), price \\$5.
                 (1, "•".to_string()),
             ]
         );
+    }
+
+    #[test]
+    fn resolve_math_formula_separates_equal_px_per_em_at_different_scales() {
+        let light_tokens = crate::theme::tokens(false);
+        let tex = r"x^2 + \frac{1}{2}";
+        // Both produce px_per_em = 39.0 (15.0 * 2.6 == 13.0 * 3.0) but different logical sizes.
+        let normal =
+            resolve_math_formula(tex, false, light_tokens.text_base, Some(2.6), 15.0, None);
+        let compact =
+            resolve_math_formula(tex, false, light_tokens.text_base, Some(3.0), 13.0, None);
+        match (normal, compact) {
+            (
+                MathRenderOutcome::Ready {
+                    width_pt: w_norm,
+                    height_pt: h_norm,
+                    ..
+                },
+                MathRenderOutcome::Ready {
+                    width_pt: w_comp,
+                    height_pt: h_comp,
+                    ..
+                },
+            ) => {
+                assert!(
+                    w_norm > w_comp + 1.0 && h_norm > h_comp + 1.0,
+                    "normal ({w_norm}x{h_norm}) should exceed compact ({w_comp}x{h_comp})"
+                );
+            }
+            _ => panic!("expected synchronous Ready outcomes for both scales"),
+        }
     }
 }

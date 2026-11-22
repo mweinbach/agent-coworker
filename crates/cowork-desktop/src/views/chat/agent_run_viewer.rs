@@ -1,17 +1,20 @@
 //! Read-only side drawer inspecting a spawned child subagent's live or historical run feed.
 
 use std::collections::HashMap;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::sync::LazyLock;
 
-use rune::{El, col, icon, row, spacer, text};
+use rune::{El, col, icon, memo, row, spacer, text};
 use rune_kit::{ControlSize, IconButton, IconButtonVariant, Kit};
 
 use crate::actions::{Action, ChatAction};
 use crate::state::{AppState, FeedItem, ThreadAgentSummary};
 use crate::theme::ThemeTokens;
 
+use super::attachments::shared_waker_image_cache;
 use super::components::{StatusPillTone, status_pill};
-use super::feed::{ChatFeedProps, FeedSource, build_chat_feed};
+use super::feed::{ChatFeedProps, FeedSource, build_chat_feed, compute_feed_surface_version};
 use super::icons;
 use super::model::is_active_child_agent;
 
@@ -46,146 +49,164 @@ pub fn build_agent_run_drawer(
     let is_active = agent.is_some_and(is_active_child_agent)
         || child_rt.is_some_and(|r| r.streaming || r.active_turn_id.is_some());
     let is_hydrating = child_rt.is_some_and(|r| r.hydrating) || (is_active && raw_feed.is_empty());
-    let (status_label, status_tone) = resolve_agent_status(agent, is_active);
-    let subtitle = format_agent_metadata(agent);
-
-    let close_btn = IconButton::new(k.glyph.close)
-        .variant(IconButtonVariant::Ghost)
-        .control_size(ControlSize::Small)
-        .label("Close subagent viewer")
-        .on_press(|s: &mut AppState| {
-            s.dispatch(Action::Chat(ChatAction::CloseAgentViewer));
-        })
-        .build(k)
-        .key("agent-viewer-close");
-
-    let mut header = col()
-        .key("agent-viewer-header")
-        .w_full()
-        .gap(6.0)
-        .px(16.0)
-        .py(12.0)
-        .border_sides([0.0, 0.0, 1.0, 0.0], t.border_muted)
-        .child(
-            row()
-                .w_full()
-                .items_center()
-                .gap(8.0)
-                .child(icon(&icons::BOT, 15.0).color(t.accent))
-                .child(
-                    text(title)
-                        .font(k.ty.body_medium)
-                        .color(t.text_base)
-                        .truncate()
-                        .grow(1.0)
-                        .min_w(0.0),
-                )
-                .child(status_pill(k, t, status_label, status_tone))
-                .child(close_btn),
-        );
-
-    if let Some(meta) = subtitle {
-        header = header.child(
-            text(meta)
-                .font(k.ty.text_xsmall)
-                .color(t.text_muted)
-                .truncate()
-                .w_full(),
-        );
-    }
-
-    if let Some(err) = agent
-        .and_then(|a| a.error.as_deref())
-        .map(str::trim)
-        .filter(|e| !e.is_empty())
-    {
-        header = header.child(
-            row()
-                .w_full()
-                .items_start()
-                .gap(8.0)
-                .px(10.0)
-                .py(8.0)
-                .radius(8.0)
-                .fill(k.alpha(t.danger, 0.10))
-                .border(1.0, k.alpha(t.danger, 0.28))
-                .child(icon(&icons::ALERT, 13.0).color(t.danger).mt(2.0))
-                .child(
-                    text(err.to_string())
-                        .font(k.ty.text_xsmall)
-                        .color(t.danger)
-                        .wrap()
-                        .grow(1.0)
-                        .min_w(0.0),
-                ),
-        );
-    }
-
-    let agent_feed_key = format!("agent:{}", viewer.agent_id);
-    let body = if raw_feed.is_empty() && !is_active && !is_hydrating {
-        col()
-            .w_full()
-            .grow(1.0)
-            .min_h(0.0)
-            .items_center()
-            .justify_center()
-            .padding(24.0)
-            .gap(8.0)
-            .child(icon(&icons::BOT, 22.0).color(t.text_faint))
-            .child(
-                text("No messages recorded for this subagent yet.")
-                    .font(k.ty.ui)
-                    .color(t.text_muted),
-            )
-            .child(spacer())
-    } else {
-        build_chat_feed(
-            s,
-            k,
-            t,
-            &ChatFeedProps {
-                thread_key: &agent_feed_key,
-                source: FeedSource::AgentRun {
-                    thread_id: viewer.thread_id.clone(),
-                    agent_id: viewer.agent_id.clone(),
-                },
-                thread_busy: is_active,
-                hydrating: is_hydrating,
-                transcript_only: false,
-                disconnected: false,
-                reconnecting: false,
-                interaction_errors: &EMPTY_ERRORS,
-                workspace_id,
-                workspace_path,
-                external_cache: None,
-                is_agent_viewer: true,
-                scroll_area_key: "agent-feed-area",
-                viewport_key: "agent-feed-scroll",
-                frame_key: "agent-feed-frame",
-            },
-        )
-    };
-
     let overlay_w = chat_view_width
         .filter(|&w| w < 820.0)
         .map(|w| (w - 32.0).clamp(280.0, 432.0));
+    let agent_feed_key = format!("agent:{}", viewer.agent_id);
+    let feed_props = ChatFeedProps {
+        thread_key: &agent_feed_key,
+        source: FeedSource::AgentRun {
+            thread_id: viewer.thread_id.clone(),
+            agent_id: viewer.agent_id.clone(),
+        },
+        thread_busy: is_active,
+        hydrating: is_hydrating,
+        transcript_only: false,
+        disconnected: false,
+        reconnecting: false,
+        interaction_errors: &EMPTY_ERRORS,
+        workspace_id,
+        workspace_path,
+        external_cache: shared_waker_image_cache(s.services.waker.as_ref()),
+        is_agent_viewer: true,
+        scroll_area_key: "agent-feed-area",
+        viewport_key: "agent-feed-scroll",
+        frame_key: "agent-feed-frame",
+    };
 
-    let mut drawer = col()
-        .key("agent-run-viewer")
-        .h_full()
-        .min_h(0.0)
-        .fill(if overlay_w.is_some() {
-            t.popover_bg
+    let build_drawer = || {
+        let (status_label, status_tone) = resolve_agent_status(agent, is_active);
+        let subtitle = format_agent_metadata(agent);
+
+        let close_btn = IconButton::new(k.glyph.close)
+            .variant(IconButtonVariant::Ghost)
+            .control_size(ControlSize::Small)
+            .label("Close subagent viewer")
+            .on_press(|s: &mut AppState| {
+                s.dispatch(Action::Chat(ChatAction::CloseAgentViewer));
+            })
+            .build(k)
+            .key("agent-viewer-close");
+
+        let mut header = col()
+            .key("agent-viewer-header")
+            .w_full()
+            .gap(6.0)
+            .px(16.0)
+            .py(12.0)
+            .border_sides([0.0, 0.0, 1.0, 0.0], t.border_muted)
+            .child(
+                row()
+                    .w_full()
+                    .items_center()
+                    .gap(8.0)
+                    .child(icon(&icons::BOT, 15.0).color(t.accent))
+                    .child(
+                        text(title.clone())
+                            .font(k.ty.body_medium)
+                            .color(t.text_base)
+                            .truncate()
+                            .grow(1.0)
+                            .min_w(0.0),
+                    )
+                    .child(status_pill(k, t, status_label, status_tone))
+                    .child(close_btn),
+            );
+
+        if let Some(meta) = subtitle {
+            header = header.child(
+                text(meta)
+                    .font(k.ty.text_xsmall)
+                    .color(t.text_muted)
+                    .truncate()
+                    .w_full(),
+            );
+        }
+
+        if let Some(err) = agent
+            .and_then(|a| a.error.as_deref())
+            .map(str::trim)
+            .filter(|e| !e.is_empty())
+        {
+            header = header.child(
+                row()
+                    .w_full()
+                    .items_start()
+                    .gap(8.0)
+                    .px(10.0)
+                    .py(8.0)
+                    .radius(8.0)
+                    .fill(k.alpha(t.danger, 0.10))
+                    .border(1.0, k.alpha(t.danger, 0.28))
+                    .child(icon(&icons::ALERT, 13.0).color(t.danger).mt(2.0))
+                    .child(
+                        text(err.to_string())
+                            .font(k.ty.text_xsmall)
+                            .color(t.danger)
+                            .wrap()
+                            .grow(1.0)
+                            .min_w(0.0),
+                    ),
+            );
+        }
+
+        let body = if raw_feed.is_empty() && !is_active && !is_hydrating {
+            col()
+                .w_full()
+                .grow(1.0)
+                .min_h(0.0)
+                .items_center()
+                .justify_center()
+                .padding(24.0)
+                .gap(8.0)
+                .child(icon(&icons::BOT, 22.0).color(t.text_faint))
+                .child(
+                    text("No messages recorded for this subagent yet.")
+                        .font(k.ty.ui)
+                        .color(t.text_muted),
+                )
+                .child(spacer())
         } else {
-            t.panel_bg
-        })
-        .border_sides([0.0, 0.0, 0.0, 1.0], t.border_muted)
-        .child(header)
-        .child(body);
-    drawer = if let Some(w) = overlay_w {
-        drawer.w(w).border(1.0, t.border_strong)
-    } else {
-        drawer.w(432.0).min_w(340.0).max_w(480.0)
+            build_chat_feed(s, k, t, &feed_props)
+        };
+
+        let mut drawer = col()
+            .h_full()
+            .min_h(0.0)
+            .fill(if overlay_w.is_some() {
+                t.popover_bg
+            } else {
+                t.panel_bg
+            })
+            .border_sides([0.0, 0.0, 0.0, 1.0], t.border_muted)
+            .child(header)
+            .child(body);
+        drawer = if let Some(w) = overlay_w {
+            drawer.w(w).border(1.0, t.border_strong)
+        } else {
+            drawer.w(432.0).min_w(340.0).max_w(480.0)
+        };
+        drawer
+    };
+
+    let drawer = match compute_feed_surface_version(s, t, &feed_props) {
+        Some(feed_ver) => {
+            let mut h = DefaultHasher::new();
+            (
+                feed_ver,
+                &viewer.thread_id,
+                &viewer.agent_id,
+                &title,
+                agent,
+                is_active,
+                is_hydrating,
+                raw_feed.is_empty(),
+                overlay_w.map(f32::to_bits),
+            )
+                .hash(&mut h);
+            memo("agent-run-viewer", h.finish(), build_drawer)
+        }
+        None => build_drawer().key("agent-run-viewer"),
     };
     Some(drawer)
 }

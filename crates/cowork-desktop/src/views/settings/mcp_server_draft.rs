@@ -82,21 +82,17 @@ impl std::fmt::Display for McpDraftValidationError {
 }
 
 /// Splits a command arguments string with single/double quotes and backslash escapes.
+/// Inside double quotes, backslashes only escape `"`, `\`, `$`, `` ` ``, or whitespace so
+/// Windows paths such as `"C:\Users\Alice\server.js"` retain their literal path separators.
 pub fn parse_args_line(raw: &str) -> Result<Vec<String>, McpDraftValidationError> {
     let mut args = Vec::new();
     let mut current = String::new();
     let mut in_single = false;
     let mut in_double = false;
-    let mut escape = false;
     let mut has_token = false;
 
-    for ch in raw.chars() {
-        if escape {
-            current.push(ch);
-            escape = false;
-            has_token = true;
-            continue;
-        }
+    let mut chars = raw.chars().peekable();
+    while let Some(ch) = chars.next() {
         if in_single {
             if ch == '\'' {
                 in_single = false;
@@ -110,7 +106,17 @@ pub fn parse_args_line(raw: &str) -> Result<Vec<String>, McpDraftValidationError
             if ch == '"' {
                 in_double = false;
             } else if ch == '\\' {
-                escape = true;
+                match chars.peek().copied() {
+                    Some(next)
+                        if matches!(next, '"' | '\\' | '$' | '`') || next.is_whitespace() =>
+                    {
+                        current.push(next);
+                        chars.next();
+                    }
+                    _ => {
+                        current.push('\\');
+                    }
+                }
             } else {
                 current.push(ch);
             }
@@ -119,8 +125,15 @@ pub fn parse_args_line(raw: &str) -> Result<Vec<String>, McpDraftValidationError
         }
         match ch {
             '\\' => {
-                escape = true;
-                has_token = true;
+                if let Some(next) = chars.next() {
+                    current.push(next);
+                    has_token = true;
+                } else {
+                    return Err(McpDraftValidationError {
+                        field: "args",
+                        message: "Unclosed quote or trailing escape in arguments.".to_string(),
+                    });
+                }
             }
             '\'' => {
                 in_single = true;
@@ -143,7 +156,7 @@ pub fn parse_args_line(raw: &str) -> Result<Vec<String>, McpDraftValidationError
         }
     }
 
-    if escape || in_single || in_double {
+    if in_single || in_double {
         return Err(McpDraftValidationError {
             field: "args",
             message: "Unclosed quote or trailing escape in arguments.".to_string(),

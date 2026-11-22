@@ -372,6 +372,46 @@ impl NavigationHistory {
         changed
     }
 
+    /// Clears `active_thread_id` across every history entry (current and back/forward)
+    /// that points to any ID in `removed_ids`.
+    pub fn clear_thread_ids(&mut self, removed_ids: &[String]) -> bool {
+        if removed_ids.is_empty() {
+            return false;
+        }
+        let mut changed = false;
+        for entry in &mut self.entries {
+            if entry
+                .active_thread_id
+                .as_deref()
+                .is_some_and(|tid| removed_ids.iter().any(|id| id == tid))
+            {
+                entry.active_thread_id = None;
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    /// Clears `active_task_id` across every history entry (current and back/forward)
+    /// that points to any ID in `removed_ids`.
+    pub fn clear_task_ids(&mut self, removed_ids: &[String]) -> bool {
+        if removed_ids.is_empty() {
+            return false;
+        }
+        let mut changed = false;
+        for entry in &mut self.entries {
+            if entry
+                .active_task_id
+                .as_deref()
+                .is_some_and(|tid| removed_ids.iter().any(|id| id == tid))
+            {
+                entry.active_task_id = None;
+                changed = true;
+            }
+        }
+        changed
+    }
+
     pub fn go_back(&mut self) -> bool {
         if !self.can_go_back() {
             return false;

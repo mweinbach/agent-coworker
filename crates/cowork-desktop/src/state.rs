@@ -9702,6 +9702,39 @@ impl AppState {
                 });
             }
             NativeAction::RemoveWorkspace(workspace_id) => {
+                let old_composer_key = self.composer_key();
+                let mut removed_thread_ids: Vec<String> = Vec::new();
+                let push_unique_id = |list: &mut Vec<String>, id: &str| {
+                    let trimmed = id.trim();
+                    if !trimmed.is_empty() && !list.iter().any(|existing| existing == trimmed) {
+                        list.push(trimmed.to_string());
+                    }
+                };
+                for t in &self.threads {
+                    if t.workspace_id == workspace_id {
+                        push_unique_id(&mut removed_thread_ids, &t.id);
+                        if let Some(sid) = t.session_id.as_deref() {
+                            push_unique_id(&mut removed_thread_ids, sid);
+                        }
+                    }
+                }
+                for t in &self.archived_threads {
+                    if t.workspace_id == workspace_id {
+                        push_unique_id(&mut removed_thread_ids, &t.id);
+                    }
+                }
+                let mut removed_task_ids: Vec<String> = Vec::new();
+                for task in &self.tasks {
+                    if task.workspace_id == workspace_id {
+                        push_unique_id(&mut removed_task_ids, &task.id);
+                    }
+                }
+                if let Some(active_task) = &self.active_task
+                    && active_task.summary.workspace_id == workspace_id
+                {
+                    push_unique_id(&mut removed_task_ids, &active_task.summary.id);
+                }
+
                 let before_len = self.workspaces.len();
                 self.workspaces.retain(|w| w.id != workspace_id);
                 let removed = self.workspaces.len() < before_len;
@@ -9710,9 +9743,42 @@ impl AppState {
                 self.threads.retain(|t| t.workspace_id != workspace_id);
                 self.archived_threads
                     .retain(|t| t.workspace_id != workspace_id);
+                self.tasks.retain(|t| t.workspace_id != workspace_id);
+                if self
+                    .active_task
+                    .as_ref()
+                    .is_some_and(|t| t.summary.workspace_id == workspace_id)
+                {
+                    self.active_task = None;
+                }
+                self.workflow_runs.retain(|run| {
+                    run.workspace_id.as_deref() != Some(workspace_id.as_str())
+                        && run
+                            .session_id
+                            .as_deref()
+                            .is_none_or(|sid| !removed_thread_ids.iter().any(|id| id == sid))
+                });
                 self.workspace_runtime_by_id.remove(&workspace_id);
                 self.workspace_socket_by_id.remove(&workspace_id);
                 self.pending_workspace_server_starts.remove(&workspace_id);
+                self.subscribed_threads_by_workspace.remove(&workspace_id);
+                self.commands_by_workspace.remove(&workspace_id);
+                self.pending_defaults_apply_by_workspace
+                    .remove(&workspace_id);
+                self.in_flight_defaults_apply_by_rpc_id
+                    .retain(|_, (ws_id, _)| ws_id != &workspace_id);
+                self.pending_task_artifact_rpcs
+                    .retain(|_, pending| pending.workspace_id != workspace_id);
+                for id in &removed_thread_ids {
+                    self.thread_runtime_by_id.remove(id);
+                    self.composer_drafts.remove(id);
+                    self.pending_thread_messages.remove(id);
+                    self.usage_by_thread.remove(id);
+                    self.attachment_previews_by_key.remove(id);
+                }
+                let removed_landing_key = format!("new:project:{workspace_id}");
+                self.composer_drafts.remove(&removed_landing_key);
+                self.attachment_previews_by_key.remove(&removed_landing_key);
                 self.explorer_entries_by_workspace
                     .retain(|(ws_id, _), _| ws_id != &workspace_id);
                 let expanded_prefix = format!("{workspace_id}::");
@@ -9720,6 +9786,61 @@ impl AppState {
                     .retain(|key| !key.starts_with(&expanded_prefix));
                 if self.active_workspace_id.as_deref() == Some(workspace_id.as_str()) {
                     self.active_workspace_id = self.workspaces.first().map(|w| w.id.clone());
+                }
+                if self.landing_workspace_id.as_deref() == Some(workspace_id.as_str()) {
+                    self.landing_workspace_id = None;
+                }
+                if self.agent_viewer.as_ref().is_some_and(|viewer| {
+                    removed_thread_ids.iter().any(|id| id == &viewer.thread_id)
+                }) {
+                    self.agent_viewer = None;
+                }
+                if self
+                    .chat_ui
+                    .cancel_subagents_thread_id
+                    .as_deref()
+                    .is_some_and(|tid| removed_thread_ids.iter().any(|id| id == tid))
+                {
+                    self.chat_ui.cancel_subagents_thread_id = None;
+                    self.chat_ui.cancel_subagents_open = false;
+                }
+                if self
+                    .shell_ui
+                    .pending_delete_thread_id
+                    .as_deref()
+                    .is_some_and(|tid| removed_thread_ids.iter().any(|id| id == tid))
+                {
+                    self.shell_ui.pending_delete_thread_id = None;
+                }
+                if self
+                    .settings_ui
+                    .chats_confirm_delete_id
+                    .as_deref()
+                    .is_some_and(|tid| removed_thread_ids.iter().any(|id| id == tid))
+                {
+                    self.settings_ui.chats_confirm_delete_id = None;
+                }
+                if self
+                    .persisted_active_thread_id
+                    .as_deref()
+                    .is_some_and(|tid| removed_thread_ids.iter().any(|id| id == tid))
+                {
+                    self.persisted_active_thread_id = None;
+                }
+                self.nav.clear_thread_ids(&removed_thread_ids);
+                self.nav.clear_task_ids(&removed_task_ids);
+                let new_composer_key = self.composer_key();
+                if old_composer_key == removed_landing_key
+                    || removed_thread_ids.iter().any(|id| id == &old_composer_key)
+                {
+                    let next_text = self
+                        .composer_drafts
+                        .get(&new_composer_key)
+                        .map(|d| d.text.as_str())
+                        .unwrap_or("");
+                    self.composer_edit = TextEdit::new(next_text);
+                } else if old_composer_key != new_composer_key {
+                    self.sync_composer_edit_across_switch(&old_composer_key, &new_composer_key);
                 }
                 if self.settings_ui.subagent_workspace_id.as_deref() == Some(workspace_id.as_str())
                 {
@@ -14204,18 +14325,21 @@ impl AppState {
             self.settings_ui.chats_confirm_delete_id = None;
         }
 
-        if self
+        let was_active_thread = self
             .nav
             .current()
             .active_thread_id
             .as_deref()
-            .is_some_and(|tid| removed_ids.iter().any(|id| id == tid))
-        {
-            let old_key = self.composer_key();
-            let mut cur = self.nav.current().clone();
-            cur.active_thread_id = None;
-            self.nav.replace_current(cur);
-            self.sync_composer_edit_across_switch(&old_key, &self.composer_key());
+            .is_some_and(|tid| removed_ids.iter().any(|id| id == tid));
+        self.nav.clear_thread_ids(&removed_ids);
+        if was_active_thread {
+            let new_key = self.composer_key();
+            let next_text = self
+                .composer_drafts
+                .get(&new_key)
+                .map(|d| d.text.as_str())
+                .unwrap_or("");
+            self.composer_edit = TextEdit::new(next_text);
         }
         if self
             .persisted_active_thread_id
@@ -28243,5 +28367,80 @@ mod tests {
         // Workspace B's tasks landing panel must not show Workspace A's workflow runs.
         assert_eq!(state.workflow_runs_for_workspace("ws-a").len(), 1);
         assert!(state.workflow_runs_for_workspace("ws-b").is_empty());
+    }
+
+    #[test]
+    fn remove_workspace_clears_active_thread_nav_history_and_reconciles_composer() {
+        let mut state = AppState::default();
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-a", "Alpha", "/tmp/a", 1));
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-b", "Beta", "/tmp/b", 2));
+        state.workspace_order = vec!["ws-a".to_string(), "ws-b".to_string()];
+        state.active_workspace_id = Some("ws-a".to_string());
+        state.threads.push(ThreadRecord {
+            id: "th-a".to_string(),
+            workspace_id: "ws-a".to_string(),
+            title: "Alpha chat".to_string(),
+            session_id: Some("th-a".to_string()),
+            ..ThreadRecord::default()
+        });
+        state.composer_drafts.insert(
+            "th-a".to_string(),
+            ComposerDraft {
+                text: "old alpha draft".to_string(),
+                ..Default::default()
+            },
+        );
+        state.composer_drafts.insert(
+            "new:project:ws-b".to_string(),
+            ComposerDraft {
+                text: "beta landing draft".to_string(),
+                ..Default::default()
+            },
+        );
+
+        // Open Alpha conversation, then navigate to Settings (Behavior).
+        state.dispatch(Action::Navigate(NavAction::OpenThread("th-a".to_string())));
+        assert_eq!(
+            state.nav.current().active_thread_id.as_deref(),
+            Some("th-a")
+        );
+        assert_eq!(state.composer_key(), "th-a");
+        assert_eq!(state.composer_edit.text, "old alpha draft");
+
+        state.dispatch(Action::Navigate(NavAction::OpenSettings(Some(
+            SettingsPageId::Workspaces,
+        ))));
+        assert_eq!(state.nav.current().view, ViewId::Settings);
+        assert_eq!(
+            state.nav.current().active_thread_id.as_deref(),
+            Some("th-a")
+        );
+
+        // Remove Alpha workspace while in Settings.
+        state.dispatch(Action::Native(NativeAction::RemoveWorkspace(
+            "ws-a".to_string(),
+        )));
+        assert_eq!(state.active_workspace_id.as_deref(), Some("ws-b"));
+        assert_eq!(state.nav.current().active_thread_id, None);
+        assert_eq!(state.composer_key(), "new:project:ws-b");
+        assert_eq!(state.composer_edit.text, "beta landing draft");
+        assert!(!state.composer_drafts.contains_key("th-a"));
+
+        // Navigating back to chat (including via Back history) must stay on landing, not deleted th-a.
+        state.dispatch(Action::Navigate(NavAction::GoBack));
+        assert_eq!(state.nav.current().view, ViewId::Chat);
+        assert_eq!(state.nav.current().active_thread_id, None);
+        assert_eq!(state.composer_key(), "new:project:ws-b");
+
+        // Submitting from the landing creates a new draft chat in Beta instead of silently no-oping.
+        crate::views::chat::composer::submit_composer_message(&mut state);
+        let active = state
+            .active_thread()
+            .expect("sending from landing after workspace removal should create a new thread");
+        assert_eq!(active.workspace_id, "ws-b");
     }
 }

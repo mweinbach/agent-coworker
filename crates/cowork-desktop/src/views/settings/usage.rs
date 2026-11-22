@@ -554,8 +554,22 @@ fn build_overview_section(s: &AppState, agg: &AggregateUsage, k: &Kit, t: &Theme
     }
 }
 
-fn build_models_section(s: &AppState, agg: &AggregateUsage, k: &Kit, t: &ThemeTokens) -> El {
-    let mut rows: Vec<(String, String, usize, u64, u64, u64, f64)> = Vec::new();
+/// Aggregated usage row for a single `(provider, model)` pair across tracked sessions.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ModelUsageRow {
+    pub model: String,
+    pub provider: String,
+    pub turns: usize,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cached_tokens: u64,
+    pub estimated_cost_usd: f64,
+}
+
+/// Aggregates per-model usage across all tracked thread runtimes, falling back to
+/// `s.usage_summary.by_model` only when no thread runtime has recorded usage yet.
+pub fn aggregate_model_usage(s: &AppState, agg: &AggregateUsage) -> Vec<ModelUsageRow> {
+    let mut rows: Vec<ModelUsageRow> = Vec::new();
     let mut upsert_model_row = |model: String,
                                 provider: String,
                                 turns: usize,
@@ -563,24 +577,27 @@ fn build_models_section(s: &AppState, agg: &AggregateUsage, k: &Kit, t: &ThemeTo
                                 output: u64,
                                 cached: u64,
                                 cost: f64| {
-        if let Some(existing) = rows.iter_mut().find(|r| r.0 == model && r.1 == provider) {
-            existing.2 += turns;
-            existing.3 = existing.3.saturating_add(input);
-            existing.4 = existing.4.saturating_add(output);
-            existing.5 = existing.5.saturating_add(cached);
+        if let Some(existing) = rows
+            .iter_mut()
+            .find(|r| r.model == model && r.provider == provider)
+        {
+            existing.turns += turns;
+            existing.input_tokens = existing.input_tokens.saturating_add(input);
+            existing.output_tokens = existing.output_tokens.saturating_add(output);
+            existing.cached_tokens = existing.cached_tokens.saturating_add(cached);
             if cost.is_finite() {
-                existing.6 += cost;
+                existing.estimated_cost_usd += cost;
             }
         } else {
-            rows.push((
+            rows.push(ModelUsageRow {
                 model,
                 provider,
                 turns,
-                input,
-                output,
-                cached,
-                if cost.is_finite() { cost } else { 0.0 },
-            ));
+                input_tokens: input,
+                output_tokens: output,
+                cached_tokens: cached,
+                estimated_cost_usd: if cost.is_finite() { cost } else { 0.0 },
+            });
         }
     };
 
@@ -660,7 +677,17 @@ fn build_models_section(s: &AppState, agg: &AggregateUsage, k: &Kit, t: &ThemeTo
         }
     }
 
-    rows.sort_by(|a, b| b.6.total_cmp(&a.6).then_with(|| a.0.cmp(&b.0)));
+    rows.sort_by(|a, b| {
+        b.estimated_cost_usd
+            .total_cmp(&a.estimated_cost_usd)
+            .then_with(|| a.model.cmp(&b.model))
+            .then_with(|| a.provider.cmp(&b.provider))
+    });
+    rows
+}
+
+fn build_models_section(s: &AppState, agg: &AggregateUsage, k: &Kit, t: &ThemeTokens) -> El {
+    let rows = aggregate_model_usage(s, agg);
 
     let mut section = Section::new()
         .title("By model")
@@ -673,7 +700,16 @@ fn build_models_section(s: &AppState, agg: &AggregateUsage, k: &Kit, t: &ThemeTo
                 .build(k, t),
         );
     } else {
-        for (model, provider, turns, input, output, cached, cost) in rows {
+        for ModelUsageRow {
+            model,
+            provider,
+            turns,
+            input_tokens: input,
+            output_tokens: output,
+            cached_tokens: cached,
+            estimated_cost_usd: cost,
+        } in rows
+        {
             let icon_el = entity_icon(s, None, &provider, EntityIconSize::Sm, k, t);
             section = section.child(
                 SettingsRow::new(model)

@@ -1411,9 +1411,8 @@ fn build_task_inspector_sidebar(s: &AppState, task: &TaskRecordView, t: &ThemeTo
     }
     side = side.child(summary_card);
 
-    if let Some(blockers) = task.blockers.as_array()
-        && !blockers.is_empty()
-    {
+    let active_blockers = extract_active_task_blockers(&task.blockers);
+    if !active_blockers.is_empty() {
         let mut b_card = col()
             .w_full()
             .padding(10.0)
@@ -1422,7 +1421,7 @@ fn build_task_inspector_sidebar(s: &AppState, task: &TaskRecordView, t: &ThemeTo
             .border(1.0, t.danger)
             .gap(4.0)
             .child(text("Active Blockers").font(t.label).color(t.danger));
-        for b in blockers.iter().take(6) {
+        for b in active_blockers.into_iter().take(6) {
             let msg = task_blocker_label(b);
             b_card = b_card.child(text(msg).font(t.caption).color(t.text_base).wrap());
         }
@@ -1505,6 +1504,25 @@ fn workflow_run_row(s: &AppState, run: &WorkflowRunView, k: &Kit, t: &ThemeToken
                 .child(label_col)
                 .child(Badge::new(run.status.as_str()).build(k)),
         )
+}
+
+fn is_active_task_blocker(blocker: &Value) -> bool {
+    match blocker.get("status").and_then(Value::as_str) {
+        Some(status) => status.eq_ignore_ascii_case("active"),
+        None => true,
+    }
+}
+
+fn extract_active_task_blockers(blockers: &Value) -> Vec<&Value> {
+    blockers
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter(|blocker| is_active_task_blocker(blocker))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn task_blocker_label(blocker: &Value) -> &str {
@@ -1638,6 +1656,40 @@ mod tests {
             "Waiting on database migration sign-off"
         );
         assert_eq!(task_blocker_label(&json!({ "id": "blk-2" })), "Blocked");
+    }
+
+    #[test]
+    fn extract_active_task_blockers_filters_resolved_before_limiting() {
+        let mut items = Vec::new();
+        for idx in 1..=7 {
+            items.push(json!({
+                "id": format!("blk-resolved-{idx}"),
+                "description": format!("Old resolved blocker {idx}"),
+                "status": "resolved"
+            }));
+        }
+        items.push(json!({
+            "id": "blk-active-1",
+            "description": "Waiting on API key rotation",
+            "status": "active"
+        }));
+        items.push(json!({
+            "id": "blk-active-2",
+            "description": "Needs staging credentials",
+            "status": "active"
+        }));
+
+        let payload = Value::Array(items);
+        let active = extract_active_task_blockers(&payload);
+        assert_eq!(active.len(), 2);
+        assert_eq!(task_blocker_label(active[0]), "Waiting on API key rotation");
+        assert_eq!(task_blocker_label(active[1]), "Needs staging credentials");
+
+        // All-resolved list yields no active blockers so the card stays hidden.
+        let only_resolved = json!([
+            { "id": "blk-1", "description": "Done", "status": "resolved" }
+        ]);
+        assert!(extract_active_task_blockers(&only_resolved).is_empty());
     }
 
     #[test]

@@ -357,6 +357,64 @@ fn aggregate_usage_attributes_providers_from_by_model_after_provider_switch() {
         agg2.providers[1].models,
         vec!["claude-sonnet-4-6".to_string()]
     );
+
+    // Multi-session model breakdown must combine all tracked runtimes even when
+    // `usage_summary` only holds the most recent single session snapshot.
+    let mut second_by_model = std::collections::HashMap::new();
+    second_by_model.insert(
+        "google:gemini-3.1-pro".to_string(),
+        ModelUsageBreakdown {
+            provider: "google".to_string(),
+            model: "gemini-3.1-pro".to_string(),
+            turns: 3,
+            input_tokens: 1_500,
+            output_tokens: 500,
+            cached_tokens: 0,
+            estimated_cost_usd: 0.15,
+        },
+    );
+    let second_usage = UsageSummary {
+        input_tokens: 1_500,
+        output_tokens: 500,
+        cached_tokens: 0,
+        estimated_cost_usd: 0.15,
+        by_model: second_by_model,
+    };
+    state.threads.push(ThreadRecord {
+        id: "t-second".to_string(),
+        workspace_id: "ws1".to_string(),
+        title: "Second chat".to_string(),
+        provider: Some("google".to_string()),
+        model: Some("gemini-3.1-pro".to_string()),
+        ..Default::default()
+    });
+    state.thread_runtime_by_id.insert(
+        "t-second".to_string(),
+        ThreadRuntime {
+            usage: Some(second_usage.clone()),
+            ..Default::default()
+        },
+    );
+    state.usage_summary = Some(second_usage);
+
+    let agg_all = aggregate_usage(&state);
+    let model_rows = super::usage::aggregate_model_usage(&state, &agg_all);
+    assert_eq!(model_rows.len(), 4);
+    assert!(
+        model_rows
+            .iter()
+            .any(|r| r.provider == "openai" && r.model == "gpt-5.4" && r.turns == 2)
+    );
+    assert!(
+        model_rows
+            .iter()
+            .any(|r| r.provider == "anthropic" && r.model == "claude-sonnet-4-6" && r.turns == 1)
+    );
+    assert!(
+        model_rows
+            .iter()
+            .any(|r| r.provider == "google" && r.model == "gemini-3.1-pro" && r.turns == 3)
+    );
 }
 
 #[test]
@@ -2100,6 +2158,20 @@ fn mcp_args_formatter_escapes_backslash_only_arguments_for_lossless_roundtrip() 
     assert_eq!(
         config["transport"]["args"],
         serde_json::json!([r"C:\tools\server.js"])
+    );
+
+    // Direct user input with quoted Windows paths must preserve literal backslashes before
+    // ordinary characters while still honoring escaped quotes/backslashes/specials inside quotes.
+    assert_eq!(
+        parse_args_line(r#""C:\Users\Alice\server.js" "C:\Program Files\My App\run.exe" "say \"hi\"" "a\\b" "cost \$5""#)
+            .expect("quoted Windows paths parse without dropping backslashes"),
+        vec![
+            r"C:\Users\Alice\server.js",
+            r"C:\Program Files\My App\run.exe",
+            r#"say "hi""#,
+            r"a\b",
+            "cost $5",
+        ]
     );
 }
 

@@ -1608,22 +1608,54 @@ fn is_mutating_shell_command(cmd_basename: &str) -> bool {
     )
 }
 
+fn is_directory_reading_shell_command(cmd_basename: &str) -> bool {
+    matches!(
+        cmd_basename,
+        "grep"
+            | "egrep"
+            | "fgrep"
+            | "rg"
+            | "ag"
+            | "ack"
+            | "find"
+            | "fd"
+            | "ls"
+            | "dir"
+            | "tree"
+            | "tar"
+            | "zip"
+            | "cp"
+            | "rsync"
+            | "du"
+            | "cat"
+            | "head"
+            | "tail"
+            | "less"
+            | "more"
+            | "awk"
+            | "sed"
+            | "xargs"
+            | "strings"
+            | "file"
+    )
+}
+
 fn validate_shell_path_token(
     raw: &str,
     base_dir: &Path,
     ctx: &ToolExecutionContext,
     require_write: bool,
     at_command_pos: bool,
-) -> Result<(), String> {
+) -> Result<Option<PathBuf>, String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() || is_url_token(trimmed) {
-        return Ok(());
+        return Ok(None);
     }
     if is_safe_stdio_device(trimmed) {
-        return Ok(());
+        return Ok(None);
     }
     if at_command_pos && !require_write && is_safe_system_executable_path(trimmed) {
-        return Ok(());
+        return Ok(None);
     }
     let resolved =
         if let Some(expanded) = expand_shell_known_prefix(trimmed, base_dir, &ctx.homedir) {
@@ -1646,10 +1678,148 @@ fn validate_shell_path_token(
             lexical_tool_path(trimmed, base_dir).map_err(|e| e.to_string())?
         };
 
-    if require_write {
-        assert_write_path_allowed(&resolved, ctx).map_err(|e| e.to_string())?;
+    let canonical = if require_write {
+        assert_write_path_allowed(&resolved, ctx).map_err(|e| e.to_string())?
     } else {
-        assert_read_path_allowed(&resolved, ctx).map_err(|e| e.to_string())?;
+        assert_read_path_allowed(&resolved, ctx).map_err(|e| e.to_string())?
+    };
+    Ok(Some(canonical))
+}
+
+fn glob_name_matches(pattern: &str, name: &str) -> bool {
+    let p: Vec<char> = pattern.chars().collect();
+    let s: Vec<char> = name.chars().collect();
+    let (mut pi, mut si) = (0usize, 0usize);
+    let (mut star_p, mut star_s) = (None, 0usize);
+    while si < s.len() {
+        if pi < p.len() && (p[pi] == '?' || p[pi] == s[si]) {
+            pi += 1;
+            si += 1;
+        } else if pi < p.len() && p[pi] == '[' {
+            // Treat character classes `[...]` conservatively as matching any single char so
+            // glob checks never under-block symlink matches.
+            if let Some(close) = p[pi + 1..].iter().position(|&c| c == ']') {
+                pi += close + 2;
+                si += 1;
+            } else {
+                pi += 1;
+                si += 1;
+            }
+        } else if pi < p.len() && p[pi] == '*' {
+            star_p = Some(pi);
+            pi += 1;
+            star_s = si;
+        } else if let Some(sp) = star_p {
+            pi = sp + 1;
+            star_s += 1;
+            si = star_s;
+        } else {
+            return false;
+        }
+    }
+    while pi < p.len() && p[pi] == '*' {
+        pi += 1;
+    }
+    pi == p.len()
+}
+
+fn validate_shell_glob_operand(
+    raw: &str,
+    base_dir: &Path,
+    ctx: &ToolExecutionContext,
+    require_write: bool,
+) -> Result<(), String> {
+    let normalized = raw.replace('\\', "/");
+    let (dir_part, leaf_pat) = match normalized.rsplit_once('/') {
+        Some((d, l)) => (d, l),
+        None => ("", normalized.as_str()),
+    };
+    let search_dir = if dir_part.is_empty()
+        || dir_part.contains('*')
+        || dir_part.contains('?')
+        || dir_part.contains('[')
+    {
+        base_dir.to_path_buf()
+    } else if let Some(expanded) = expand_shell_known_prefix(dir_part, base_dir, &ctx.homedir) {
+        expanded
+    } else {
+        lexical_tool_path(dir_part, base_dir).map_err(|e| e.to_string())?
+    };
+
+    let Ok(canonical_dir) = assert_read_path_allowed(&search_dir, ctx) else {
+        return Err(format!(
+            "Native shell glob '{raw}' targets disallowed directory '{}'.",
+            search_dir.display()
+        ));
+    };
+    let Ok(entries) = std::fs::read_dir(&canonical_dir) else {
+        return Ok(());
+    };
+    let check_all = dir_part.contains('*') || dir_part.contains('?') || dir_part.contains('[');
+    for entry in entries.flatten() {
+        let file_name = entry.file_name();
+        let name_str = file_name.to_string_lossy();
+        if check_all || glob_name_matches(leaf_pat, &name_str) {
+            let entry_path = entry.path();
+            if require_write {
+                assert_write_path_allowed(&entry_path, ctx).map_err(|e| e.to_string())?;
+            } else {
+                assert_read_path_allowed(&entry_path, ctx).map_err(|e| e.to_string())?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_shell_operand_candidate(
+    candidate: &str,
+    quoted: bool,
+    base_dir: &Path,
+    ctx: &ToolExecutionContext,
+    current_cmd: &str,
+    is_mut: bool,
+    force_write: bool,
+) -> Result<(), String> {
+    let trimmed = candidate.trim();
+    if trimmed.is_empty() || is_url_token(trimmed) || trimmed.starts_with('-') {
+        return Ok(());
+    }
+
+    if !quoted && (trimmed.contains('*') || trimmed.contains('?') || trimmed.contains('[')) {
+        validate_shell_glob_operand(trimmed, base_dir, ctx, force_write || is_mut)?;
+    }
+
+    let explicit_path = looks_like_filesystem_path(trimmed);
+    let lexical_candidate = if explicit_path {
+        None
+    } else {
+        lexical_tool_path(trimmed, base_dir).ok()
+    };
+    let exists_on_disk = lexical_candidate
+        .as_ref()
+        .is_some_and(|p| std::fs::symlink_metadata(p).is_ok());
+
+    if !explicit_path && !exists_on_disk {
+        return Ok(());
+    }
+
+    let normalized = trimmed.replace('\\', "/").to_ascii_lowercase();
+    let touches_protected_meta = normalized == ".git"
+        || normalized.starts_with(".git/")
+        || normalized.contains("/.git/")
+        || normalized.ends_with("/.git")
+        || normalized == ".cowork"
+        || normalized.starts_with(".cowork/")
+        || normalized.contains("/.cowork/")
+        || normalized.ends_with("/.cowork");
+    let require_write = force_write || (is_mut && (exists_on_disk || touches_protected_meta));
+
+    if let Some(canonical) =
+        validate_shell_path_token(trimmed, base_dir, ctx, require_write, false)?
+        && is_directory_reading_shell_command(current_cmd)
+        && std::fs::metadata(&canonical).is_ok_and(|m| m.is_dir())
+    {
+        assert_search_root_has_no_protected_descendant(&canonical, ctx)?;
     }
     Ok(())
 }
@@ -1660,7 +1830,7 @@ fn validate_inline_script_paths(
     ctx: &ToolExecutionContext,
 ) -> Result<(), String> {
     // Scan single- and double-quoted string literals inside `-c` / `-e` interpreter payloads
-    // for sensitive OS or home-relative filesystem paths.
+    // for sensitive OS, home-relative, or existing relative (e.g. symlinked) filesystem paths.
     let chars: Vec<char> = script.chars().collect();
     let mut i = 0;
     while i < chars.len() {
@@ -1701,7 +1871,13 @@ fn validate_inline_script_paths(
                 ]
                 .iter()
                 .any(|p| trimmed.to_ascii_lowercase().starts_with(p));
-            if looks_sensitive_os_path {
+            let exists_rel = !trimmed.is_empty()
+                && !trimmed.starts_with('-')
+                && !is_url_token(trimmed)
+                && lexical_tool_path(trimmed, base_dir)
+                    .ok()
+                    .is_some_and(|p| std::fs::symlink_metadata(&p).is_ok());
+            if looks_sensitive_os_path || exists_rel {
                 validate_shell_path_token(trimmed, base_dir, ctx, false, false)?;
             }
         } else {
@@ -1731,6 +1907,7 @@ fn validate_native_shell_command_text(
     }
 
     let tokens = tokenize_shell_command(command);
+    let mut current_dir = base_dir.to_path_buf();
     let mut at_command_pos = true;
     let mut current_cmd = String::new();
     let mut expect_write_target = false;
@@ -1772,46 +1949,57 @@ fn validate_native_shell_command_text(
             } => {
                 if *expandable {
                     for nested in extract_embedded_command_substitutions(text) {
-                        validate_native_shell_command_text(&nested, base_dir, ctx, depth + 1)?;
+                        validate_native_shell_command_text(&nested, &current_dir, ctx, depth + 1)?;
                     }
                 }
                 if expect_write_target {
                     expect_write_target = false;
                     if !text.starts_with('&') {
-                        validate_shell_path_token(text, base_dir, ctx, true, false)?;
+                        validate_shell_path_token(text, &current_dir, ctx, true, false)?;
                     }
                     continue;
                 }
                 if expect_read_target {
                     expect_read_target = false;
-                    validate_shell_path_token(text, base_dir, ctx, false, false)?;
+                    validate_shell_path_token(text, &current_dir, ctx, false, false)?;
                     continue;
                 }
                 if expect_subshell_script {
                     expect_subshell_script = false;
-                    validate_native_shell_command_text(text, base_dir, ctx, depth + 1)?;
+                    validate_native_shell_command_text(text, &current_dir, ctx, depth + 1)?;
                     continue;
                 }
                 if expect_interpreter_script {
                     expect_interpreter_script = false;
-                    validate_inline_script_paths(text, base_dir, ctx)?;
+                    validate_inline_script_paths(text, &current_dir, ctx)?;
                     continue;
                 }
 
                 if at_command_pos {
-                    // Skip leading `ENV=VAL` assignments while validating path-like values.
+                    // Skip leading `ENV=VAL` assignments while validating path-like or existing values.
                     if !quoted
                         && let Some((lhs, rhs)) = text.split_once('=')
                         && !lhs.is_empty()
                         && lhs.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
                     {
-                        if looks_like_filesystem_path(rhs) {
-                            validate_shell_path_token(rhs, base_dir, ctx, false, false)?;
-                        }
+                        validate_shell_operand_candidate(
+                            rhs,
+                            false,
+                            &current_dir,
+                            ctx,
+                            "",
+                            false,
+                            false,
+                        )?;
                         continue;
                     }
-                    if looks_like_filesystem_path(text) {
-                        validate_shell_path_token(text, base_dir, ctx, false, true)?;
+                    let cmd_exists_locally = !is_url_token(text)
+                        && !is_safe_system_executable_path(text)
+                        && lexical_tool_path(text, &current_dir)
+                            .ok()
+                            .is_some_and(|p| std::fs::symlink_metadata(&p).is_ok());
+                    if looks_like_filesystem_path(text) || cmd_exists_locally {
+                        validate_shell_path_token(text, &current_dir, ctx, false, true)?;
                     }
                     let base = Path::new(text)
                         .file_name()
@@ -1830,7 +2018,11 @@ fn validate_native_shell_command_text(
                         assert_read_path_allowed(&ctx.homedir, ctx).map_err(|e| e.to_string())?;
                         continue;
                     }
-                    validate_shell_path_token(text, base_dir, ctx, false, false)?;
+                    if let Some(next_dir) =
+                        validate_shell_path_token(text, &current_dir, ctx, false, false)?
+                    {
+                        current_dir = next_dir;
+                    }
                     continue;
                 }
 
@@ -1863,39 +2055,41 @@ fn validate_native_shell_command_text(
 
                 let is_mut = is_mutating_shell_command(&current_cmd);
 
-                // Inspect `key=value` arguments (e.g. `of=/dev/sda`, `--file=/etc/passwd`, `file=@/etc/passwd`).
+                // Inspect `key=value` arguments (e.g. `of=/dev/sda`, `--file=credential-link`, `file=@/etc/passwd`).
                 if let Some((lhs, rhs)) = text.split_once('=') {
                     let rhs_clean = rhs.strip_prefix('@').unwrap_or(rhs);
                     if lhs.eq_ignore_ascii_case("of") {
-                        validate_shell_path_token(rhs_clean, base_dir, ctx, true, false)?;
+                        validate_shell_path_token(rhs_clean, &current_dir, ctx, true, false)?;
                         continue;
                     }
-                    if looks_like_filesystem_path(rhs_clean) {
-                        let req_write = is_mut
-                            || matches!(
-                                lhs.to_ascii_lowercase().as_str(),
-                                "--output" | "--out" | "-o" | "--dest"
-                            );
-                        validate_shell_path_token(rhs_clean, base_dir, ctx, req_write, false)?;
-                    }
+                    let force_write = matches!(
+                        lhs.to_ascii_lowercase().as_str(),
+                        "--output" | "--out" | "-o" | "--dest"
+                    );
+                    validate_shell_operand_candidate(
+                        rhs_clean,
+                        *quoted,
+                        &current_dir,
+                        ctx,
+                        &current_cmd,
+                        is_mut,
+                        force_write,
+                    )?;
                     continue;
                 }
 
-                // Inspect curl/wget `@path` file-upload arguments.
+                // Inspect both explicit path tokens and relative file/symlink/glob operands
+                // (including curl/wget `@path` file-upload arguments).
                 let candidate = text.strip_prefix('@').unwrap_or(text);
-                if looks_like_filesystem_path(candidate) {
-                    let normalized = candidate.replace('\\', "/").to_ascii_lowercase();
-                    let touches_protected_meta = normalized == ".git"
-                        || normalized.starts_with(".git/")
-                        || normalized.contains("/.git/")
-                        || normalized.ends_with("/.git")
-                        || normalized == ".cowork"
-                        || normalized.starts_with(".cowork/")
-                        || normalized.contains("/.cowork/")
-                        || normalized.ends_with("/.cowork");
-                    let require_write = is_mut && touches_protected_meta;
-                    validate_shell_path_token(candidate, base_dir, ctx, require_write, false)?;
-                }
+                validate_shell_operand_candidate(
+                    candidate,
+                    *quoted,
+                    &current_dir,
+                    ctx,
+                    &current_cmd,
+                    is_mut,
+                    false,
+                )?;
             }
         }
     }

@@ -830,33 +830,72 @@ pub fn spawn_managed_stdio_process(
         .map_err(|err| format!("Failed to spawn {label} ({command}): {err}"))
 }
 
-/// Terminates a spawned managed stdio child and its entire Unix process group cleanly.
+#[cfg(any(windows, test))]
+fn windows_taskkill_args(pid: u32) -> [String; 4] {
+    [
+        "/PID".to_owned(),
+        pid.to_string(),
+        "/T".to_owned(),
+        "/F".to_owned(),
+    ]
+}
+
+#[cfg(windows)]
+fn windows_process_tree_kill_command(pid: u32) -> Command {
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let mut cmd = Command::new("taskkill");
+    cmd.args(windows_taskkill_args(pid))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .creation_flags(CREATE_NO_WINDOW);
+    cmd
+}
+
+/// Terminates a spawned managed stdio child and its entire process tree cleanly
+/// (its process group on Unix, `taskkill /PID <pid> /T /F` on Windows).
 pub async fn kill_managed_process_tree(mut child: Child) {
     #[cfg(unix)]
     if let Some(pid) = child.id() {
         let pgid = format!("-{pid}");
         // Separate the negative process-group ID with `--` so procps-ng `kill` on Linux
         // does not misparse `-<pid>` as a signal option.
-        let _ = std::process::Command::new("kill")
+        let _ = Command::new("kill")
             .args(["-s", "TERM", "--", &pgid])
+            .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
-            .status();
+            .status()
+            .await;
         let _ = tokio::time::timeout(Duration::from_millis(500), child.wait()).await;
-        let _ = std::process::Command::new("kill")
+        let _ = Command::new("kill")
             .args(["-s", "KILL", "--", &pgid])
+            .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
-            .status();
+            .status()
+            .await;
+    }
+    #[cfg(windows)]
+    if let Some(pid) = child.id() {
+        // Kill the process tree while the root is still unreaped so its PID cannot be reused.
+        let mut cmd = windows_process_tree_kill_command(pid);
+        let _ = tokio::time::timeout(Duration::from_secs(5), cmd.status()).await;
     }
     let _ = child.kill().await;
     let _ = tokio::time::timeout(Duration::from_secs(2), child.wait()).await;
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod kill_tree_tests {
     use super::*;
 
+    #[test]
+    fn windows_taskkill_args_target_whole_process_tree_forcefully() {
+        assert_eq!(windows_taskkill_args(4242), ["/PID", "4242", "/T", "/F"]);
+    }
+
+    #[cfg(unix)]
     #[tokio::test]
     async fn kill_managed_process_tree_terminates_process_group_descendants() {
         let mut cmd = Command::new("sh");

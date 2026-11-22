@@ -329,7 +329,7 @@ fn take_lock_error(slot: &Mutex<Option<ToolError>>) -> Option<ToolError> {
 /// Everything else was auto-approved (the OS sandbox is the confinement boundary), so this
 /// keeps prompt parity without prompting for routine commands like `ls` or `cargo test`.
 /// Lookahead-based TS patterns are widened to lookahead-free forms (a false prompt is cheap).
-fn matches_ts_approval_patterns(command: &str, platform: &str) -> bool {
+pub fn matches_ts_approval_patterns(command: &str, platform: &str) -> bool {
     static SHARED_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
     static POWERSHELL_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
     let trimmed = command.trim();

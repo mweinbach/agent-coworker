@@ -20,6 +20,7 @@ pub mod idempotency;
 pub mod importers;
 pub mod interactions;
 pub mod memory_generator;
+mod native_tool_approval;
 pub mod ooxml;
 pub mod presentation;
 mod prompt_template;

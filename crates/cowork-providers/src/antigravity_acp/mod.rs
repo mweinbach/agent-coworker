@@ -223,6 +223,24 @@ fn acp_permission_is_authorized(
     if tools_disabled {
         return false;
     }
+    let tool_call = params.get("toolCall");
+    if let Some(raw_input) = tool_call
+        .and_then(|tc| {
+            tc.get("rawInput")
+                .or_else(|| tc.get("input"))
+                .or_else(|| tc.get("arguments"))
+        })
+        .or_else(|| {
+            params
+                .get("rawInput")
+                .or_else(|| params.get("input"))
+                .or_else(|| params.get("arguments"))
+        })
+        && !raw_input.is_null()
+        && !raw_input.is_object()
+    {
+        return false;
+    }
     let Some(allowlist) = authorized_tool_names else {
         return true;
     };
@@ -230,7 +248,6 @@ fn acp_permission_is_authorized(
         return false;
     }
 
-    let tool_call = params.get("toolCall");
     let kind = tool_call
         .and_then(|tc| tc.get("kind"))
         .or_else(|| params.get("kind"))

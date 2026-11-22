@@ -35,6 +35,9 @@ use uuid::Uuid;
 use crate::interactions::{
     HarnessEventSink, InteractionManager, ModelCallOutcome, ModelCallRecord,
 };
+use crate::native_tool_approval::{
+    is_native_runtime_tool_approval, validate_native_runtime_approval,
+};
 use crate::steer::{
     STEER_REJECTED_INTERRUPTED, STEER_REJECTED_MAX_STEPS, STEER_REJECTED_TURN_ENDED,
     SteerCoordinator,
@@ -2071,6 +2074,41 @@ impl DynamicToolHandler for CodexDynamicBridge {
     }
 
     async fn request_approval(&self, method: &str, params: &Value) -> bool {
+        if is_native_runtime_tool_approval(method) {
+            let prompt =
+                match validate_native_runtime_approval(method, params, &self.tool_ctx).await {
+                    Ok(prompt) => prompt,
+                    Err(reason) => {
+                        tracing::warn!(
+                            method,
+                            %reason,
+                            "[native-runtime] Native tool approval declined"
+                        );
+                        return false;
+                    }
+                };
+            let approved = self.tool_ctx.yolo
+                || self
+                    .interactions
+                    .approve_command(prompt)
+                    .await
+                    .unwrap_or(false);
+            if !approved {
+                return false;
+            }
+            // Re-validate after the wait to prevent TOCTOU symlink or task-lock races.
+            if let Err(reason) =
+                validate_native_runtime_approval(method, params, &self.tool_ctx).await
+            {
+                tracing::warn!(
+                    method,
+                    %reason,
+                    "[native-runtime] Native tool approval declined after wait"
+                );
+                return false;
+            }
+            return true;
+        }
         let is_file_change = is_codex_file_change_approval(method);
         // TS `handleServerRequest`: the task-mutation lock (`assertCanMutate`) and hard-floor
         // checks run before both YOLO and interactive acceptance, so a locked source chat or a

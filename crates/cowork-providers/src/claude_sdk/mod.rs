@@ -227,9 +227,6 @@ fn claude_tool_is_authorized(
     if tools_disabled {
         return Err("Tools are disabled for this turn.".to_owned());
     }
-    let Some(allowlist) = authorized_tool_names else {
-        return Ok(());
-    };
     let tool_name = req_body
         .get("tool_name")
         .or_else(|| req_body.get("toolName"))
@@ -238,6 +235,17 @@ fn claude_tool_is_authorized(
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .ok_or_else(|| "Tool execution denied: missing native tool name.".to_owned())?;
+    if let Some(input) = req_body.get("input")
+        && !input.is_null()
+        && !input.is_object()
+    {
+        return Err(format!(
+            "Tool '{tool_name}' execution denied: native tool input must be a JSON object."
+        ));
+    }
+    let Some(allowlist) = authorized_tool_names else {
+        return Ok(());
+    };
     if allowlist.is_empty() {
         return Err(format!(
             "Tool '{tool_name}' is not allowed by this session's tool policy."

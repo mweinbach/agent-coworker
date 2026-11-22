@@ -362,7 +362,7 @@ fn build_task_create_card(
                 Button::new("Create task")
                     .variant(ButtonVariant::Contrast)
                     .control_size(ControlSize::Small)
-                    .disabled(!can_submit)
+                    .disabled(!can_submit || s.shell_ui.task_create_submitting)
                     .on_press_tx(move |s: &mut AppState, _| {
                         let Some(ws_id) = ws_for_submit.clone() else {
                             return;
@@ -373,9 +373,8 @@ fn build_task_create_card(
                         if title.is_empty() || objective.is_empty() {
                             return;
                         }
-                        s.shell_ui.task_create_open = false;
-                        s.shell_ui.task_create_title_edit.text.clear();
-                        s.shell_ui.task_create_objective_edit.text.clear();
+                        // Keep form open and inputs intact until the server accepts `task/create`
+                        // so transient connection/validation errors remain retryable.
                         s.dispatch(Action::Task(TaskAction::CreateTask {
                             workspace_id: ws_id,
                             title,
@@ -716,13 +715,17 @@ fn build_task_details(s: &AppState, task: &TaskRecordView, k: &Kit, t: &ThemeTok
                     Button::new("Send")
                         .variant(ButtonVariant::Contrast)
                         .control_size(ControlSize::Small)
+                        .disabled(
+                            s.shell_ui.task_feedback_edit.text.trim().is_empty()
+                                || s.shell_ui.task_feedback_submitting,
+                        )
                         .on_press_tx(move |s: &mut AppState, _| {
                             let fb = s.shell_ui.task_feedback_edit.text.trim().to_owned();
                             if fb.is_empty() {
                                 return;
                             }
-                            s.shell_ui.task_feedback_open = false;
-                            s.shell_ui.task_feedback_edit.text.clear();
+                            // Keep feedback open and intact until `task/requestChanges` succeeds so
+                            // connection drops or revision conflicts remain retryable.
                             s.dispatch(Action::Task(TaskAction::RequestChanges {
                                 workspace_id: ws_fb.clone(),
                                 task_id: tid_fb.clone(),

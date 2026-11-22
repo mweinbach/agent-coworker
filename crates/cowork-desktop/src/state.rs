@@ -1851,6 +1851,8 @@ pub struct AppState {
     pub(crate) pending_defaults_apply_by_workspace: HashMap<String, PendingWorkspaceDefaultsApply>,
     pub(crate) in_flight_defaults_apply_by_rpc_id: HashMap<u64, (String, u64)>,
     pub(crate) pending_task_artifact_rpcs: HashMap<u64, PendingTaskArtifactRpc>,
+    pub(crate) pending_task_feedback_rpc: Option<(u64, String, String)>,
+    pub(crate) pending_task_create_rpc: Option<(u64, String)>,
     pub(crate) active_file_preview_request_id: Option<String>,
     pub(crate) pending_hydrate_threads_by_rpc_id: HashMap<u64, String>,
     pub(crate) pending_resume_threads_by_rpc_id: HashMap<u64, String>,
@@ -1999,6 +2001,8 @@ impl Default for AppState {
             pending_defaults_apply_by_workspace: HashMap::new(),
             in_flight_defaults_apply_by_rpc_id: HashMap::new(),
             pending_task_artifact_rpcs: HashMap::new(),
+            pending_task_feedback_rpc: None,
+            pending_task_create_rpc: None,
             active_file_preview_request_id: None,
             pending_hydrate_threads_by_rpc_id: HashMap::new(),
             pending_resume_threads_by_rpc_id: HashMap::new(),
@@ -5074,6 +5078,22 @@ impl AppState {
                     for id in stale_resume_ids {
                         self.pending_resume_threads_by_rpc_id.remove(&id);
                     }
+                    if self
+                        .pending_task_feedback_rpc
+                        .as_ref()
+                        .is_some_and(|(_, ws_id, _)| ws_id == &workspace_id)
+                    {
+                        self.pending_task_feedback_rpc = None;
+                        self.shell_ui.task_feedback_submitting = false;
+                    }
+                    if self
+                        .pending_task_create_rpc
+                        .as_ref()
+                        .is_some_and(|(_, ws_id)| ws_id == &workspace_id)
+                    {
+                        self.pending_task_create_rpc = None;
+                        self.shell_ui.task_create_submitting = false;
+                    }
                 }
                 let reconnecting = matches!(state, WsConnectionState::Reconnecting { .. });
                 let attempt = match &state {
@@ -6337,7 +6357,12 @@ impl AppState {
                 if let Some(m) = model.filter(|s| !s.trim().is_empty()) {
                     params.insert("model".to_string(), json!(m));
                 }
-                self.send_task_ws(&workspace_id, "task/create", Value::Object(params));
+                if let Some(req_id) =
+                    self.send_task_ws(&workspace_id, "task/create", Value::Object(params))
+                {
+                    self.pending_task_create_rpc = Some((req_id, workspace_id));
+                    self.shell_ui.task_create_submitting = true;
+                }
             }
             TaskAction::UpdateBrief {
                 workspace_id,
@@ -6523,7 +6548,7 @@ impl AppState {
                 expected_revision,
                 feedback,
             } => {
-                self.send_task_ws(
+                if let Some(req_id) = self.send_task_ws(
                     &workspace_id,
                     "task/requestChanges",
                     json!({
@@ -6531,7 +6556,10 @@ impl AppState {
                         "expectedRevision": expected_revision,
                         "feedback": feedback,
                     }),
-                );
+                ) {
+                    self.pending_task_feedback_rpc = Some((req_id, workspace_id, task_id));
+                    self.shell_ui.task_feedback_submitting = true;
+                }
             }
             TaskAction::CancelTask {
                 workspace_id,
@@ -9806,6 +9834,22 @@ impl AppState {
                     .retain(|_, (ws_id, _)| ws_id != &workspace_id);
                 self.pending_task_artifact_rpcs
                     .retain(|_, pending| pending.workspace_id != workspace_id);
+                if self
+                    .pending_task_feedback_rpc
+                    .as_ref()
+                    .is_some_and(|(_, ws_id, _)| ws_id == &workspace_id)
+                {
+                    self.pending_task_feedback_rpc = None;
+                    self.shell_ui.task_feedback_submitting = false;
+                }
+                if self
+                    .pending_task_create_rpc
+                    .as_ref()
+                    .is_some_and(|(_, ws_id)| ws_id == &workspace_id)
+                {
+                    self.pending_task_create_rpc = None;
+                    self.shell_ui.task_create_submitting = false;
+                }
                 for id in &removed_thread_ids {
                     self.thread_runtime_by_id.remove(id);
                     self.composer_drafts.remove(id);
@@ -12056,17 +12100,39 @@ impl AppState {
             | "task/retry"
             | "task/thread/create" => {
                 let task_val = payload.get("task").unwrap_or(&payload);
-                if method == "task/create"
-                    && let Some(tid) = task_val.get("id").and_then(Value::as_str)
+                if method == "task/create" {
+                    if self
+                        .pending_task_create_rpc
+                        .as_ref()
+                        .is_none_or(|(id, _)| *id == request_id)
+                    {
+                        self.pending_task_create_rpc = None;
+                        self.shell_ui.task_create_submitting = false;
+                        self.shell_ui.task_create_open = false;
+                        self.shell_ui.task_create_title_edit = TextEdit::new("");
+                        self.shell_ui.task_create_objective_edit = TextEdit::new("");
+                    }
+                    if let Some(tid) = task_val.get("id").and_then(Value::as_str) {
+                        let old_key = self.composer_key();
+                        self.nav.update(NavigationPatch {
+                            view: Some(ViewId::Task),
+                            active_task_id: Some(Some(tid.to_string())),
+                            active_thread_id: Some(None),
+                            ..Default::default()
+                        });
+                        self.sync_composer_edit_across_switch(&old_key, &self.composer_key());
+                    }
+                }
+                if method == "task/requestChanges"
+                    && self
+                        .pending_task_feedback_rpc
+                        .as_ref()
+                        .is_none_or(|(id, _, _)| *id == request_id)
                 {
-                    let old_key = self.composer_key();
-                    self.nav.update(NavigationPatch {
-                        view: Some(ViewId::Task),
-                        active_task_id: Some(Some(tid.to_string())),
-                        active_thread_id: Some(None),
-                        ..Default::default()
-                    });
-                    self.sync_composer_edit_across_switch(&old_key, &self.composer_key());
+                    self.pending_task_feedback_rpc = None;
+                    self.shell_ui.task_feedback_submitting = false;
+                    self.shell_ui.task_feedback_open = false;
+                    self.shell_ui.task_feedback_edit = TextEdit::new("");
                 }
                 self.apply_task_record_update(workspace_id, task_val);
                 if matches!(method, "task/read" | "task/create" | "task/thread/create")
@@ -12322,6 +12388,24 @@ impl AppState {
             } else {
                 self.pending_defaults_apply_by_workspace.remove(&ws_id);
             }
+        }
+        if method == "task/requestChanges"
+            && self
+                .pending_task_feedback_rpc
+                .as_ref()
+                .is_some_and(|(id, _, _)| *id == request_id)
+        {
+            self.pending_task_feedback_rpc = None;
+            self.shell_ui.task_feedback_submitting = false;
+        }
+        if method == "task/create"
+            && self
+                .pending_task_create_rpc
+                .as_ref()
+                .is_some_and(|(id, _)| *id == request_id)
+        {
+            self.pending_task_create_rpc = None;
+            self.shell_ui.task_create_submitting = false;
         }
         if matches!(
             method,
@@ -28853,5 +28937,95 @@ mod tests {
                 .contains_key("ver-1"),
             "late preview response from task-a must not pollute task-b"
         );
+    }
+
+    #[test]
+    fn task_request_changes_retains_feedback_on_failure_and_clears_on_success() {
+        let mut state = AppState::default();
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-1", "Alpha", "/tmp/a", 1));
+        state.active_workspace_id = Some("ws-1".to_string());
+        state.shell_ui.task_feedback_open = true;
+        state.shell_ui.task_feedback_edit = TextEdit::new("Add error handling for timeouts");
+
+        state.dispatch(Action::Task(TaskAction::RequestChanges {
+            workspace_id: "ws-1".to_string(),
+            task_id: "task-1".to_string(),
+            expected_revision: 3,
+            feedback: state.shell_ui.task_feedback_edit.text.clone(),
+        }));
+        let req_1 = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .rev()
+            .find_map(|cmd| match cmd {
+                WsCommand::SendRequest {
+                    request_id, method, ..
+                } if method == "task/requestChanges" => Some(*request_id),
+                _ => None,
+            })
+            .expect("expected task/requestChanges request");
+        assert!(state.shell_ui.task_feedback_open);
+        assert!(state.shell_ui.task_feedback_submitting);
+        assert_eq!(
+            state.shell_ui.task_feedback_edit.text,
+            "Add error handling for timeouts"
+        );
+
+        // Revision conflict or disconnect error must keep the editor open & preserve text for retry.
+        state.apply_ws_response(
+            "ws-1",
+            req_1,
+            "task/requestChanges",
+            Err(WsRpcError {
+                code: -32000,
+                message: "Revision conflict".to_string(),
+                data: None,
+            }),
+        );
+        assert!(state.shell_ui.task_feedback_open);
+        assert!(!state.shell_ui.task_feedback_submitting);
+        assert_eq!(
+            state.shell_ui.task_feedback_edit.text,
+            "Add error handling for timeouts"
+        );
+
+        // Retry with updated revision succeeds -> closes and clears feedback editor.
+        state.dispatch(Action::Task(TaskAction::RequestChanges {
+            workspace_id: "ws-1".to_string(),
+            task_id: "task-1".to_string(),
+            expected_revision: 4,
+            feedback: state.shell_ui.task_feedback_edit.text.clone(),
+        }));
+        let req_2 = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .rev()
+            .find_map(|cmd| match cmd {
+                WsCommand::SendRequest {
+                    request_id, method, ..
+                } if method == "task/requestChanges" => Some(*request_id),
+                _ => None,
+            })
+            .expect("expected retry task/requestChanges request");
+        state.apply_ws_response(
+            "ws-1",
+            req_2,
+            "task/requestChanges",
+            Ok(json!({
+                "task": {
+                    "id": "task-1",
+                    "title": "Task 1",
+                    "status": "in_progress",
+                    "revision": 5
+                }
+            })),
+        );
+        assert!(!state.shell_ui.task_feedback_open);
+        assert!(!state.shell_ui.task_feedback_submitting);
+        assert!(state.shell_ui.task_feedback_edit.text.is_empty());
     }
 }

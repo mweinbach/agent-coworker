@@ -438,6 +438,72 @@ fn lmstudio_section(
             ),
     );
 
+    if let Some(local_status) = s.lmstudio_local_status.as_ref() {
+        let running = local_status
+            .get("running")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let installed = local_status
+            .get("installed")
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
+        let base_url = local_status
+            .get("baseUrl")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|v| !v.is_empty());
+        let message = local_status
+            .get("message")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|v| !v.is_empty());
+        let (pill_label, pill_tone, fallback_msg) = if running {
+            (
+                "Reachable",
+                StatusTone::Success,
+                match base_url {
+                    Some(url) => format!("LM Studio server is reachable at {url}."),
+                    None => "LM Studio server is reachable.".to_string(),
+                },
+            )
+        } else if !installed {
+            (
+                "Not installed",
+                StatusTone::Warning,
+                "LM Studio CLI was not found on this machine.".to_string(),
+            )
+        } else {
+            (
+                "Offline",
+                StatusTone::Danger,
+                match base_url {
+                    Some(url) => format!("LM Studio server is not reachable at {url}."),
+                    None => "LM Studio server is not reachable.".to_string(),
+                },
+            )
+        };
+        let detail_text = message.map(str::to_string).unwrap_or(fallback_msg);
+        col_el = col_el.child(
+            row()
+                .key("lmstudio-local-status-row")
+                .w_full()
+                .items_center()
+                .flex_wrap()
+                .gap(8.0)
+                .px(10.0)
+                .py(8.0)
+                .radius(k.radius.md)
+                .fill(t.elevated_bg)
+                .child(status_pill(pill_label, pill_tone, k, t))
+                .child(
+                    text(detail_text)
+                        .font(k.ty.small)
+                        .color(if running { t.text_base } else { t.text_muted })
+                        .wrap(),
+                ),
+        );
+    }
+
     let ws_token = active_ws.map(|w| w.id.clone());
     let token_empty = s.settings_ui.api_key_edit.text.trim().is_empty();
     col_el = col_el.child(

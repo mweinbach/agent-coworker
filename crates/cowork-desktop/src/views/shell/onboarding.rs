@@ -1043,7 +1043,7 @@ fn build_expanded_provider_controls(
         let ws_check = ws_id.to_owned();
         let ws_start = ws_id.to_owned();
 
-        return detail
+        let mut lm_detail = detail
             .child(
                 text("LM Studio runs models locally on your Mac. Connect it to expose your local models in Cowork.")
                     .font(t.caption)
@@ -1097,6 +1097,32 @@ fn build_expanded_provider_controls(
                             .build(k),
                     ),
             );
+        if let Some(local_status) = s.lmstudio_local_status.as_ref() {
+            let running = local_status
+                .get("running")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let status_msg = local_status
+                .get("message")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|m| !m.is_empty())
+                .map(str::to_string)
+                .unwrap_or_else(|| {
+                    if running {
+                        "LM Studio server is reachable.".to_string()
+                    } else {
+                        "LM Studio server is not reachable.".to_string()
+                    }
+                });
+            lm_detail = lm_detail.child(
+                text(status_msg)
+                    .font(t.caption)
+                    .color(if running { t.text_base } else { t.danger })
+                    .wrap(),
+            );
+        }
+        return lm_detail;
     }
 
     let methods = s

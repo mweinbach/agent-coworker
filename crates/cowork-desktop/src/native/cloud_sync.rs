@@ -324,6 +324,7 @@ pub fn build_cloud_sync_settings_snapshot(
 
 enum CloudSyncJob {
     Push {
+        generation: u64,
         endpoint: String,
         token: Option<String>,
         target_key: String,
@@ -337,6 +338,7 @@ type StatusChangeCallback = Arc<dyn Fn(&CloudSyncRuntimeStatus) + Send + Sync>;
 
 struct CloudSyncInner {
     is_packaged: bool,
+    generation: u64,
     config: CloudSyncConfig,
     status: CloudSyncRuntimeStatus,
     last_target_key: Option<String>,
@@ -386,6 +388,7 @@ impl CloudSyncService {
         Self {
             inner: Arc::new(Mutex::new(CloudSyncInner {
                 is_packaged,
+                generation: 0,
                 config,
                 status,
                 last_target_key: None,
@@ -414,12 +417,16 @@ impl CloudSyncService {
         );
         let target_key = next_cfg.target_key();
         if target_key != guard.last_target_key {
+            guard.generation = guard.generation.wrapping_add(1);
             guard.last_target_key = target_key.clone();
             guard.last_synced_digest = None;
+            guard.pending_jobs = 0;
+            guard.sender = None;
         }
         guard.config = next_cfg.clone();
 
         if next_cfg.network_telemetry_disabled || !next_cfg.enabled || !next_cfg.sync_settings {
+            guard.generation = guard.generation.wrapping_add(1);
             guard.sender = None;
             guard.pending_jobs = 0;
             guard.last_synced_digest = None;
@@ -428,6 +435,7 @@ impl CloudSyncService {
         }
 
         if !next_cfg.provider_custom || next_cfg.endpoint.is_none() {
+            guard.generation = guard.generation.wrapping_add(1);
             guard.sender = None;
             guard.pending_jobs = 0;
             guard.last_synced_digest = None;
@@ -461,6 +469,7 @@ impl CloudSyncService {
                 self.http_timeout,
             ));
         }
+        let generation = guard.generation;
         let sender = guard.sender.clone();
         let endpoint = next_cfg.endpoint.clone().unwrap_or_default();
         let target_key = target_key.unwrap_or_default();
@@ -475,6 +484,7 @@ impl CloudSyncService {
 
         if let Some(tx) = sender {
             match tx.try_send(CloudSyncJob::Push {
+                generation,
                 endpoint,
                 token: next_cfg.token,
                 target_key,
@@ -554,7 +564,9 @@ impl CloudSyncService {
     /// Stops accepting new upload jobs without blocking.
     pub fn shutdown(&self) {
         let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        guard.generation = guard.generation.wrapping_add(1);
         guard.sender = None;
+        guard.pending_jobs = 0;
     }
 }
 
@@ -598,12 +610,25 @@ fn spawn_cloud_sync_worker(
         while let Some(job) = rx.recv().await {
             match job {
                 CloudSyncJob::Push {
+                    generation,
                     endpoint,
                     token,
                     target_key,
                     digest,
                     patch,
                 } => {
+                    // Revalidate consent and active target before every POST so turning off
+                    // cloud sync or changing endpoints discards buffered jobs without sending.
+                    let still_authorized = {
+                        let guard = inner.lock().unwrap_or_else(|e| e.into_inner());
+                        guard.generation == generation
+                            && guard.config.is_active()
+                            && guard.last_target_key.as_deref() == Some(target_key.as_str())
+                    };
+                    if !still_authorized {
+                        continue;
+                    }
+
                     let url = format!("{}/v1/patch", endpoint.trim_end_matches('/'));
                     let mut req = client
                         .post(&url)
@@ -620,10 +645,11 @@ fn spawn_cloud_sync_worker(
 
                     let maybe_notify = {
                         let mut guard = inner.lock().unwrap_or_else(|e| e.into_inner());
-                        guard.pending_jobs = guard.pending_jobs.saturating_sub(1);
-                        if guard.last_target_key.as_deref() == Some(target_key.as_str())
+                        if guard.generation == generation
+                            && guard.last_target_key.as_deref() == Some(target_key.as_str())
                             && guard.config.is_active()
                         {
+                            guard.pending_jobs = guard.pending_jobs.saturating_sub(1);
                             let next = match outcome {
                                 Ok(()) => {
                                     guard.last_synced_digest = Some(digest);
@@ -848,6 +874,96 @@ mod tests {
         svc.flush().await;
         assert_eq!(killed.status, "disabled");
         assert_eq!(received.lock().unwrap().len(), before_kill_count);
+
+        svc.shutdown();
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn disabling_cloud_sync_discards_buffered_uploads_without_sending() {
+        let received = Arc::new(Mutex::new(Vec::<Value>::new()));
+        let first_started = Arc::new(tokio::sync::Notify::new());
+        let release_first = Arc::new(tokio::sync::Notify::new());
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        let received_srv = Arc::clone(&received);
+        let first_started_srv = Arc::clone(&first_started);
+        let release_first_srv = Arc::clone(&release_first);
+        let server = tokio::spawn(async move {
+            let mut req_idx = 0usize;
+            loop {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    break;
+                };
+                req_idx += 1;
+                let idx = req_idx;
+                let received_srv = Arc::clone(&received_srv);
+                let first_started_srv = Arc::clone(&first_started_srv);
+                let release_first_srv = Arc::clone(&release_first_srv);
+                tokio::spawn(async move {
+                    if let Some((_req_line, _auth, body)) = read_http_request(&mut stream).await {
+                        received_srv.lock().unwrap().push(body);
+                        if idx == 1 {
+                            first_started_srv.notify_one();
+                            release_first_srv.notified().await;
+                        }
+                        let payload = r#"{"cursor":"cur-1"}"#;
+                        let resp = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
+                            payload.len()
+                        );
+                        let _ = stream.write_all(resp.as_bytes()).await;
+                    }
+                });
+            }
+        });
+
+        let mut env = HashMap::new();
+        env.insert(
+            "COWORK_CLOUD_SYNC_ENDPOINT".into(),
+            format!("http://127.0.0.1:{port}"),
+        );
+
+        let mut persisted = PersistedDesktopState::default();
+        persisted.settings.privacy_telemetry.cloud_sync_enabled = true;
+        persisted.settings.developer_mode = true;
+
+        let svc = CloudSyncService::with_timeout(
+            false,
+            &persisted.settings.privacy_telemetry,
+            None,
+            &env,
+            None,
+            Duration::from_secs(3),
+        );
+
+        // Start upload #1 and wait until the server has accepted it (blocking its response).
+        let _ = svc.sync_persisted_state(&persisted, None, &env);
+        tokio::time::timeout(Duration::from_secs(2), first_started.notified())
+            .await
+            .expect("first upload should reach server");
+
+        // Enqueue upload #2 while upload #1 is still in flight.
+        persisted.settings.show_hidden_files = true;
+        let _ = svc.sync_persisted_state(&persisted, None, &env);
+
+        // Disable cloud sync before upload #1 finishes; upload #2 is buffered in the channel.
+        persisted.settings.privacy_telemetry.cloud_sync_enabled = false;
+        let disabled = svc.sync_persisted_state(&persisted, None, &env);
+        assert_eq!(disabled.status, "disabled");
+
+        // Release upload #1 and allow the worker loop to drain the closed channel.
+        release_first.notify_one();
+        tokio::time::sleep(Duration::from_millis(120)).await;
+
+        assert_eq!(
+            received.lock().unwrap().len(),
+            1,
+            "buffered upload #2 must be discarded once cloud sync consent is revoked"
+        );
+        let final_status = svc.status_for_env(&persisted.settings.privacy_telemetry, None, &env);
+        assert_eq!(final_status.status, "disabled");
 
         svc.shutdown();
         server.abort();

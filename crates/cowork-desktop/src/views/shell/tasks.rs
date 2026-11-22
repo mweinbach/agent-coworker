@@ -1357,12 +1357,7 @@ fn build_task_inspector_sidebar(s: &AppState, task: &TaskRecordView, t: &ThemeTo
             .gap(4.0)
             .child(text("Active Blockers").font(t.label).color(t.danger));
         for b in blockers.iter().take(6) {
-            let msg = b
-                .get("message")
-                .or_else(|| b.get("reason"))
-                .or_else(|| b.get("title"))
-                .and_then(Value::as_str)
-                .unwrap_or("Blocked");
+            let msg = task_blocker_label(b);
             b_card = b_card.child(text(msg).font(t.caption).color(t.text_base).wrap());
         }
         side = side.child(b_card);
@@ -1439,6 +1434,18 @@ fn workflow_run_row(s: &AppState, run: &WorkflowRunView, k: &Kit, t: &ThemeToken
                 .child(label_col)
                 .child(Badge::new(run.status.as_str()).build(k)),
         )
+}
+
+fn task_blocker_label(blocker: &Value) -> &str {
+    blocker
+        .get("description")
+        .or_else(|| blocker.get("message"))
+        .or_else(|| blocker.get("reason"))
+        .or_else(|| blocker.get("title"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("Blocked")
 }
 
 fn task_status_label(status: &str) -> &str {
@@ -1546,5 +1553,19 @@ mod tests {
         assert_eq!(defaults_only[1].question_id, "q-3");
         assert_eq!(defaults_only[1].option_id.as_deref(), Some("def-3"));
         assert_eq!(defaults_only[1].text, None);
+    }
+
+    #[test]
+    fn task_blocker_display_prefers_canonical_description() {
+        let blocker = json!({
+            "id": "blk-1",
+            "description": "Waiting on database migration sign-off",
+            "severity": "high"
+        });
+        assert_eq!(
+            task_blocker_label(&blocker),
+            "Waiting on database migration sign-off"
+        );
+        assert_eq!(task_blocker_label(&json!({ "id": "blk-2" })), "Blocked");
     }
 }

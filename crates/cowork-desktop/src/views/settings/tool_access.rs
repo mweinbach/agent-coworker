@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 
 use crate::actions::{Action, NavAction, SettingsAction};
 use crate::router::SettingsPageId;
-use crate::state::{AppState, PluginSummary, ProviderStatusSummary, WorkspaceRecord};
+use crate::state::{AppState, PluginSummary, ProviderStatusSummary, SkillSummary, WorkspaceRecord};
 use crate::theme::ThemeTokens;
 use crate::views::settings::primitives::{
     ConfirmDialogSpec, EmptyState, EntityIconSize, Section, StatusTone, callout_banner,
@@ -286,12 +286,33 @@ impl SkillRowEntry {
     }
 }
 
-/// Collects skill rows preferring `AppState::skill_installations` (preserving disabled and
-/// shadowed skills and excluding plugin-owned entries) and falling back to `AppState::skills`
-/// only when no installation catalog is loaded yet.
+/// Collects skill rows preferring workspace-scoped `skill_installations` (preserving disabled and
+/// shadowed skills and excluding plugin-owned entries) and falling back to workspace-scoped
+/// `skills` only when no installation catalog is loaded yet.
+#[cfg(test)]
 pub(crate) fn collect_visible_skill_rows(s: &AppState) -> Vec<SkillRowEntry> {
-    let mut rows: Vec<SkillRowEntry> = if !s.skill_installations.is_empty() {
-        s.skill_installations
+    if let Some(ws_id) = s.active_workspace_id.as_deref() {
+        return collect_visible_skill_rows_for_workspace(s, ws_id);
+    }
+    collect_visible_skill_rows_from(&s.skill_installations, &s.skills)
+}
+
+pub(crate) fn collect_visible_skill_rows_for_workspace(
+    s: &AppState,
+    ws_id: &str,
+) -> Vec<SkillRowEntry> {
+    collect_visible_skill_rows_from(
+        s.skill_installations_for_workspace(ws_id),
+        s.skills_for_workspace(ws_id),
+    )
+}
+
+fn collect_visible_skill_rows_from(
+    skill_installations: &[Value],
+    skills: &[SkillSummary],
+) -> Vec<SkillRowEntry> {
+    let mut rows: Vec<SkillRowEntry> = if !skill_installations.is_empty() {
+        skill_installations
             .iter()
             .filter_map(|inst| {
                 // Plugin-owned skill installations are managed inside the Plugin detail dialog.
@@ -405,7 +426,7 @@ pub(crate) fn collect_visible_skill_rows(s: &AppState) -> Vec<SkillRowEntry> {
             })
             .collect()
     } else {
-        s.skills
+        skills
             .iter()
             .filter(|sk| sk.source.as_deref() != Some("plugin"))
             .map(|sk| {
@@ -1358,7 +1379,7 @@ fn skills_tab_view(
         .text
         .trim()
         .to_ascii_lowercase();
-    let skills = collect_visible_skill_rows(s);
+    let skills = collect_visible_skill_rows_for_workspace(s, ws_id);
 
     let visible: Vec<&SkillRowEntry> = skills
         .iter()
@@ -1542,7 +1563,7 @@ fn skills_tab_view(
     }
 
     let available_skills: Vec<&Value> = s
-        .available_skills
+        .available_skills_for_workspace(ws_id)
         .iter()
         .filter(|item| item.get("installed").and_then(Value::as_bool) != Some(true))
         .filter(|item| {
@@ -1956,7 +1977,7 @@ fn append_skill_detail_dialog(
     let Some(selected_key) = s.settings_ui.selected_skill_id.as_deref() else {
         return;
     };
-    let rows = collect_visible_skill_rows(s);
+    let rows = collect_visible_skill_rows_for_workspace(s, ws_id);
     let Some(sk) = rows
         .iter()
         .find(|entry| entry.key == selected_key || entry.name == selected_key)

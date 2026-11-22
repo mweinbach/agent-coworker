@@ -327,6 +327,12 @@ pub struct WorkspaceRuntime {
     pub available_plugins: Vec<Value>,
     pub plugin_catalog_warnings: Vec<String>,
     pub plugins_loaded: bool,
+    pub skills: Vec<SkillSummary>,
+    pub skill_installations: Vec<Value>,
+    pub available_skills: Vec<Value>,
+    pub effective_skills: Vec<Value>,
+    pub skill_scopes: Vec<Value>,
+    pub skills_loaded: bool,
     pub agent_profiles_catalog: AgentProfilesCatalogState,
     pub agent_profiles_loaded: bool,
     pub subagents: Vec<SubagentProfile>,
@@ -1730,6 +1736,7 @@ pub struct AppState {
     pub last_auth_result: Option<Value>,
     pub codex_app_server_status: Option<Value>,
     pub provider_runtime_status_by_id: HashMap<String, Value>,
+    pub lmstudio_local_status: Option<Value>,
     pub mcp_servers: Vec<McpServerSummary>,
     pub mcp_validation_by_server: HashMap<String, Value>,
     pub mcp_auth_challenge: Option<Value>,
@@ -1878,6 +1885,7 @@ impl Default for AppState {
             last_auth_result: None,
             codex_app_server_status: None,
             provider_runtime_status_by_id: HashMap::new(),
+            lmstudio_local_status: None,
             mcp_servers: Vec::new(),
             mcp_validation_by_server: HashMap::new(),
             mcp_auth_challenge: None,
@@ -3297,12 +3305,14 @@ impl AppState {
         let Some(doc) = self.canvas_document.as_mut() else {
             return;
         };
-        if matches!(
-            doc.status,
-            CanvasDocumentStatus::Loading
-                | CanvasDocumentStatus::Saving
-                | CanvasDocumentStatus::LoadError { .. }
-        ) {
+        if doc.truncated
+            || matches!(
+                doc.status,
+                CanvasDocumentStatus::Loading
+                    | CanvasDocumentStatus::Saving
+                    | CanvasDocumentStatus::LoadError { .. }
+            )
+        {
             return;
         }
         let workspace_id = doc.workspace_id.clone();
@@ -5203,6 +5213,7 @@ impl AppState {
             }
             action => action,
         };
+        let is_open_thread = matches!(action, NavAction::OpenThread(_));
 
         match action {
             NavAction::OpenView(view) => {
@@ -5427,7 +5438,36 @@ impl AppState {
             }
         }
 
-        // History and direct session links can restore a task whose details are no longer loaded.
+        // History and direct session links can restore a chat or task whose workspace or details
+        // are no longer active.
+        if restore_task && let Some(tid) = self.route().active_thread_id.clone() {
+            if let Some(workspace_id) = self.workspace_for_thread(&tid)
+                && self.active_workspace_id.as_deref() != Some(workspace_id.as_str())
+            {
+                self.active_workspace_id = Some(workspace_id);
+                self.sync_active_explorer_dir();
+            }
+            if !is_open_thread {
+                let needs_hydrate = self
+                    .thread_runtime_by_id
+                    .get(&tid)
+                    .is_none_or(|rt| (!rt.hydrated || rt.transcript_only) && !rt.hydrating);
+                let is_non_draft = self
+                    .threads
+                    .iter()
+                    .find(|t| t.id == tid)
+                    .is_some_and(|t| !t.draft);
+                if needs_hydrate && is_non_draft {
+                    self.dispatch(Action::Chat(ChatAction::HydrateThread(tid)));
+                } else if is_non_draft
+                    && let Some(ws_id) = self.workspace_for_thread(&tid)
+                    && self.is_workspace_ws_connected(&ws_id)
+                    && !self.is_thread_subscribed(&ws_id, &tid)
+                {
+                    self.resume_thread_on_ws(&ws_id, &tid);
+                }
+            }
+        }
         if restore_task
             && self.route().view == ViewId::Task
             && let Some(id) = self.route().active_task_id.clone()
@@ -5458,15 +5498,15 @@ impl AppState {
         if self.active_workspace_id != prev_ws {
             self.sync_active_workspace_mcp_servers();
             self.sync_active_workspace_plugins();
+            self.sync_active_workspace_skills();
             self.sync_active_workspace_agent_profiles();
             self.sync_active_workspace_backups();
             if let Some(ws_id) = self.active_workspace_id.clone() {
                 self.ensure_workspace_server_started(&ws_id);
                 if self.is_workspace_ws_connected(&ws_id) {
-                    let loaded = self
-                        .workspace_runtime_by_id
-                        .get(&ws_id)
-                        .is_some_and(|rt| rt.mcp_servers_loaded && rt.plugins_loaded);
+                    let loaded = self.workspace_runtime_by_id.get(&ws_id).is_some_and(|rt| {
+                        rt.mcp_servers_loaded && rt.plugins_loaded && rt.skills_loaded
+                    });
                     if !loaded
                         || (self.route().view == ViewId::Settings
                             && self.route().settings_page.canonical() == SettingsPageId::ToolAccess)
@@ -9239,6 +9279,7 @@ impl AppState {
                 self.active_workspace_id = Some(id.clone());
                 self.sync_active_workspace_mcp_servers();
                 self.sync_active_workspace_plugins();
+                self.sync_active_workspace_skills();
                 self.sync_active_workspace_agent_profiles();
                 self.sync_active_workspace_backups();
                 self.sync_active_explorer_dir();
@@ -9278,6 +9319,7 @@ impl AppState {
                 }
                 self.sync_active_workspace_mcp_servers();
                 self.sync_active_workspace_plugins();
+                self.sync_active_workspace_skills();
                 self.sync_active_workspace_agent_profiles();
                 self.sync_active_workspace_backups();
                 if self
@@ -9697,6 +9739,17 @@ impl AppState {
                     let mut normalized = params;
                     if let Some(obj) = normalized.as_object_mut() {
                         obj.insert("type".to_string(), json!("steer_accepted"));
+                    }
+                    self.reduce_cowork_event(workspace_id, &normalized, now_ms);
+                }
+            }
+            "cowork/session/workflowProgress" => {
+                if params.get("type").is_some() {
+                    self.reduce_cowork_event(workspace_id, &params, now_ms);
+                } else {
+                    let mut normalized = params;
+                    if let Some(obj) = normalized.as_object_mut() {
+                        obj.insert("type".to_string(), json!("workflow_progress"));
                     }
                     self.reduce_cowork_event(workspace_id, &normalized, now_ms);
                 }
@@ -10745,37 +10798,7 @@ impl AppState {
                 }
             }
             "workflow_progress" => {
-                if let Some(run_id) = evt.get("runId").and_then(Value::as_str) {
-                    let wf = evt
-                        .get("workflowName")
-                        .and_then(Value::as_str)
-                        .unwrap_or("workflow")
-                        .to_string();
-                    let status = evt
-                        .get("status")
-                        .and_then(Value::as_str)
-                        .unwrap_or("running")
-                        .to_string();
-                    if let Some(existing) = self.workflow_runs.iter_mut().find(|w| w.id == run_id) {
-                        existing.status = status;
-                        existing.summary = evt
-                            .get("summary")
-                            .and_then(Value::as_str)
-                            .map(str::to_string);
-                    } else {
-                        self.workflow_runs.push(WorkflowRunView {
-                            id: run_id.to_string(),
-                            workflow_name: wf,
-                            status,
-                            started_at: now_ms,
-                            finished_at: None,
-                            summary: evt
-                                .get("summary")
-                                .and_then(Value::as_str)
-                                .map(str::to_string),
-                        });
-                    }
-                }
+                upsert_workflow_run_progress(&mut self.workflow_runs, evt, now_ms);
             }
             "agent_profiles_catalog" => {
                 self.apply_agent_profiles_catalog_event(workspace_id, evt);
@@ -10796,10 +10819,10 @@ impl AppState {
                 self.apply_plugins_catalog_event(workspace_id, evt);
             }
             "skills_catalog" => {
-                self.apply_skills_catalog_event(evt);
+                self.apply_skills_catalog_event(workspace_id, evt);
             }
             "skills_list" => {
-                self.apply_skills_list_event(evt);
+                self.apply_skills_list_event(workspace_id, evt);
             }
             "mcp_servers" => {
                 self.update_mcp_servers_from_event(workspace_id, evt);
@@ -11181,11 +11204,29 @@ impl AppState {
                         .insert(provider_id.to_string(), status_val);
                 }
             }
+            "cowork/provider/lmstudio/local/status" => {
+                self.apply_lmstudio_local_status(workspace_id, &payload);
+            }
             "cowork/provider/lmstudio/local/start" => {
-                if let Some(modal) = self.lmstudio_start_modal.take()
-                    && let Some(thread_id) = modal.thread_id
-                {
-                    self.dispatch(Action::Chat(ChatAction::RetryFailedTurn { thread_id }));
+                self.apply_lmstudio_local_status(workspace_id, &payload);
+                let status_obj = payload.get("status").unwrap_or(&payload);
+                let ok = status_obj
+                    .get("ok")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(true);
+                if ok {
+                    if let Some(modal) = self.lmstudio_start_modal.take()
+                        && let Some(thread_id) = modal.thread_id
+                    {
+                        self.dispatch(Action::Chat(ChatAction::RetryFailedTurn { thread_id }));
+                    }
+                } else if let Some(modal) = self.lmstudio_start_modal.as_mut() {
+                    modal.starting = false;
+                    modal.error = status_obj
+                        .get("message")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                        .or_else(|| Some("Failed to start LM Studio server.".to_string()));
                 }
             }
             "cowork/mcp/list"
@@ -11268,9 +11309,9 @@ impl AppState {
             | "cowork/skills/installation/copy" => {
                 let target = payload.get("event").unwrap_or(&payload);
                 if target.get("catalog").is_some() {
-                    self.apply_skills_catalog_event(target);
+                    self.apply_skills_catalog_event(workspace_id, target);
                 } else {
-                    self.apply_skills_list_event(target);
+                    self.apply_skills_list_event(workspace_id, target);
                 }
             }
             "cowork/marketplaces/read"
@@ -11484,6 +11525,26 @@ impl AppState {
         }
         if method.starts_with("cowork/workspace/document/") {
             self.apply_canvas_rpc_error(request_id, method, &err);
+        }
+        if method == "cowork/provider/lmstudio/local/status"
+            || method == "cowork/provider/lmstudio/local/start"
+        {
+            self.apply_lmstudio_local_status(
+                workspace_id,
+                &json!({
+                    "status": {
+                        "installed": true,
+                        "running": false,
+                        "message": err.message,
+                    }
+                }),
+            );
+            if method == "cowork/provider/lmstudio/local/start"
+                && let Some(modal) = self.lmstudio_start_modal.as_mut()
+            {
+                modal.starting = false;
+                modal.error = Some(err.message.clone());
+            }
         }
         if method.starts_with("cowork/") && !method.starts_with("cowork/workspace/document/") {
             self.settings_mutation_error = Some(err.message.clone());
@@ -12043,6 +12104,16 @@ impl AppState {
             rt.usage = Some(parse_usage_summary(usage_val));
             reconcile_usage_budget_status(rt, usage_val);
         }
+        let snapshot_workflow_runs = (!stale_snapshot)
+            .then(|| snapshot.get("workflowRuns").and_then(Value::as_array))
+            .flatten()
+            .cloned();
+        if let Some(runs_arr) = snapshot_workflow_runs {
+            let now_ms = self.wall_clock_ms();
+            for run_val in &runs_arr {
+                upsert_workflow_run_progress(&mut self.workflow_runs, run_val, now_ms);
+            }
+        }
         if self.is_workspace_ws_connected(workspace_id)
             && !self.is_thread_subscribed(workspace_id, &session_id)
             && (self.nav.current().active_thread_id.as_deref() == Some(session_id.as_str())
@@ -12230,42 +12301,77 @@ impl AppState {
         }
     }
 
-    fn apply_skills_catalog_event(&mut self, evt: &Value) {
+    fn apply_skills_catalog_event(&mut self, workspace_id: &str, evt: &Value) {
         let catalog = evt.get("catalog").unwrap_or(evt);
-        if let Some(scopes) = catalog.get("scopes").and_then(Value::as_array) {
-            self.skill_scopes = scopes.clone();
-        }
-        if let Some(installations) = catalog.get("installations").and_then(Value::as_array) {
-            self.skill_installations = installations.clone();
-        }
-        let available_partial =
-            evt.get("availableSkillsPartial").and_then(Value::as_bool) == Some(true);
-        if let Some(avail) = catalog.get("availableSkills").and_then(Value::as_array) {
-            if available_partial && avail.is_empty() && !self.available_skills.is_empty() {
-                let installed_names: HashSet<&str> = self
-                    .skill_installations
-                    .iter()
-                    .filter_map(|s| s.get("name").and_then(Value::as_str))
-                    .collect();
-                self.available_skills.retain(|s| {
-                    s.get("name")
-                        .and_then(Value::as_str)
-                        .is_none_or(|name| !installed_names.contains(name))
-                });
-            } else {
-                self.available_skills = avail.clone();
+        let sync_active = self.is_active_or_sole_workspace(workspace_id);
+        let seed_available = (!self
+            .workspace_runtime_by_id
+            .get(workspace_id)
+            .is_some_and(|rt| rt.skills_loaded)
+            && sync_active
+            && !self.available_skills.is_empty())
+        .then(|| self.available_skills.clone());
+        let (scopes, installations, available, effective, skills) = {
+            let rt = self
+                .workspace_runtime_by_id
+                .entry(workspace_id.to_string())
+                .or_default();
+            if rt.available_skills.is_empty()
+                && let Some(seeded) = seed_available
+            {
+                rt.available_skills = seeded;
             }
-        }
-        if let Some(effective) = catalog.get("effectiveSkills").and_then(Value::as_array) {
-            self.effective_skills = effective.clone();
-            self.skills = effective.iter().filter_map(parse_skill_summary).collect();
-        } else if let Some(installations) = catalog.get("installations").and_then(Value::as_array)
-            && self.skills.is_empty()
-        {
-            self.skills = installations
-                .iter()
-                .filter_map(parse_skill_summary)
-                .collect();
+            rt.skills_loaded = true;
+            if let Some(scopes) = catalog.get("scopes").and_then(Value::as_array) {
+                rt.skill_scopes = scopes.clone();
+            }
+            if let Some(installations) = catalog.get("installations").and_then(Value::as_array) {
+                rt.skill_installations = installations.clone();
+            }
+            let available_partial =
+                evt.get("availableSkillsPartial").and_then(Value::as_bool) == Some(true);
+            if let Some(avail) = catalog.get("availableSkills").and_then(Value::as_array) {
+                if available_partial && avail.is_empty() && !rt.available_skills.is_empty() {
+                    let installed_names: HashSet<&str> = rt
+                        .skill_installations
+                        .iter()
+                        .filter_map(|s| s.get("name").and_then(Value::as_str))
+                        .collect();
+                    rt.available_skills.retain(|s| {
+                        s.get("name")
+                            .and_then(Value::as_str)
+                            .is_none_or(|name| !installed_names.contains(name))
+                    });
+                } else {
+                    rt.available_skills = avail.clone();
+                }
+            }
+            if let Some(effective) = catalog.get("effectiveSkills").and_then(Value::as_array) {
+                rt.effective_skills = effective.clone();
+                rt.skills = effective.iter().filter_map(parse_skill_summary).collect();
+            } else if let Some(installations) =
+                catalog.get("installations").and_then(Value::as_array)
+                && rt.skills.is_empty()
+            {
+                rt.skills = installations
+                    .iter()
+                    .filter_map(parse_skill_summary)
+                    .collect();
+            }
+            (
+                rt.skill_scopes.clone(),
+                rt.skill_installations.clone(),
+                rt.available_skills.clone(),
+                rt.effective_skills.clone(),
+                rt.skills.clone(),
+            )
+        };
+        if sync_active {
+            self.skill_scopes = scopes;
+            self.skill_installations = installations;
+            self.available_skills = available;
+            self.effective_skills = effective;
+            self.skills = skills;
         }
     }
 
@@ -12412,6 +12518,88 @@ impl AppState {
             self.installed_plugin_entries.clear();
             self.available_plugins.clear();
             self.plugin_catalog_warnings.clear();
+        }
+    }
+
+    pub fn skills_for_workspace(&self, workspace_id: &str) -> &[SkillSummary] {
+        if let Some(rt) = self.workspace_runtime_by_id.get(workspace_id)
+            && rt.skills_loaded
+        {
+            return &rt.skills;
+        }
+        if self
+            .workspace_runtime_by_id
+            .values()
+            .all(|rt| !rt.skills_loaded)
+            && self.is_active_or_sole_workspace(workspace_id)
+        {
+            return &self.skills;
+        }
+        &[]
+    }
+
+    pub fn skill_installations_for_workspace(&self, workspace_id: &str) -> &[Value] {
+        if let Some(rt) = self.workspace_runtime_by_id.get(workspace_id)
+            && rt.skills_loaded
+        {
+            return &rt.skill_installations;
+        }
+        if self
+            .workspace_runtime_by_id
+            .values()
+            .all(|rt| !rt.skills_loaded)
+            && self.is_active_or_sole_workspace(workspace_id)
+        {
+            return &self.skill_installations;
+        }
+        &[]
+    }
+
+    pub fn available_skills_for_workspace(&self, workspace_id: &str) -> &[Value] {
+        if let Some(rt) = self.workspace_runtime_by_id.get(workspace_id)
+            && rt.skills_loaded
+        {
+            return &rt.available_skills;
+        }
+        if self
+            .workspace_runtime_by_id
+            .values()
+            .all(|rt| !rt.skills_loaded)
+            && self.is_active_or_sole_workspace(workspace_id)
+        {
+            return &self.available_skills;
+        }
+        &[]
+    }
+
+    fn sync_active_workspace_skills(&mut self) {
+        self.settings_ui.selected_skill_id = None;
+        self.settings_ui.skill_delete_confirm = None;
+        self.settings_ui.skill_delete_confirm_inst = None;
+        if let Some(ws_id) = self.active_workspace_id.as_deref() {
+            if let Some(rt) = self
+                .workspace_runtime_by_id
+                .get(ws_id)
+                .filter(|rt| rt.skills_loaded)
+            {
+                self.skills = rt.skills.clone();
+                self.skill_installations = rt.skill_installations.clone();
+                self.available_skills = rt.available_skills.clone();
+                self.effective_skills = rt.effective_skills.clone();
+                self.skill_scopes = rt.skill_scopes.clone();
+            } else {
+                self.skills.clear();
+                self.skill_installations.clear();
+                self.available_skills.clear();
+                self.effective_skills.clear();
+                self.skill_scopes.clear();
+            }
+        } else {
+            self.skills.clear();
+            self.skill_installations.clear();
+            self.available_skills.clear();
+            self.effective_skills.clear();
+            self.skill_scopes.clear();
         }
     }
 
@@ -12689,82 +12877,106 @@ impl AppState {
         params
     }
 
-    fn apply_skills_list_event(&mut self, evt: &Value) {
+    fn apply_skills_list_event(&mut self, workspace_id: &str, evt: &Value) {
         let Some(arr) = evt.get("skills").and_then(Value::as_array) else {
             return;
         };
-        let updated: Vec<SkillSummary> = arr
-            .iter()
-            .filter_map(|v| {
-                let mut summary = parse_skill_summary(v)?;
-                let has_explicit_scope = v
-                    .get("scope")
-                    .or_else(|| v.get("origin").and_then(|o| o.get("scope")))
-                    .and_then(Value::as_str)
-                    .is_some_and(|s| !s.trim().is_empty());
-                let prev = summary
-                    .id
-                    .as_deref()
-                    .and_then(|id| self.skills.iter().find(|s| s.id.as_deref() == Some(id)))
-                    .or_else(|| self.skills.iter().find(|s| s.name == summary.name));
-                let inst = summary
-                    .installation_id
-                    .as_deref()
-                    .and_then(|iid| {
-                        self.skill_installations
-                            .iter()
-                            .find(|i| i.get("installationId").and_then(Value::as_str) == Some(iid))
-                    })
-                    .or_else(|| {
-                        self.skill_installations.iter().find(|i| {
-                            i.get("name")
-                                .or_else(|| i.get("skillName"))
-                                .and_then(Value::as_str)
-                                == Some(summary.name.as_str())
+        let sync_active = self.is_active_or_sole_workspace(workspace_id);
+        let fallback_skills = self.skills.clone();
+        let fallback_installations = self.skill_installations.clone();
+        let updated = {
+            let rt = self
+                .workspace_runtime_by_id
+                .entry(workspace_id.to_string())
+                .or_default();
+            let prev_skills = if rt.skills_loaded || !sync_active {
+                rt.skills.as_slice()
+            } else {
+                fallback_skills.as_slice()
+            };
+            let prev_installations = if rt.skills_loaded || !sync_active {
+                rt.skill_installations.as_slice()
+            } else {
+                fallback_installations.as_slice()
+            };
+            let updated: Vec<SkillSummary> = arr
+                .iter()
+                .filter_map(|v| {
+                    let mut summary = parse_skill_summary(v)?;
+                    let has_explicit_scope = v
+                        .get("scope")
+                        .or_else(|| v.get("origin").and_then(|o| o.get("scope")))
+                        .and_then(Value::as_str)
+                        .is_some_and(|s| !s.trim().is_empty());
+                    let prev = summary
+                        .id
+                        .as_deref()
+                        .and_then(|id| prev_skills.iter().find(|s| s.id.as_deref() == Some(id)))
+                        .or_else(|| prev_skills.iter().find(|s| s.name == summary.name));
+                    let inst = summary
+                        .installation_id
+                        .as_deref()
+                        .and_then(|iid| {
+                            prev_installations.iter().find(|i| {
+                                i.get("installationId").and_then(Value::as_str) == Some(iid)
+                            })
                         })
-                    });
-                if summary.installation_id.is_none() {
-                    summary.installation_id =
-                        prev.and_then(|s| s.installation_id.clone()).or_else(|| {
-                            inst.and_then(|i| i.get("installationId"))
+                        .or_else(|| {
+                            prev_installations.iter().find(|i| {
+                                i.get("name")
+                                    .or_else(|| i.get("skillName"))
+                                    .and_then(Value::as_str)
+                                    == Some(summary.name.as_str())
+                            })
+                        });
+                    if summary.installation_id.is_none() {
+                        summary.installation_id =
+                            prev.and_then(|s| s.installation_id.clone()).or_else(|| {
+                                inst.and_then(|i| i.get("installationId"))
+                                    .and_then(Value::as_str)
+                                    .map(str::to_string)
+                            });
+                    }
+                    if !has_explicit_scope {
+                        if let Some(prev_scope) =
+                            prev.map(|s| s.scope.as_str()).filter(|s| !s.is_empty())
+                        {
+                            summary.scope = prev_scope.to_string();
+                        } else if let Some(inst_scope) = inst
+                            .and_then(|i| i.get("scope"))
+                            .and_then(Value::as_str)
+                            .filter(|s| !s.trim().is_empty())
+                        {
+                            summary.scope = inst_scope.to_string();
+                        }
+                    }
+                    if summary.source.is_none() {
+                        summary.source = prev.and_then(|s| s.source.clone()).or_else(|| {
+                            inst.and_then(|i| {
+                                i.get("source")
+                                    .or_else(|| i.get("origin").and_then(|o| o.get("kind")))
+                            })
+                            .and_then(Value::as_str)
+                            .map(str::to_string)
+                        });
+                    }
+                    if summary.version.is_none() {
+                        summary.version = prev.and_then(|s| s.version.clone()).or_else(|| {
+                            inst.and_then(|i| i.get("version"))
                                 .and_then(Value::as_str)
                                 .map(str::to_string)
                         });
-                }
-                if !has_explicit_scope {
-                    if let Some(prev_scope) =
-                        prev.map(|s| s.scope.as_str()).filter(|s| !s.is_empty())
-                    {
-                        summary.scope = prev_scope.to_string();
-                    } else if let Some(inst_scope) = inst
-                        .and_then(|i| i.get("scope"))
-                        .and_then(Value::as_str)
-                        .filter(|s| !s.trim().is_empty())
-                    {
-                        summary.scope = inst_scope.to_string();
                     }
-                }
-                if summary.source.is_none() {
-                    summary.source = prev.and_then(|s| s.source.clone()).or_else(|| {
-                        inst.and_then(|i| {
-                            i.get("source")
-                                .or_else(|| i.get("origin").and_then(|o| o.get("kind")))
-                        })
-                        .and_then(Value::as_str)
-                        .map(str::to_string)
-                    });
-                }
-                if summary.version.is_none() {
-                    summary.version = prev.and_then(|s| s.version.clone()).or_else(|| {
-                        inst.and_then(|i| i.get("version"))
-                            .and_then(Value::as_str)
-                            .map(str::to_string)
-                    });
-                }
-                Some(summary)
-            })
-            .collect();
-        self.skills = updated;
+                    Some(summary)
+                })
+                .collect();
+            rt.skills = updated.clone();
+            rt.skills_loaded = true;
+            updated
+        };
+        if sync_active {
+            self.skills = updated;
+        }
     }
 
     fn update_mcp_servers_from_event(&mut self, workspace_id: &str, evt: &Value) {
@@ -12878,6 +13090,72 @@ impl AppState {
                 .entry(workspace_id.to_string())
                 .or_default()
                 .provider_statuses = statuses;
+        }
+        self.refresh_creation_preflight();
+    }
+
+    fn apply_lmstudio_local_status(&mut self, workspace_id: &str, payload: &Value) {
+        let status_val = payload.get("status").unwrap_or(payload);
+        if !status_val.is_object() {
+            return;
+        }
+        self.lmstudio_local_status = Some(status_val.clone());
+        let running = status_val
+            .get("running")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let installed = status_val
+            .get("installed")
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
+        let base_url = status_val
+            .get("baseUrl")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|v| !v.is_empty());
+        let detail = status_val
+            .get("message")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| {
+                if running {
+                    match base_url {
+                        Some(url) => format!("Running at {url}"),
+                        None => "LM Studio server is reachable".to_string(),
+                    }
+                } else if !installed {
+                    "LM Studio is not installed".to_string()
+                } else {
+                    match base_url {
+                        Some(url) => format!("Offline at {url}"),
+                        None => "LM Studio server is offline".to_string(),
+                    }
+                }
+            });
+
+        let rt = self
+            .workspace_runtime_by_id
+            .entry(workspace_id.to_string())
+            .or_default();
+        if let Some(existing) = rt
+            .provider_statuses
+            .iter_mut()
+            .find(|s| s.provider == "lmstudio")
+        {
+            existing.healthy = running;
+            existing.connected = running;
+            existing.detail = Some(detail);
+        } else {
+            rt.provider_statuses.push(ProviderStatusSummary {
+                provider: "lmstudio".to_string(),
+                healthy: running,
+                connected: running,
+                auth_method: None,
+                detail: Some(detail),
+                ..ProviderStatusSummary::default()
+            });
         }
         self.refresh_creation_preflight();
     }
@@ -13848,6 +14126,117 @@ fn parse_task_record(val: &Value, fallback_workspace_id: &str) -> Option<TaskRec
         requirements: val.get("requirements").cloned().unwrap_or(Value::Null),
         activity,
     })
+}
+
+fn upsert_workflow_run_progress(runs: &mut Vec<WorkflowRunView>, evt: &Value, now_ms: i64) {
+    let progress = evt.get("progress").filter(|v| v.is_object()).unwrap_or(evt);
+    let Some(run_id) = progress
+        .get("runId")
+        .or_else(|| progress.get("id"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    else {
+        return;
+    };
+    let wf_name = progress
+        .get("name")
+        .or_else(|| progress.get("workflowName"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let outcome = progress
+        .get("outcome")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let status = outcome
+        .or_else(|| {
+            progress
+                .get("status")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+        })
+        .unwrap_or("running")
+        .to_string();
+    let is_terminal = outcome.is_some()
+        || matches!(
+            status.as_str(),
+            "completed" | "failed" | "cancelled" | "aborted" | "error" | "stopped"
+        );
+    let summary = progress
+        .get("summary")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            progress
+                .get("error")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+        })
+        .or_else(|| {
+            let phase = progress
+                .get("currentPhase")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty());
+            let agents_summary = progress
+                .get("agents")
+                .and_then(Value::as_array)
+                .filter(|arr| !arr.is_empty())
+                .map(|arr| {
+                    let done = arr
+                        .iter()
+                        .filter(|a| {
+                            a.get("state").and_then(Value::as_str).is_some_and(|st| {
+                                matches!(st, "completed" | "cached" | "failed" | "error")
+                            })
+                        })
+                        .count();
+                    format!("{done}/{} agents", arr.len())
+                });
+            match (phase, agents_summary) {
+                (Some(p), Some(a)) => Some(format!("Phase: {p} · {a}")),
+                (Some(p), None) => Some(format!("Phase: {p}")),
+                (None, Some(a)) => Some(a),
+                (None, None) => progress
+                    .get("logs")
+                    .and_then(Value::as_array)
+                    .and_then(|logs| logs.iter().rev().find_map(Value::as_str))
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string),
+            }
+        });
+
+    if let Some(existing) = runs.iter_mut().find(|w| w.id == run_id) {
+        if let Some(name) = wf_name
+            && (existing.workflow_name.is_empty() || existing.workflow_name == "workflow")
+        {
+            existing.workflow_name = name.to_string();
+        }
+        existing.status = status;
+        if is_terminal && existing.finished_at.is_none() {
+            existing.finished_at = Some(now_ms);
+        }
+        if summary.is_some() {
+            existing.summary = summary;
+        }
+    } else {
+        runs.push(WorkflowRunView {
+            id: run_id.to_string(),
+            workflow_name: wf_name.unwrap_or("workflow").to_string(),
+            status,
+            started_at: now_ms,
+            finished_at: is_terminal.then_some(now_ms),
+            summary,
+        });
+    }
 }
 
 fn build_agent_profile_upsert_payload(input: &AgentProfileUpsertInputWire) -> Value {
@@ -24281,5 +24670,353 @@ mod tests {
             .expect("disable sent to ws-a");
         assert_eq!(ws_a_req["pluginId"], "plug-alpha");
         assert_eq!(ws_a_req["scope"], "workspace");
+    }
+
+    #[test]
+    fn workflow_progress_decodes_nested_payload_and_snapshot_runs() {
+        let mut state = AppState::default();
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-1", "App", "/tmp/app", 1));
+        state.active_workspace_id = Some("ws-1".to_string());
+
+        state.apply_ws_notification(
+            "ws-1",
+            "cowork/session/workflowProgress",
+            json!({
+                "type": "workflow_progress",
+                "sessionId": "th-1",
+                "progress": {
+                    "runId": "wf-run-1",
+                    "name": "nightly-audit",
+                    "phases": ["scan", "summarize"],
+                    "currentPhase": "scan",
+                    "agents": [
+                        { "index": 0, "label": "worker-1", "phase": "scan", "state": "completed" },
+                        { "index": 1, "label": "worker-2", "phase": "scan", "state": "running" }
+                    ],
+                    "logs": ["started scan"],
+                    "spentUsd": 0.04,
+                    "outcome": null
+                }
+            }),
+        );
+        assert_eq!(state.workflow_runs.len(), 1);
+        assert_eq!(state.workflow_runs[0].id, "wf-run-1");
+        assert_eq!(state.workflow_runs[0].workflow_name, "nightly-audit");
+        assert_eq!(state.workflow_runs[0].status, "running");
+        assert!(state.workflow_runs[0].finished_at.is_none());
+        assert_eq!(
+            state.workflow_runs[0].summary.as_deref(),
+            Some("Phase: scan · 1/2 agents")
+        );
+
+        // Terminal update populates outcome and finished_at.
+        state.apply_ws_notification(
+            "ws-1",
+            "cowork/session/workflowProgress",
+            json!({
+                "type": "workflow_progress",
+                "sessionId": "th-1",
+                "progress": {
+                    "runId": "wf-run-1",
+                    "name": "nightly-audit",
+                    "phases": ["scan", "summarize"],
+                    "currentPhase": "summarize",
+                    "agents": [],
+                    "logs": ["done"],
+                    "spentUsd": 0.09,
+                    "outcome": "completed"
+                }
+            }),
+        );
+        assert_eq!(state.workflow_runs[0].status, "completed");
+        assert!(state.workflow_runs[0].finished_at.is_some());
+
+        // Snapshot hydration (`coworkSnapshot.workflowRuns`) populates workflow_runs too.
+        state.apply_thread_snapshot_response(
+            "ws-1",
+            &json!({
+                "coworkSnapshot": {
+                    "sessionId": "th-1",
+                    "lastEventSeq": 3,
+                    "workflowRuns": [{
+                        "runId": "wf-run-2",
+                        "name": "release-check",
+                        "phases": [],
+                        "currentPhase": null,
+                        "agents": [],
+                        "logs": [],
+                        "spentUsd": 0.01,
+                        "error": "lint failed",
+                        "outcome": "failed"
+                    }]
+                }
+            }),
+        );
+        let snap_run = state
+            .workflow_runs
+            .iter()
+            .find(|r| r.id == "wf-run-2")
+            .expect("workflow run hydrated from snapshot");
+        assert_eq!(snap_run.workflow_name, "release-check");
+        assert_eq!(snap_run.status, "failed");
+        assert_eq!(snap_run.summary.as_deref(), Some("lint failed"));
+    }
+
+    #[test]
+    fn skill_catalogs_stay_isolated_per_workspace() {
+        let mut state = AppState::default();
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-a", "Alpha", "/tmp/alpha", 1));
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-b", "Beta", "/tmp/beta", 2));
+        state.active_workspace_id = Some("ws-b".to_string());
+
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-b".to_string(),
+            request_id: 1,
+            method: "cowork/skills/catalog/read".to_string(),
+            result: Ok(json!({
+                "event": {
+                    "type": "skills_catalog",
+                    "catalog": {
+                        "installations": [{
+                            "installationId": "inst-b",
+                            "name": "beta-skill",
+                            "scope": "project",
+                            "enabled": true,
+                            "writable": true
+                        }],
+                        "effectiveSkills": [{ "name": "beta-skill", "scope": "project" }],
+                        "availableSkills": [{ "name": "avail-b", "installed": false }]
+                    }
+                }
+            })),
+        });
+
+        // Delayed response from ws-a must not overwrite active ws-b skills catalog.
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-a".to_string(),
+            request_id: 2,
+            method: "cowork/skills/catalog/read".to_string(),
+            result: Ok(json!({
+                "event": {
+                    "type": "skills_catalog",
+                    "catalog": {
+                        "installations": [{
+                            "installationId": "inst-a",
+                            "name": "alpha-skill",
+                            "scope": "project",
+                            "enabled": true,
+                            "writable": true
+                        }],
+                        "effectiveSkills": [{ "name": "alpha-skill", "scope": "project" }],
+                        "availableSkills": [{ "name": "avail-a", "installed": false }]
+                    }
+                }
+            })),
+        });
+
+        assert_eq!(state.skills.len(), 1);
+        assert_eq!(state.skills[0].name, "beta-skill");
+        assert_eq!(
+            state.skill_installations_for_workspace("ws-b")[0]["installationId"],
+            "inst-b"
+        );
+        assert_eq!(
+            state.skill_installations_for_workspace("ws-a")[0]["installationId"],
+            "inst-a"
+        );
+
+        state.settings_ui.selected_skill_id = Some("inst-b".to_string());
+        state.dispatch(Action::Navigate(NavAction::SelectWorkspace(
+            "ws-a".to_string(),
+        )));
+        assert_eq!(state.skills.len(), 1);
+        assert_eq!(state.skills[0].name, "alpha-skill");
+        assert!(state.settings_ui.selected_skill_id.is_none());
+    }
+
+    #[test]
+    fn truncated_canvas_document_blocks_save_as() {
+        let mut state = AppState::default();
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-1", "App", "/tmp/app", 1));
+        state.active_workspace_id = Some("ws-1".to_string());
+        state.canvas_document = Some(CanvasDocumentSession {
+            workspace_id: "ws-1".to_string(),
+            document_id: "doc-1".to_string(),
+            generation: 1,
+            path: "large.txt".to_string(),
+            disk_content: "prefix...".to_string(),
+            draft_content: "prefix...".to_string(),
+            edit_revision: 1,
+            last_saved_edit_revision: 1,
+            truncated: true,
+            revision: None,
+            status: CanvasDocumentStatus::Ready,
+            last_saved_at_secs: None,
+            dirty_since_secs: None,
+            last_poll_secs: 0.0,
+        });
+        state.services.emitted_ws_commands.clear();
+
+        state.dispatch(Action::Chat(ChatAction::SaveCanvasDocumentAs {
+            path: "copy.txt".to_string(),
+        }));
+        assert!(
+            state.services.emitted_ws_commands.is_empty(),
+            "truncated Canvas document must not send document/saveAs"
+        );
+    }
+
+    #[test]
+    fn lmstudio_local_status_response_reconciles_state_and_provider_status() {
+        let mut state = AppState::default();
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-1", "App", "/tmp/app", 1));
+        state.active_workspace_id = Some("ws-1".to_string());
+
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-1".to_string(),
+            request_id: 10,
+            method: "cowork/provider/lmstudio/local/status".to_string(),
+            result: Ok(json!({
+                "status": {
+                    "installed": true,
+                    "running": false,
+                    "baseUrl": "http://127.0.0.1:1234",
+                    "canAutoStart": true,
+                    "message": "LM Studio server at http://127.0.0.1:1234 returned HTTP 401.",
+                    "checkedAt": "2026-11-21T00:00:00Z"
+                }
+            })),
+        });
+
+        let local = state
+            .lmstudio_local_status
+            .as_ref()
+            .expect("lmstudio local status stored");
+        assert_eq!(local["running"], json!(false));
+        let ps = state
+            .workspace_runtime_by_id
+            .get("ws-1")
+            .and_then(|rt| {
+                rt.provider_statuses
+                    .iter()
+                    .find(|p| p.provider == "lmstudio")
+            })
+            .expect("lmstudio provider status updated");
+        assert!(!ps.connected);
+        assert!(!ps.healthy);
+        assert_eq!(
+            ps.detail.as_deref(),
+            Some("LM Studio server at http://127.0.0.1:1234 returned HTTP 401.")
+        );
+
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-1".to_string(),
+            request_id: 11,
+            method: "cowork/provider/lmstudio/local/status".to_string(),
+            result: Ok(json!({
+                "status": {
+                    "installed": true,
+                    "running": true,
+                    "baseUrl": "http://127.0.0.1:1234",
+                    "canAutoStart": true,
+                    "checkedAt": "2026-11-21T00:00:05Z"
+                }
+            })),
+        });
+        let ps_ok = state
+            .workspace_runtime_by_id
+            .get("ws-1")
+            .and_then(|rt| {
+                rt.provider_statuses
+                    .iter()
+                    .find(|p| p.provider == "lmstudio")
+            })
+            .unwrap();
+        assert!(ps_ok.connected);
+        assert!(ps_ok.healthy);
+        assert_eq!(
+            ps_ok.detail.as_deref(),
+            Some("Running at http://127.0.0.1:1234")
+        );
+    }
+
+    #[test]
+    fn chat_history_back_and_forward_restore_owning_workspace_and_catalogs() {
+        let mut state = AppState::default();
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-a", "Alpha", "/tmp/alpha", 1));
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-b", "Beta", "/tmp/beta", 2));
+        state.threads.push(ThreadRecord {
+            id: "th-a".to_string(),
+            workspace_id: "ws-a".to_string(),
+            title: "Alpha chat".to_string(),
+            ..ThreadRecord::default()
+        });
+        state.threads.push(ThreadRecord {
+            id: "th-b".to_string(),
+            workspace_id: "ws-b".to_string(),
+            title: "Beta chat".to_string(),
+            ..ThreadRecord::default()
+        });
+        state.active_workspace_id = Some("ws-a".to_string());
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-a".to_string(),
+            request_id: 1,
+            method: "cowork/skills/catalog/read".to_string(),
+            result: Ok(json!({
+                "event": {
+                    "type": "skills_catalog",
+                    "catalog": {
+                        "effectiveSkills": [{ "name": "alpha-skill", "scope": "project" }]
+                    }
+                }
+            })),
+        });
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-b".to_string(),
+            request_id: 2,
+            method: "cowork/skills/catalog/read".to_string(),
+            result: Ok(json!({
+                "event": {
+                    "type": "skills_catalog",
+                    "catalog": {
+                        "effectiveSkills": [{ "name": "beta-skill", "scope": "project" }]
+                    }
+                }
+            })),
+        });
+
+        state.dispatch(Action::Navigate(NavAction::OpenThread("th-a".to_string())));
+        assert_eq!(state.active_workspace_id.as_deref(), Some("ws-a"));
+        assert_eq!(state.skills[0].name, "alpha-skill");
+
+        state.dispatch(Action::Navigate(NavAction::OpenThread("th-b".to_string())));
+        assert_eq!(state.active_workspace_id.as_deref(), Some("ws-b"));
+        assert_eq!(state.skills[0].name, "beta-skill");
+
+        // Pressing Back restores th-a AND its owning workspace ws-a + catalogs.
+        state.dispatch(Action::Navigate(NavAction::GoBack));
+        assert_eq!(state.route().active_thread_id.as_deref(), Some("th-a"));
+        assert_eq!(state.active_workspace_id.as_deref(), Some("ws-a"));
+        assert_eq!(state.skills[0].name, "alpha-skill");
+
+        // Pressing Forward restores th-b AND its owning workspace ws-b + catalogs.
+        state.dispatch(Action::Navigate(NavAction::GoForward));
+        assert_eq!(state.route().active_thread_id.as_deref(), Some("th-b"));
+        assert_eq!(state.active_workspace_id.as_deref(), Some("ws-b"));
+        assert_eq!(state.skills[0].name, "beta-skill");
     }
 }

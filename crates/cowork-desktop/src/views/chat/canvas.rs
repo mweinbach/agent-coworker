@@ -672,6 +672,9 @@ fn trigger_save(s: &mut AppState, doc: &ResolvedCanvasDoc) {
 }
 
 fn trigger_save_as_dialog(s: &AppState, tx: &mut Tx, doc: &ResolvedCanvasDoc) {
+    if doc.truncated {
+        return;
+    }
     let suggested = resolve_canvas_abs_path(s, &doc.workspace_id, &doc.path);
     let opts = build_save_canvas_dialog(&suggested);
     let doc_for_cb = doc.clone();
@@ -1092,10 +1095,11 @@ fn build_toolbar_row(
                 | CanvasLifecycleKind::LoadError
                 | CanvasLifecycleKind::Conflict
         );
-    let can_save_as = !matches!(
-        doc.lifecycle,
-        CanvasLifecycleKind::Loading | CanvasLifecycleKind::LoadError
-    );
+    let can_save_as = !doc.truncated
+        && !matches!(
+            doc.lifecycle,
+            CanvasLifecycleKind::Loading | CanvasLifecycleKind::LoadError
+        );
     let doc_save = doc.clone();
     let doc_save_as = doc.clone();
 
@@ -1133,7 +1137,11 @@ fn build_toolbar_row(
                 .control_size(ControlSize::Small)
                 .icon(&icons::FILE_PLUS)
                 .disabled(!can_save_as)
-                .help("Save a copy in workspace")
+                .help(if doc.truncated {
+                    "Save As is disabled because this document is truncated"
+                } else {
+                    "Save a copy in workspace"
+                })
                 .on_press_tx(move |s: &mut AppState, tx| {
                     trigger_save_as_dialog(s, tx, &doc_save_as);
                 })
@@ -1361,6 +1369,7 @@ fn build_banners(
                             .variant(ButtonVariant::Outline)
                             .control_size(ControlSize::Small)
                             .icon(&icons::FILE_PLUS)
+                            .disabled(doc.truncated)
                             .on_press_tx(move |s: &mut AppState, tx| {
                                 trigger_save_as_dialog(s, tx, &doc_save_as);
                             })
@@ -1409,6 +1418,7 @@ fn build_banners(
                             .variant(ButtonVariant::Outline)
                             .control_size(ControlSize::Small)
                             .icon(&icons::FILE_PLUS)
+                            .disabled(doc.truncated)
                             .on_press_tx(move |s: &mut AppState, tx| {
                                 trigger_save_as_dialog(s, tx, &doc_save_as);
                             })

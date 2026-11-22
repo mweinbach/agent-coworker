@@ -359,41 +359,53 @@ fn build_task_create_card(
                     .variant(ButtonVariant::Outline)
                     .control_size(ControlSize::Small)
                     .on_press_tx(|s: &mut AppState, _| {
-                        s.shell_ui.task_create_open = false;
+                        if s.shell_ui.task_create_submitting {
+                            s.shell_ui.task_create_open = false;
+                        } else {
+                            s.shell_ui.reset_task_create_draft();
+                        }
                     })
                     .build(k),
             )
             .child(
-                Button::new("Create task")
-                    .variant(ButtonVariant::Contrast)
-                    .control_size(ControlSize::Small)
-                    .disabled(!can_submit || s.shell_ui.task_create_submitting)
-                    .on_press_tx(move |s: &mut AppState, _| {
-                        let Some(ws_id) = ws_for_submit.clone() else {
-                            return;
-                        };
-                        let title = s.shell_ui.task_create_title_edit.text.trim().to_owned();
-                        let objective =
-                            s.shell_ui.task_create_objective_edit.text.trim().to_owned();
-                        if title.is_empty() || objective.is_empty() {
-                            return;
-                        }
-                        // Keep form open and inputs intact until the server accepts `task/create`
-                        // so transient connection/validation errors remain retryable.
-                        s.dispatch(Action::Task(TaskAction::CreateTask {
-                            workspace_id: ws_id,
-                            title,
-                            objective,
-                            context: None,
-                            review_required: Some(true),
-                            provider: None,
-                            model: None,
-                            idempotency_key: None,
-                            requirements: Vec::new(),
-                            work_items: Vec::new(),
-                        }));
-                    })
-                    .build(k),
+                Button::new(if s.shell_ui.task_create_submitting {
+                    "Creating..."
+                } else {
+                    "Create task"
+                })
+                .variant(ButtonVariant::Contrast)
+                .control_size(ControlSize::Small)
+                .disabled(!can_submit || s.shell_ui.task_create_submitting)
+                .on_press_tx(move |s: &mut AppState, _| {
+                    if s.shell_ui.task_create_submitting {
+                        return;
+                    }
+                    let Some(ws_id) = ws_for_submit.clone() else {
+                        return;
+                    };
+                    let title = s.shell_ui.task_create_title_edit.text.trim().to_owned();
+                    let objective = s.shell_ui.task_create_objective_edit.text.trim().to_owned();
+                    if title.is_empty() || objective.is_empty() {
+                        return;
+                    }
+                    // Keep form open, inputs intact, and idempotency key stable until the server
+                    // acknowledges `task/create` (or the user explicitly cancels) so retries
+                    // deduplicate instead of creating duplicate tasks.
+                    let idempotency_key = s.shell_ui.ensure_task_create_idempotency_key(&ws_id);
+                    s.dispatch(Action::Task(TaskAction::CreateTask {
+                        workspace_id: ws_id,
+                        title,
+                        objective,
+                        context: None,
+                        review_required: Some(true),
+                        provider: None,
+                        model: None,
+                        idempotency_key: Some(idempotency_key),
+                        requirements: Vec::new(),
+                        work_items: Vec::new(),
+                    }));
+                })
+                .build(k),
             ),
     )
 }

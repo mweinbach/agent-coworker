@@ -63,6 +63,7 @@ pub struct ShellUiState {
     pub task_create_submitting: bool,
     pub task_create_title_edit: TextEdit,
     pub task_create_objective_edit: TextEdit,
+    pub task_create_idempotency_key: Option<(String, String)>,
     pub task_feedback_open: bool,
     pub task_feedback_submitting: bool,
     pub task_feedback_edit: TextEdit,
@@ -100,6 +101,26 @@ impl ShellUiState {
         self.onboarding_open_select = None;
         self.onboarding_completion_error = None;
     }
+
+    pub fn ensure_task_create_idempotency_key(&mut self, workspace_id: &str) -> String {
+        if let Some((ws_id, key)) = self.task_create_idempotency_key.as_ref()
+            && ws_id == workspace_id
+            && !key.trim().is_empty()
+        {
+            return key.clone();
+        }
+        let fresh = uuid::Uuid::new_v4().to_string();
+        self.task_create_idempotency_key = Some((workspace_id.to_owned(), fresh.clone()));
+        fresh
+    }
+
+    pub fn reset_task_create_draft(&mut self) {
+        self.task_create_open = false;
+        self.task_create_submitting = false;
+        self.task_create_title_edit = TextEdit::new("");
+        self.task_create_objective_edit = TextEdit::new("");
+        self.task_create_idempotency_key = None;
+    }
 }
 
 impl Default for ShellUiState {
@@ -136,6 +157,7 @@ impl Default for ShellUiState {
             task_create_submitting: false,
             task_create_title_edit: TextEdit::new(""),
             task_create_objective_edit: TextEdit::new(""),
+            task_create_idempotency_key: None,
             task_feedback_open: false,
             task_feedback_submitting: false,
             task_feedback_edit: TextEdit::new(""),

@@ -6317,7 +6317,18 @@ impl AppState {
                     .map(str::trim)
                     .filter(|s| !s.is_empty())
                     .map(|s| s.chars().take(200).collect::<String>())
-                    .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+                    .unwrap_or_else(|| {
+                        if self.shell_ui.task_create_open {
+                            self.shell_ui
+                                .ensure_task_create_idempotency_key(&workspace_id)
+                        } else {
+                            uuid::Uuid::new_v4().to_string()
+                        }
+                    });
+                if self.shell_ui.task_create_open {
+                    self.shell_ui.task_create_idempotency_key =
+                        Some((workspace_id.clone(), key.clone()));
+                }
                 let title_val: String = {
                     let t = title.trim();
                     let raw = if t.is_empty() { "Untitled task" } else { t };
@@ -9882,6 +9893,14 @@ impl AppState {
                     self.pending_task_create_rpc = None;
                     self.shell_ui.task_create_submitting = false;
                 }
+                if self
+                    .shell_ui
+                    .task_create_idempotency_key
+                    .as_ref()
+                    .is_some_and(|(ws_id, _)| ws_id == &workspace_id)
+                {
+                    self.shell_ui.task_create_idempotency_key = None;
+                }
                 for id in &removed_thread_ids {
                     self.thread_runtime_by_id.remove(id);
                     self.composer_drafts.remove(id);
@@ -12139,10 +12158,7 @@ impl AppState {
                         .is_none_or(|(id, _)| *id == request_id)
                     {
                         self.pending_task_create_rpc = None;
-                        self.shell_ui.task_create_submitting = false;
-                        self.shell_ui.task_create_open = false;
-                        self.shell_ui.task_create_title_edit = TextEdit::new("");
-                        self.shell_ui.task_create_objective_edit = TextEdit::new("");
+                        self.shell_ui.reset_task_create_draft();
                     }
                     if let Some(tid) = task_val.get("id").and_then(Value::as_str) {
                         let old_key = self.composer_key();
@@ -29265,6 +29281,135 @@ mod tests {
                 .get(&other_task_key)
                 .map(|e| e.text.as_str()),
             Some("Other task draft")
+        );
+    }
+
+    #[test]
+    fn task_create_preserves_idempotency_key_across_disconnect_and_error_retries() {
+        let mut state = AppState::default();
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-1", "Alpha", "/tmp/a", 1));
+        state.active_workspace_id = Some("ws-1".to_string());
+        state.shell_ui.task_create_open = true;
+        state.shell_ui.task_create_title_edit = TextEdit::new("Audit dependencies");
+        state.shell_ui.task_create_objective_edit =
+            TextEdit::new("Check outdated crates and open follow-ups");
+
+        let make_action = || {
+            Action::Task(TaskAction::CreateTask {
+                workspace_id: "ws-1".to_string(),
+                title: "Audit dependencies".to_string(),
+                objective: "Check outdated crates and open follow-ups".to_string(),
+                context: None,
+                review_required: Some(true),
+                provider: None,
+                model: None,
+                idempotency_key: None,
+                requirements: Vec::new(),
+                work_items: Vec::new(),
+            })
+        };
+        let last_create_req = |state: &AppState| {
+            state
+                .services
+                .emitted_ws_commands
+                .iter()
+                .rev()
+                .find_map(|cmd| match cmd {
+                    WsCommand::SendRequest {
+                        request_id,
+                        method,
+                        params,
+                        ..
+                    } if method == "task/create" => Some((
+                        *request_id,
+                        params["idempotencyKey"].as_str().unwrap_or("").to_string(),
+                    )),
+                    _ => None,
+                })
+                .expect("expected task/create request")
+        };
+
+        state.dispatch(make_action());
+        let (_req_1, key_1) = last_create_req(&state);
+        assert!(!key_1.is_empty());
+        assert!(state.shell_ui.task_create_submitting);
+
+        // Lost response on disconnect unlocks retry while preserving the exact idempotency key.
+        state.apply_store_event(StoreEvent::WsStateChanged {
+            workspace_id: "ws-1".to_string(),
+            state: WsConnectionState::Reconnecting {
+                attempt: 1,
+                max_attempts: 5,
+                delay_ms: 1000,
+                reason: "dropped".to_string(),
+            },
+        });
+        assert!(!state.shell_ui.task_create_submitting);
+        assert!(state.shell_ui.task_create_open);
+
+        state.dispatch(make_action());
+        let (req_2, key_2) = last_create_req(&state);
+        assert_eq!(
+            key_2, key_1,
+            "retry after disconnect must reuse idempotencyKey"
+        );
+
+        // RPC error also unlocks retry while retaining the same idempotency key.
+        state.apply_ws_response(
+            "ws-1",
+            req_2,
+            "task/create",
+            Err(WsRpcError {
+                code: -32000,
+                message: "Temporary error".to_string(),
+                data: None,
+            }),
+        );
+        assert!(!state.shell_ui.task_create_submitting);
+        state.dispatch(make_action());
+        let (req_3, key_3) = last_create_req(&state);
+        assert_eq!(
+            key_3, key_1,
+            "retry after RPC error must reuse idempotencyKey"
+        );
+
+        // Server acknowledgement clears the draft and its idempotency key so the next task gets a fresh key.
+        state.apply_ws_response(
+            "ws-1",
+            req_3,
+            "task/create",
+            Ok(json!({
+                "task": {
+                    "id": "task-1",
+                    "title": "Audit dependencies",
+                    "status": "in_progress",
+                    "revision": 1
+                }
+            })),
+        );
+        assert!(!state.shell_ui.task_create_open);
+        assert!(!state.shell_ui.task_create_submitting);
+        assert!(state.shell_ui.task_create_idempotency_key.is_none());
+
+        state.shell_ui.task_create_open = true;
+        state.dispatch(make_action());
+        let (_req_4, key_4) = last_create_req(&state);
+        assert_ne!(
+            key_4, key_1,
+            "new draft after acknowledgement must get a fresh idempotencyKey"
+        );
+
+        // Explicit discard clears the draft and key so reopening starts with a fresh key.
+        state.shell_ui.reset_task_create_draft();
+        assert!(state.shell_ui.task_create_idempotency_key.is_none());
+        state.shell_ui.task_create_open = true;
+        state.dispatch(make_action());
+        let (_req_5, key_5) = last_create_req(&state);
+        assert_ne!(
+            key_5, key_4,
+            "draft after explicit cancel must get a fresh idempotencyKey"
         );
     }
 }

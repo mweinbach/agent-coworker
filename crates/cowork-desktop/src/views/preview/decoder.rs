@@ -391,13 +391,11 @@ fn format_float_cell(v: f64) -> String {
     if v == 0.0 {
         return "0".to_string();
     }
-    // Avoid noisy ".0" for exact whole Excel numeric floats up to safe integer range.
-    if v.fract() == 0.0 && v.abs() < 1e15 {
-        return format!("{:.0}", v);
+    let abs = v.abs();
+    if !(1e-4..1e15).contains(&abs) {
+        return format!("{v:e}");
     }
-    let raw = format!("{v:.10}");
-    let trimmed = raw.trim_end_matches('0').trim_end_matches('.');
-    trimmed.to_string()
+    v.to_string()
 }
 
 fn format_excel_datetime(dt: &ExcelDateTime) -> String {
@@ -453,4 +451,36 @@ pub fn excel_column_name(mut index: usize) -> String {
         index = index / 26 - 1;
     }
     chars.into_iter().rev().collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::format_float_cell;
+
+    #[test]
+    fn format_float_cell_preserves_significant_digits_and_uses_scientific_for_extremes() {
+        assert_eq!(format_float_cell(0.0), "0");
+        assert_eq!(format_float_cell(-0.0), "0");
+        assert_eq!(format_float_cell(42.0), "42");
+        assert_eq!(format_float_cell(std::f64::consts::PI), "3.141592653589793");
+        assert_eq!(format_float_cell(1e-12), "1e-12");
+        assert_eq!(format_float_cell(-1.25e-12), "-1.25e-12");
+        assert_eq!(
+            format_float_cell(1.23456789012345e-12),
+            "1.23456789012345e-12"
+        );
+        assert_eq!(format_float_cell(1.5e20), "1.5e20");
+
+        for &val in &[
+            1e-12_f64,
+            -1e-12,
+            std::f64::consts::PI,
+            1.23456789012345e-12,
+            1.5e20,
+        ] {
+            let formatted = format_float_cell(val);
+            let parsed: f64 = formatted.parse().expect("formatted float must parse");
+            assert_eq!(parsed, val, "value must round-trip losslessly: {formatted}");
+        }
+    }
 }

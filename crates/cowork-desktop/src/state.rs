@@ -17373,7 +17373,18 @@ fn build_inherited_defaults_apply_params(
     ] {
         raw.remove(top);
     }
-    raw.retain(|_, v| !v.is_null());
+    // Preserve explicit `null` on tool output overflow keys: `cowork-server` distinguishes
+    // `toolOutputOverflowChars: null` (spillover disabled) from omission (leave unchanged).
+    if raw.contains_key("defaultToolOutputOverflowChars") {
+        raw.remove("toolOutputOverflowChars");
+    }
+    raw.retain(|k, v| {
+        !v.is_null()
+            || matches!(
+                k.as_str(),
+                "defaultToolOutputOverflowChars" | "toolOutputOverflowChars"
+            )
+    });
     if let Some(ref v) = ws.default_preferred_child_model {
         raw.entry("defaultPreferredChildModel".to_string())
             .or_insert_with(|| json!(v));
@@ -30815,7 +30826,8 @@ mod tests {
             }
         }));
         existing.defaults = json!({
-            "defaultToolCalling": { "codeMode": true }
+            "defaultToolCalling": { "codeMode": true },
+            "defaultToolOutputOverflowChars": Value::Null
         });
         state.workspaces.push(existing);
         state.active_workspace_id = Some("ws-base".to_string());
@@ -30876,6 +30888,17 @@ mod tests {
             json!("cross-provider-allowlist")
         );
         assert_eq!(applied["config"]["toolCalling"]["codeMode"], json!(true));
+        assert_eq!(
+            applied["config"].get("toolOutputOverflowChars"),
+            Some(&Value::Null),
+            "inherited explicit null overflow disablement must be preserved in defaults apply"
+        );
+        assert!(
+            applied["config"]
+                .get("clearToolOutputOverflowChars")
+                .is_none(),
+            "explicit null overflow disablement must not be rewritten into a clear sentinel"
+        );
         assert_eq!(
             applied["config"]["providerOptions"]["openai"]["reasoningEffort"],
             json!("high")

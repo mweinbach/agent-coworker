@@ -139,6 +139,14 @@ pub fn resolve_claude_sdk_home(cowork_home: &Path) -> PathBuf {
     cowork_home.join("auth").join("claude-sdk")
 }
 
+/// Returns `true` when the configured secret is a Claude OAuth token (`sk-ant-oat*`),
+/// which `build_claude_sdk_spawn_env` exports via `CLAUDE_CODE_OAUTH_TOKEN`.
+pub fn claude_sdk_uses_oauth_token(api_key: Option<&str>) -> bool {
+    api_key
+        .map(str::trim)
+        .is_some_and(|secret| secret.starts_with("sk-ant-oat"))
+}
+
 /// Builds the isolated environment for the managed `claude` subprocess:
 /// - Creates `<cowork_home>/auth/claude-sdk` (`0700`).
 /// - Strips inherited `CLAUDE_*`, `ANTHROPIC_API_KEY`, `ANTHROPIC_OAUTH_TOKEN`, and
@@ -165,7 +173,7 @@ pub fn build_claude_sdk_spawn_env(
         ),
     ];
     if let Some(secret) = api_key.map(str::trim).filter(|s| !s.is_empty()) {
-        if secret.starts_with("sk-ant-oat") {
+        if claude_sdk_uses_oauth_token(Some(secret)) {
             set_vars.push(("CLAUDE_CODE_OAUTH_TOKEN".to_owned(), secret.to_owned()));
         } else {
             set_vars.push(("ANTHROPIC_API_KEY".to_owned(), secret.to_owned()));

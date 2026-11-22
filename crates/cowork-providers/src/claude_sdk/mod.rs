@@ -31,9 +31,16 @@ use crate::transport::{
 
 pub use installer::{
     CLAUDE_SDK_MANAGED_VERSION, ClaudeSdkInstallOptions, build_claude_sdk_spawn_env,
-    claude_sdk_override_configured, install_claude_sdk, resolve_claude_sdk_home,
-    resolve_claude_sdk_status, update_managed_claude_sdk,
+    claude_sdk_override_configured, claude_sdk_uses_oauth_token, install_claude_sdk,
+    resolve_claude_sdk_home, resolve_claude_sdk_status, update_managed_claude_sdk,
 };
+
+/// CLI-precedence inline settings passed to the managed `claude` subprocess so
+/// repository/user hooks (`SessionStart`, `PreToolUse`, etc.), custom status lines,
+/// file-suggestion commands, and auto-enabled project MCP servers cannot execute
+/// outside Cowork's approval/sandbox boundary.
+const CLAUDE_SDK_ISOLATED_SETTINGS_JSON: &str =
+    r#"{"disableAllHooks":true,"enableAllProjectMcpServers":false}"#;
 
 #[derive(Clone, Default)]
 pub struct ClaudeSdkTransport {
@@ -516,6 +523,69 @@ struct StreamBlockState {
     stream_id: String,
 }
 
+fn build_claude_sdk_args(
+    base_args: Vec<String>,
+    request: &ProviderStepRequest,
+    resume_session_id: Option<&str>,
+    tools_disabled: bool,
+) -> Vec<String> {
+    let mut args = base_args;
+    args.push("--print".to_owned());
+    if claude_sdk_uses_oauth_token(request.api_key.as_deref()) {
+        // Claude Code's `--bare` intentionally ignores OAuth credentials including
+        // `CLAUDE_CODE_OAUTH_TOKEN`. Restrict settings strictly to `user` scope (which
+        // resolves to Cowork's isolated `CLAUDE_CONFIG_DIR`) so untrusted repository
+        // `project` (`.claude/settings.json`, `CLAUDE.md`, project skills/agents) and
+        // `local` (`.claude/settings.local.json`) settings are never loaded, paired with
+        // CLI-precedence `disableAllHooks`, `--strict-mcp-config`, and `--disable-slash-commands`.
+        args.push("--setting-sources".to_owned());
+        args.push("user".to_owned());
+    } else {
+        // Bare mode skips all auto-discovery of project/user hooks, `CLAUDE.md`, skills,
+        // custom commands, subagents, installed plugins, auto-memory, and `.mcp.json`.
+        args.push("--bare".to_owned());
+    }
+    args.extend([
+        "--settings".to_owned(),
+        CLAUDE_SDK_ISOLATED_SETTINGS_JSON.to_owned(),
+        "--strict-mcp-config".to_owned(),
+        "--disable-slash-commands".to_owned(),
+        "--input-format".to_owned(),
+        "stream-json".to_owned(),
+        "--output-format".to_owned(),
+        "stream-json".to_owned(),
+        "--verbose".to_owned(),
+        "--include-partial-messages".to_owned(),
+        "--permission-prompt-tool".to_owned(),
+        "stdio".to_owned(),
+        "--model".to_owned(),
+        request.model_id.clone(),
+    ]);
+    if let Some(effort) = claude_sdk_effort(&request.provider_options) {
+        args.push("--effort".to_owned());
+        args.push(effort.to_owned());
+    }
+    if let Some(session_id) = resume_session_id {
+        args.push("--resume".to_owned());
+        args.push(session_id.to_owned());
+    }
+    if !request.system_prompt.trim().is_empty() {
+        args.push("--append-system-prompt".to_owned());
+        args.push(request.system_prompt.clone());
+    }
+    if tools_disabled || request.authorized_tool_names.as_deref() == Some(&[]) {
+        args.push("--tools".to_owned());
+        args.push(String::new());
+    } else if let Some(allowlist) = request.authorized_tool_names.as_deref() {
+        let disallowed = claude_disallowed_native_tools(allowlist);
+        if !disallowed.is_empty() {
+            args.push("--disallowedTools".to_owned());
+            args.push(disallowed.join(","));
+        }
+    }
+    args
+}
+
 #[async_trait]
 impl ProviderTransport for ClaudeSdkTransport {
     async fn stream_step(
@@ -565,41 +635,12 @@ impl ProviderTransport for ClaudeSdkTransport {
         let tools_disabled =
             self.disable_tools || request_disables_all_tools(&request.provider_options);
 
-        let mut args = base_args;
-        args.extend([
-            "--input-format".to_owned(),
-            "stream-json".to_owned(),
-            "--output-format".to_owned(),
-            "stream-json".to_owned(),
-            "--verbose".to_owned(),
-            "--include-partial-messages".to_owned(),
-            "--permission-prompt-tool".to_owned(),
-            "stdio".to_owned(),
-            "--model".to_owned(),
-            request.model_id.clone(),
-        ]);
-        if let Some(effort) = claude_sdk_effort(&request.provider_options) {
-            args.push("--effort".to_owned());
-            args.push(effort.to_owned());
-        }
-        if let Some((session_id, _)) = resume_plan {
-            args.push("--resume".to_owned());
-            args.push(session_id.to_owned());
-        }
-        if !request.system_prompt.trim().is_empty() {
-            args.push("--append-system-prompt".to_owned());
-            args.push(request.system_prompt.clone());
-        }
-        if tools_disabled || request.authorized_tool_names.as_deref() == Some(&[]) {
-            args.push("--tools".to_owned());
-            args.push(String::new());
-        } else if let Some(allowlist) = request.authorized_tool_names.as_deref() {
-            let disallowed = claude_disallowed_native_tools(allowlist);
-            if !disallowed.is_empty() {
-                args.push("--disallowedTools".to_owned());
-                args.push(disallowed.join(","));
-            }
-        }
+        let args = build_claude_sdk_args(
+            base_args,
+            &request,
+            resume_plan.map(|(session_id, _)| session_id),
+            tools_disabled,
+        );
 
         let spawn_env = build_claude_sdk_spawn_env(&cw_home, &env, request.api_key.as_deref());
         let mut child =

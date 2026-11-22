@@ -1245,3 +1245,175 @@ for line in sys.stdin:
         "session/prompt must not be submitted after session/set_model fails"
     );
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn claude_sdk_isolates_cli_against_repository_hooks_for_api_key_and_oauth() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = TempDir::new().unwrap();
+    let script_path = tmp.path().join("mock-claude-args.py");
+    let script = r#"#!/usr/bin/env python3
+import json, os, sys
+
+args = sys.argv[1:]
+
+def emit(obj):
+    sys.stdout.write(json.dumps(obj) + "\n")
+    sys.stdout.flush()
+
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    msg = json.loads(line)
+    if msg.get("type") == "control_request" and msg.get("request", {}).get("subtype") == "initialize":
+        emit({
+            "type": "control_response",
+            "response": {"subtype": "success", "request_id": msg["request_id"], "response": {}}
+        })
+    elif msg.get("type") == "user":
+        payload = json.dumps({
+            "args": args,
+            "has_oauth": "CLAUDE_CODE_OAUTH_TOKEN" in os.environ,
+            "has_api_key": "ANTHROPIC_API_KEY" in os.environ,
+        })
+        emit({"type": "system", "subtype": "init", "session_id": "claude-iso-1"})
+        emit({"type": "stream_event", "event": {"type": "content_block_start", "index": 0, "content_block": {"type": "text"}}})
+        emit({"type": "stream_event", "event": {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": payload}}})
+        emit({"type": "stream_event", "event": {"type": "content_block_stop", "index": 0}})
+        emit({
+            "type": "result",
+            "subtype": "success",
+            "is_error": False,
+            "session_id": "claude-iso-1",
+            "result": payload,
+            "usage": {"input_tokens": 5, "output_tokens": 5}
+        })
+        break
+"#;
+    std::fs::write(&script_path, script).unwrap();
+    std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let mut env = HashMap::new();
+    env.insert("HOME".into(), tmp.path().to_string_lossy().into_owned());
+    env.insert("PATH".into(), std::env::var("PATH").unwrap_or_default());
+
+    let mut transport = ClaudeSdkTransport::with_env(env);
+    transport.command_override = Some((script_path.to_string_lossy().into_owned(), Vec::new()));
+
+    let mut provider_options = Map::new();
+    provider_options.insert("cwd".into(), json!(tmp.path().to_string_lossy()));
+    let budget = StepBudget::unbounded(Some(CancellationToken::new()));
+
+    // 1. API key auth uses `--bare` plus CLI-precedence `disableAllHooks`, `--strict-mcp-config`,
+    //    and `--disable-slash-commands`.
+    let api_req = ProviderStepRequest {
+        model_id: "claude-opus-4-8".to_owned(),
+        base_url: None,
+        api_key: Some("sk-ant-api03-test".to_owned()),
+        extra_headers: HashMap::new(),
+        system_prompt: String::new(),
+        messages: vec![user_msg("inspect")],
+        tools: Vec::new(),
+        authorized_tool_names: None,
+        provider_options: provider_options.clone(),
+        continuation: None,
+        policy: RequestPolicy::default(),
+        turn_id: "turn-iso-api".to_owned(),
+    };
+    let api_res = transport
+        .stream_step(api_req, &budget, &mut |_| {})
+        .await
+        .expect("API key turn succeeds");
+    let api_text = api_res
+        .assistant
+        .content
+        .iter()
+        .find_map(|b| match b {
+            ContentBlock::Text { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .unwrap();
+    let api_json: Value = serde_json::from_str(api_text).unwrap();
+    let api_args: Vec<&str> = api_json["args"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    assert_eq!(api_json["has_api_key"], json!(true));
+    assert_eq!(api_json["has_oauth"], json!(false));
+    assert!(api_args.contains(&"--print"));
+    assert!(api_args.contains(&"--bare"));
+    assert!(!api_args.contains(&"--setting-sources"));
+    assert!(api_args.contains(&"--strict-mcp-config"));
+    assert!(api_args.contains(&"--disable-slash-commands"));
+    let settings_idx = api_args
+        .iter()
+        .position(|&a| a == "--settings")
+        .expect("--settings flag must be passed");
+    let settings_val: Value = serde_json::from_str(api_args[settings_idx + 1]).unwrap();
+    assert_eq!(settings_val["disableAllHooks"], json!(true));
+    assert_eq!(settings_val["enableAllProjectMcpServers"], json!(false));
+
+    // 2. OAuth token auth omits `--bare` (which ignores `CLAUDE_CODE_OAUTH_TOKEN`) and isolates
+    //    via `--setting-sources user` (Cowork's isolated CLAUDE_CONFIG_DIR), CLI-precedence
+    //    `disableAllHooks`, `--strict-mcp-config`, and `--disable-slash-commands`.
+    let oauth_req = ProviderStepRequest {
+        model_id: "claude-opus-4-8".to_owned(),
+        base_url: None,
+        api_key: Some("sk-ant-oat01-test".to_owned()),
+        extra_headers: HashMap::new(),
+        system_prompt: String::new(),
+        messages: vec![user_msg("inspect")],
+        tools: Vec::new(),
+        authorized_tool_names: None,
+        provider_options,
+        continuation: None,
+        policy: RequestPolicy::default(),
+        turn_id: "turn-iso-oauth".to_owned(),
+    };
+    let oauth_res = transport
+        .stream_step(oauth_req, &budget, &mut |_| {})
+        .await
+        .expect("OAuth token turn succeeds");
+    let oauth_text = oauth_res
+        .assistant
+        .content
+        .iter()
+        .find_map(|b| match b {
+            ContentBlock::Text { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .unwrap();
+    let oauth_json: Value = serde_json::from_str(oauth_text).unwrap();
+    let oauth_args: Vec<&str> = oauth_json["args"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    assert_eq!(oauth_json["has_oauth"], json!(true));
+    assert_eq!(oauth_json["has_api_key"], json!(false));
+    assert!(oauth_args.contains(&"--print"));
+    assert!(!oauth_args.contains(&"--bare"));
+    let src_idx = oauth_args
+        .iter()
+        .position(|&a| a == "--setting-sources")
+        .expect("--setting-sources flag must be passed for OAuth tokens");
+    assert_eq!(oauth_args[src_idx + 1], "user");
+    assert!(oauth_args.contains(&"--strict-mcp-config"));
+    assert!(oauth_args.contains(&"--disable-slash-commands"));
+    let oauth_settings_idx = oauth_args
+        .iter()
+        .position(|&a| a == "--settings")
+        .expect("--settings flag must be passed for OAuth tokens");
+    let oauth_settings_val: Value =
+        serde_json::from_str(oauth_args[oauth_settings_idx + 1]).unwrap();
+    assert_eq!(oauth_settings_val["disableAllHooks"], json!(true));
+    assert_eq!(
+        oauth_settings_val["enableAllProjectMcpServers"],
+        json!(false)
+    );
+}

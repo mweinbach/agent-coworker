@@ -2240,3 +2240,93 @@ async fn unsandboxed_native_shell_preserves_unix_backslashes_during_glob_expansi
         }
     }
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn unsandboxed_native_shell_blocks_compound_post_mutation_and_concurrent_mutation_sequences()
+{
+    for yolo in [true, false] {
+        let h = Harness::new(Turn {
+            yolo,
+            mode: Some(SandboxMode::DangerFullAccess),
+            network: Some(true),
+            ..Turn::default()
+        });
+        let cred_file = h.home.join(".cowork/auth/connections.json");
+        std::fs::create_dir_all(cred_file.parent().unwrap()).unwrap();
+        std::fs::write(&cred_file, "{\"openai\":\"secret\"}\n").unwrap();
+
+        std::fs::create_dir_all(h.ws.join("parked")).unwrap();
+        std::fs::create_dir_all(h.ws.join("safe")).unwrap();
+        std::fs::write(h.ws.join("README.md"), "# demo\n").unwrap();
+        std::fs::write(h.ws.join("safe/ok.rs"), "fn main() {}\n").unwrap();
+        std::os::unix::fs::symlink(&cred_file, h.ws.join("parked/credential-link")).unwrap();
+        std::os::unix::fs::symlink(&cred_file, h.ws.join("&cred-link")).unwrap();
+
+        let blocked = [
+            "mv parked exposed; cat exposed/credential-link",
+            "mv parked exposed && cat exposed/credential-link",
+            "mv parked exposed || cat exposed/credential-link",
+            "mv parked exposed\ncat exposed/credential-link",
+            "mv parked exposed && cat exposed/*",
+            "mv parked exposed && cd exposed && cat credential-link",
+            "(mv parked exposed); cat exposed/credential-link",
+            "((mv parked exposed)) && cat exposed/credential-link",
+            "sh -c 'mv parked exposed'; cat exposed/credential-link",
+            "sh -c 'mv parked exposed && cat exposed/credential-link'",
+            "mv parked exposed; (cat exposed/credential-link)",
+            "mv parked exposed; < exposed/credential-link cat",
+            "mv parked exposed | cat exposed/credential-link",
+            "cat exposed/credential-link | mv parked exposed",
+            "cat exposed/credential-link & mv parked exposed",
+            "mv parked exposed & cat exposed/credential-link",
+            "(sleep 1; mv parked exposed) &",
+            "echo hi > out.txt; cat out.txt",
+            "mkdir -p tmp && cat README.md",
+            "echo hi > '&cred-link'",
+        ];
+        for cmd in blocked {
+            assert!(
+                !h.decide_silently(CLAUDE_TOOL, claude_tool("Bash", json!({ "command": cmd })))
+                    .await,
+                "yolo={yolo}: compound post-mutation/concurrent-mutation command must be denied in Bash: {cmd:?}"
+            );
+            assert!(
+                !h.decide_silently(
+                    ACP_PERMISSION,
+                    json!({
+                        "toolCall": {
+                            "title": "run_cmd",
+                            "kind": "execute",
+                            "rawInput": { "command": cmd }
+                        }
+                    }),
+                )
+                .await,
+                "yolo={yolo}: compound post-mutation/concurrent-mutation command must be denied in ACP: {cmd:?}"
+            );
+        }
+
+        // Single mutations, navigation before a final mutation, and read-only/stdio-redirect
+        // compound commands remain allowed.
+        for ok_cmd in [
+            "mv parked exposed",
+            "cd safe && touch note.txt",
+            "echo hi > /dev/null && cat README.md",
+            "cat README.md 2>&1 | head -n 1",
+        ] {
+            let req = claude_tool("Bash", json!({ "command": ok_cmd }));
+            if yolo {
+                assert!(
+                    h.decide_silently(CLAUDE_TOOL, req).await,
+                    "benign command must pass under YOLO: {ok_cmd}"
+                );
+            } else {
+                assert!(
+                    h.decide_interactively(CLAUDE_TOOL, req, true).await,
+                    "benign command must remain approvable interactively: {ok_cmd}"
+                );
+            }
+        }
+    }
+}

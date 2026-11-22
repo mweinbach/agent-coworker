@@ -995,7 +995,7 @@ fn validate_shell_command(
             )
         })?;
 
-    validate_native_shell_command_text(&command, &base_dir, ctx, 0)?;
+    let _ = validate_native_shell_command_text(&command, &base_dir, ctx, 0)?;
 
     let pre_exec = classify_command_detailed(&command, None, None);
     let matches_explicit_review = matches_ts_approval_patterns(&command, host_platform());
@@ -1036,7 +1036,7 @@ fn validate_shell_control(
         if let Some(raw) = parsed.input.get(key).and_then(Value::as_str)
             && !raw.trim().is_empty()
         {
-            validate_native_shell_command_text(raw, &ctx.working_directory, ctx, 0)?;
+            let _ = validate_native_shell_command_text(raw, &ctx.working_directory, ctx, 0)?;
         }
     }
 
@@ -3433,7 +3433,7 @@ fn validate_native_shell_command_text(
     base_dir: &Path,
     ctx: &ToolExecutionContext,
     depth: usize,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     if depth > MAX_SHELL_RECURSION_DEPTH {
         return Err("Native shell command exceeded maximum nesting depth.".to_owned());
     }
@@ -3465,6 +3465,15 @@ fn validate_native_shell_command_text(
     let mut pipeline_entry_dirs: Option<Vec<PathBuf>> = None;
     let mut subshell_stack: Vec<(Vec<PathBuf>, Option<Vec<PathBuf>>, bool)> = Vec::new();
     let mut in_conditional_chain = false;
+    // Track filesystem mutations within this command so static pre-execution path authorization
+    // cannot be defeated by mutating paths (`mv`, `cp`, `rm`, write redirections, nested `sh -c`)
+    // before or concurrently with another command (e.g. `mv parked exposed; cat exposed/link`).
+    let mut prior_cmd_mutated = false;
+    let mut current_cmd_mutated = false;
+    let mut saw_concurrent_operator = false;
+
+    const POST_MUTATION_ERR: &str = "Compound commands combining filesystem mutations with subsequent commands are blocked in unsandboxed native shell execution; run mutations as separate commands or use Cowork's OS-sandboxed bash tool.";
+    const CONCURRENT_MUTATION_ERR: &str = "Concurrent or pipelined commands containing filesystem mutations are blocked in unsandboxed native shell execution; run mutations as separate commands or use Cowork's OS-sandboxed bash tool.";
 
     let mut at_command_pos = true;
     let mut current_cmd = String::new();
@@ -3533,21 +3542,33 @@ fn validate_native_shell_command_text(
                     ));
                 }
                 if matches!(op_body, ">" | ">>" | "&>" | "&>>" | ">|" | "<>") {
+                    if prior_cmd_mutated {
+                        return Err(POST_MUTATION_ERR.to_owned());
+                    }
                     expect_write_target = true;
                     expect_read_target = false;
                     expect_fd_dup_or_write = false;
                     expect_fd_dup_only = false;
                 } else if op_body == ">&" {
+                    if prior_cmd_mutated {
+                        return Err(POST_MUTATION_ERR.to_owned());
+                    }
                     expect_fd_dup_or_write = true;
                     expect_write_target = false;
                     expect_read_target = false;
                     expect_fd_dup_only = false;
                 } else if op_body == "<&" {
+                    if prior_cmd_mutated {
+                        return Err(POST_MUTATION_ERR.to_owned());
+                    }
                     expect_fd_dup_only = true;
                     expect_write_target = false;
                     expect_read_target = false;
                     expect_fd_dup_or_write = false;
                 } else if op_body == "<" {
+                    if prior_cmd_mutated {
+                        return Err(POST_MUTATION_ERR.to_owned());
+                    }
                     if is_nested_posix_shell(&current_cmd) {
                         return Err(format!(
                             "Feeding stdin into shell '{current_cmd}' is blocked in unsandboxed native shell execution."
@@ -3558,6 +3579,9 @@ fn validate_native_shell_command_text(
                     expect_fd_dup_or_write = false;
                     expect_fd_dup_only = false;
                 } else if op == "(" {
+                    if prior_cmd_mutated {
+                        return Err(POST_MUTATION_ERR.to_owned());
+                    }
                     if !at_command_pos {
                         return Err(
                             "Unexpected '(' subshell or function definition syntax is blocked in unsandboxed native shell execution."
@@ -3597,6 +3621,8 @@ fn validate_native_shell_command_text(
                         &mut possible_dirs,
                         &mut cd_updated_this_cmd,
                     )?;
+                    prior_cmd_mutated |= current_cmd_mutated;
+                    current_cmd_mutated = false;
                     let Some((saved_dirs, saved_pipeline_entry, saved_in_cond)) =
                         subshell_stack.pop()
                     else {
@@ -3632,8 +3658,14 @@ fn validate_native_shell_command_text(
                         &mut possible_dirs,
                         &mut cd_updated_this_cmd,
                     )?;
+                    prior_cmd_mutated |= current_cmd_mutated;
+                    current_cmd_mutated = false;
                     match op.as_str() {
                         "|" | "|&" => {
+                            saw_concurrent_operator = true;
+                            if prior_cmd_mutated {
+                                return Err(CONCURRENT_MUTATION_ERR.to_owned());
+                            }
                             let entry = pipeline_entry_dirs
                                 .get_or_insert_with(|| segment_start_dirs.clone())
                                 .clone();
@@ -3658,6 +3690,10 @@ fn validate_native_shell_command_text(
                             in_conditional_chain = true;
                         }
                         "&" => {
+                            saw_concurrent_operator = true;
+                            if prior_cmd_mutated {
+                                return Err(CONCURRENT_MUTATION_ERR.to_owned());
+                            }
                             // Background lists run in a subshell and do not alter the parent's cwd.
                             if let Some(entry) = pipeline_entry_dirs.take() {
                                 possible_dirs = entry;
@@ -3695,6 +3731,9 @@ fn validate_native_shell_command_text(
                 has_unquoted_dollar,
                 has_unquoted_backtick,
             } => {
+                if prior_cmd_mutated {
+                    return Err(POST_MUTATION_ERR.to_owned());
+                }
                 if *has_unquoted_dollar || *has_unquoted_backtick {
                     return Err(
                         "Dynamic shell variable, command, or ANSI-C expansion is blocked in unsandboxed native shell execution."
@@ -3712,6 +3751,12 @@ fn validate_native_shell_command_text(
                 if expect_fd_dup_or_write {
                     expect_fd_dup_or_write = false;
                     if !is_fd_dup_spec(text) {
+                        if !is_safe_stdio_device(text) {
+                            current_cmd_mutated = true;
+                            if saw_concurrent_operator {
+                                return Err(CONCURRENT_MUTATION_ERR.to_owned());
+                            }
+                        }
                         for dir in &possible_dirs {
                             if *has_unquoted_glob && segment_has_glob_meta(text) {
                                 validate_shell_glob_operand(text, dir, ctx, "", true)?;
@@ -3733,13 +3778,17 @@ fn validate_native_shell_command_text(
                 }
                 if expect_write_target {
                     expect_write_target = false;
-                    if !text.starts_with('&') {
-                        for dir in &possible_dirs {
-                            if *has_unquoted_glob && segment_has_glob_meta(text) {
-                                validate_shell_glob_operand(text, dir, ctx, "", true)?;
-                            } else {
-                                validate_shell_path_token(text, dir, ctx, true, false)?;
-                            }
+                    if !is_safe_stdio_device(text) {
+                        current_cmd_mutated = true;
+                        if saw_concurrent_operator {
+                            return Err(CONCURRENT_MUTATION_ERR.to_owned());
+                        }
+                    }
+                    for dir in &possible_dirs {
+                        if *has_unquoted_glob && segment_has_glob_meta(text) {
+                            validate_shell_glob_operand(text, dir, ctx, "", true)?;
+                        } else {
+                            validate_shell_path_token(text, dir, ctx, true, false)?;
                         }
                     }
                     continue;
@@ -3758,8 +3807,17 @@ fn validate_native_shell_command_text(
                 if expect_subshell_script {
                     expect_subshell_script = false;
                     nested_shell_got_script = true;
+                    let mut nested_mutated = false;
                     for dir in &possible_dirs {
-                        validate_native_shell_command_text(text, dir, ctx, depth + 1)?;
+                        if validate_native_shell_command_text(text, dir, ctx, depth + 1)? {
+                            nested_mutated = true;
+                        }
+                    }
+                    if nested_mutated {
+                        current_cmd_mutated = true;
+                        if saw_concurrent_operator {
+                            return Err(CONCURRENT_MUTATION_ERR.to_owned());
+                        }
                     }
                     continue;
                 }
@@ -3803,6 +3861,12 @@ fn validate_native_shell_command_text(
                         return Err(format!(
                             "Command '{base}' is not allowed in unsandboxed native shell execution; use Cowork's OS-sandboxed bash tool or an audited file command instead."
                         ));
+                    }
+                    if is_mutating_shell_command(&base) {
+                        current_cmd_mutated = true;
+                        if saw_concurrent_operator {
+                            return Err(CONCURRENT_MUTATION_ERR.to_owned());
+                        }
                     }
                     current_cmd = base;
                     at_command_pos = false;
@@ -3947,8 +4011,12 @@ fn validate_native_shell_command_text(
     if !subshell_stack.is_empty() {
         return Err("Unclosed '(' subshell in native shell command.".to_owned());
     }
+    let mutated = prior_cmd_mutated || current_cmd_mutated;
+    if saw_concurrent_operator && mutated {
+        return Err(CONCURRENT_MUTATION_ERR.to_owned());
+    }
 
-    Ok(())
+    Ok(mutated)
 }
 
 fn truncate_summary(text: &str) -> String {

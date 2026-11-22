@@ -1986,3 +1986,66 @@ async fn unsandboxed_native_shell_rejects_escaped_newlines_comments_and_lexer_di
         }
     }
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn unsandboxed_native_shell_preserves_literal_at_sign_filename_prefixes() {
+    for yolo in [true, false] {
+        let h = Harness::new(Turn {
+            yolo,
+            mode: Some(SandboxMode::DangerFullAccess),
+            network: Some(true),
+            ..Turn::default()
+        });
+        let cred_file = h.home.join(".cowork/auth/codex-cli/auth.json");
+        std::fs::create_dir_all(cred_file.parent().unwrap()).unwrap();
+        std::fs::write(&cred_file, "{\"token\":\"secret\"}\n").unwrap();
+        std::fs::create_dir_all(h.ws.join(".git/hooks")).unwrap();
+        std::fs::write(h.ws.join("README.md"), "# demo\n").unwrap();
+        std::fs::write(h.ws.join("@notes.txt"), "safe note\n").unwrap();
+        std::os::unix::fs::symlink(&cred_file, h.ws.join("@credential-link")).unwrap();
+        std::os::unix::fs::symlink(h.ws.join(".git/hooks"), h.ws.join("@hook-link")).unwrap();
+
+        let blocked = [
+            "cat @credential-link",
+            "head -n 5 @credential-link",
+            "cp README.md @hook-link",
+            "cp -t@hook-link README.md",
+            "cp --target-directory=@hook-link README.md",
+        ];
+        for cmd in blocked {
+            assert!(
+                !h.decide_silently(CLAUDE_TOOL, claude_tool("Bash", json!({ "command": cmd })))
+                    .await,
+                "yolo={yolo}: literal '@'-prefixed symlink escape must be denied in Bash: {cmd:?}"
+            );
+            assert!(
+                !h.decide_silently(
+                    ACP_PERMISSION,
+                    json!({
+                        "toolCall": {
+                            "title": "run_cmd",
+                            "kind": "execute",
+                            "rawInput": { "command": cmd }
+                        }
+                    }),
+                )
+                .await,
+                "yolo={yolo}: literal '@'-prefixed symlink escape must be denied in ACP: {cmd:?}"
+            );
+        }
+
+        let safe_req = claude_tool("Bash", json!({ "command": "cat @notes.txt" }));
+        if yolo {
+            assert!(
+                h.decide_silently(CLAUDE_TOOL, safe_req).await,
+                "benign workspace '@'-prefixed file must stay allowed under YOLO"
+            );
+        } else {
+            assert!(
+                h.decide_interactively(CLAUDE_TOOL, safe_req, true).await,
+                "benign workspace '@'-prefixed file must stay approvable interactively"
+            );
+        }
+    }
+}

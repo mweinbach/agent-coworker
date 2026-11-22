@@ -3874,10 +3874,9 @@ fn validate_native_shell_command_text(
                 if arg_outcome.treat_as_option_eq
                     && let Some((_, rhs)) = text.split_once('=')
                 {
-                    let rhs_clean = rhs.strip_prefix('@').unwrap_or(rhs);
                     for dir in &possible_dirs {
                         validate_shell_operand_candidate(
-                            rhs_clean,
+                            rhs,
                             *has_unquoted_glob,
                             *has_unquoted_brace,
                             dir,
@@ -3892,15 +3891,14 @@ fn validate_native_shell_command_text(
 
                 // Inspect attached short-flag value operands (e.g. `cp -t.git/hooks evil`).
                 if let Some(attached) = arg_outcome.attached_short_value.as_deref() {
-                    let attached_clean = attached.strip_prefix('@').unwrap_or(attached);
                     if arg_outcome.force_write_operand
-                        || looks_like_filesystem_path(attached_clean)
-                        || attached_clean.contains('/')
-                        || attached_clean.contains('\\')
+                        || looks_like_filesystem_path(attached)
+                        || attached.contains('/')
+                        || attached.contains('\\')
                     {
                         for dir in &possible_dirs {
                             validate_shell_operand_candidate(
-                                attached_clean,
+                                attached,
                                 *has_unquoted_glob,
                                 *has_unquoted_brace,
                                 dir,
@@ -3914,11 +3912,12 @@ fn validate_native_shell_command_text(
                     continue;
                 }
 
-                // Inspect both explicit path tokens and relative file/symlink/glob operands.
-                let candidate = text.strip_prefix('@').unwrap_or(text);
+                // Inspect both explicit path tokens and relative file/symlink/glob operands
+                // verbatim (none of the audited allowlisted utilities strip leading `@` from file
+                // operands, so `@credential-link` must be authorized literally).
                 for dir in &possible_dirs {
                     validate_shell_operand_candidate(
-                        candidate,
+                        text,
                         *has_unquoted_glob,
                         *has_unquoted_brace,
                         dir,

@@ -238,6 +238,19 @@ pub(crate) struct PendingPresentationRpc {
     pub path: String,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct PendingWorkspaceDefaultsApply {
+    pub params: SessionDefaultsApplyParams,
+    pub generation: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PendingTaskArtifactRpc {
+    pub workspace_id: String,
+    pub task_id: String,
+    pub artifact_id: String,
+}
+
 /// Workspace record shown in the sidebar and connected to a local `cowork-server`.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1824,6 +1837,9 @@ pub struct AppState {
     pub(crate) canvas_generation_seq: u64,
     pub(crate) pending_canvas_rpcs: HashMap<u64, PendingCanvasRpc>,
     pub(crate) pending_presentation_rpcs: HashMap<u64, PendingPresentationRpc>,
+    pub(crate) pending_defaults_apply_by_workspace: HashMap<String, PendingWorkspaceDefaultsApply>,
+    pub(crate) in_flight_defaults_apply_by_rpc_id: HashMap<u64, (String, u64)>,
+    pub(crate) pending_task_artifact_rpcs: HashMap<u64, PendingTaskArtifactRpc>,
     pub(crate) active_file_preview_request_id: Option<String>,
     pub(crate) pending_hydrate_threads_by_rpc_id: HashMap<u64, String>,
     pub(crate) pending_resume_threads_by_rpc_id: HashMap<u64, String>,
@@ -1969,6 +1985,9 @@ impl Default for AppState {
             canvas_generation_seq: 1,
             pending_canvas_rpcs: HashMap::new(),
             pending_presentation_rpcs: HashMap::new(),
+            pending_defaults_apply_by_workspace: HashMap::new(),
+            in_flight_defaults_apply_by_rpc_id: HashMap::new(),
+            pending_task_artifact_rpcs: HashMap::new(),
             active_file_preview_request_id: None,
             pending_hydrate_threads_by_rpc_id: HashMap::new(),
             pending_resume_threads_by_rpc_id: HashMap::new(),
@@ -2219,6 +2238,15 @@ impl AppState {
     }
 
     fn apply_session_config_event(&mut self, workspace_id: &str, evt: &Value) {
+        self.apply_session_config_event_inner(workspace_id, evt, false);
+    }
+
+    fn apply_session_config_event_inner(
+        &mut self,
+        workspace_id: &str,
+        evt: &Value,
+        respect_pending_defaults: bool,
+    ) {
         let Some(cfg) = evt.get("config") else {
             return;
         };
@@ -2227,7 +2255,12 @@ impl AppState {
             .entry(workspace_id.to_string())
             .or_default();
         rt.control_session_config = Some(cfg.clone());
-        if let Some(obj) = cfg.as_object()
+        let has_pending_defaults = respect_pending_defaults
+            && self
+                .pending_defaults_apply_by_workspace
+                .contains_key(workspace_id);
+        if !has_pending_defaults
+            && let Some(obj) = cfg.as_object()
             && let Some(ws) = self.workspaces.iter_mut().find(|w| w.id == workspace_id)
         {
             apply_defaults_obj_to_workspace(ws, obj, true);
@@ -6128,10 +6161,10 @@ impl AppState {
         }
     }
 
-    fn send_task_ws(&mut self, workspace_id: &str, method: &str, mut params: Value) {
+    fn send_task_ws(&mut self, workspace_id: &str, method: &str, mut params: Value) -> Option<u64> {
         let cwd = self.workspace_path(workspace_id);
         inject_cwd(&mut params, cwd);
-        let _ = self.send_ws_request(workspace_id, method, params, false);
+        Some(self.send_ws_request(workspace_id, method, params, false))
     }
 
     fn reduce_task(&mut self, action: TaskAction) {
@@ -6252,11 +6285,20 @@ impl AppState {
                 task_id,
                 artifact_id,
             } => {
-                self.send_task_ws(
+                if let Some(req_id) = self.send_task_ws(
                     &workspace_id,
                     "task/artifact/read",
                     json!({ "taskId": task_id, "artifactId": artifact_id }),
-                );
+                ) {
+                    self.pending_task_artifact_rpcs.insert(
+                        req_id,
+                        PendingTaskArtifactRpc {
+                            workspace_id,
+                            task_id,
+                            artifact_id,
+                        },
+                    );
+                }
             }
             TaskAction::AcceptArtifactVersion {
                 workspace_id,
@@ -6272,11 +6314,20 @@ impl AppState {
                 if let Some(v) = version_id.filter(|s| !s.trim().is_empty()) {
                     params.insert("versionId".to_string(), json!(v));
                 }
-                self.send_task_ws(
+                if let Some(req_id) = self.send_task_ws(
                     &workspace_id,
                     "task/artifact/version/accept",
                     Value::Object(params),
-                );
+                ) {
+                    self.pending_task_artifact_rpcs.insert(
+                        req_id,
+                        PendingTaskArtifactRpc {
+                            workspace_id,
+                            task_id,
+                            artifact_id,
+                        },
+                    );
+                }
             }
             TaskAction::RestoreArtifactVersion {
                 workspace_id,
@@ -6294,11 +6345,20 @@ impl AppState {
                 if let Some(s) = change_summary.filter(|s| !s.trim().is_empty()) {
                     params.insert("changeSummary".to_string(), json!(s));
                 }
-                self.send_task_ws(
+                if let Some(req_id) = self.send_task_ws(
                     &workspace_id,
                     "task/artifact/version/restore",
                     Value::Object(params),
-                );
+                ) {
+                    self.pending_task_artifact_rpcs.insert(
+                        req_id,
+                        PendingTaskArtifactRpc {
+                            workspace_id,
+                            task_id,
+                            artifact_id,
+                        },
+                    );
+                }
             }
             TaskAction::CreateTaskThread {
                 workspace_id,
@@ -8451,13 +8511,22 @@ impl AppState {
                 }
 
                 self.persist_state();
+                let restarting_ids: HashSet<String> = restarts_for_yolo
+                    .iter()
+                    .map(|(ws_id, _, _)| ws_id.clone())
+                    .collect();
                 for (target_ws_id, params) in rpcs_to_send {
-                    let _ = self.send_ws_typed(
-                        &target_ws_id,
-                        "cowork/session/defaults/apply",
-                        &params,
-                        false,
-                    );
+                    self.enqueue_pending_workspace_defaults(&target_ws_id, params);
+                    if restarting_ids.contains(&target_ws_id) {
+                        // The yolo restart below will reconnect this workspace and flush the
+                        // merged defaults once `apply_ws_initialized` runs.
+                        continue;
+                    }
+                    if self.is_workspace_ws_connected(&target_ws_id) {
+                        self.flush_pending_workspace_defaults(&target_ws_id, false);
+                    } else {
+                        self.ensure_workspace_server_started(&target_ws_id);
+                    }
                 }
                 if !restarts_for_yolo.is_empty() {
                     for (ws_id, path, yolo) in restarts_for_yolo {
@@ -9731,6 +9800,10 @@ impl AppState {
                 rt.hydrating = false;
             }
         }
+        self.in_flight_defaults_apply_by_rpc_id
+            .retain(|_, (ws_id, _)| ws_id != workspace_id);
+        self.pending_task_artifact_rpcs
+            .retain(|_, pending| pending.workspace_id != workspace_id);
         let rt = self
             .workspace_runtime_by_id
             .entry(workspace_id.to_string())
@@ -9741,6 +9814,7 @@ impl AppState {
         rt.capabilities = serde_json::to_value(result.capabilities).ok();
 
         let cwd = self.workspace_path(workspace_id);
+        self.flush_pending_workspace_defaults(workspace_id, true);
         self.flush_pending_expired_archived_deletes(workspace_id);
         let list_params = ThreadListParams {
             cwd: cwd.clone(),
@@ -11147,7 +11221,7 @@ impl AppState {
                 self.apply_mcp_auth_result_event(workspace_id, evt);
             }
             "session_config" => {
-                self.apply_session_config_event(workspace_id, evt);
+                self.apply_session_config_event_inner(workspace_id, evt, true);
             }
             "workspace_backups" => {
                 if let Some(arr) = evt
@@ -11169,7 +11243,7 @@ impl AppState {
                 }
             }
             "session_info" | "session_settings" | "config_updated" => {
-                self.apply_session_config_event(workspace_id, evt);
+                self.apply_session_config_event_inner(workspace_id, evt, true);
                 if let Some(id) = tid {
                     let provider = evt.get("provider").and_then(Value::as_str);
                     let model = evt.get("model").and_then(Value::as_str);
@@ -11437,12 +11511,33 @@ impl AppState {
                     self.libreoffice_status = Some(payload);
                 }
             }
-            "cowork/session/defaults/apply" | "cowork/session/config/set" => {
+            "cowork/session/defaults/apply" => {
+                let target = payload.get("event").unwrap_or(&payload);
+                if let Some((ws_id, ack_gen)) =
+                    self.in_flight_defaults_apply_by_rpc_id.remove(&request_id)
+                {
+                    let has_newer = self
+                        .pending_defaults_apply_by_workspace
+                        .get(&ws_id)
+                        .is_some_and(|pending| pending.generation > ack_gen);
+                    if has_newer {
+                        if self.is_workspace_ws_connected(&ws_id) {
+                            self.flush_pending_workspace_defaults(&ws_id, false);
+                        } else {
+                            self.ensure_workspace_server_started(&ws_id);
+                        }
+                    } else {
+                        self.pending_defaults_apply_by_workspace.remove(&ws_id);
+                        self.apply_session_config_event(workspace_id, target);
+                    }
+                } else {
+                    self.apply_session_config_event(workspace_id, target);
+                }
+            }
+            "cowork/session/config/set" => {
                 let target = payload.get("event").unwrap_or(&payload);
                 self.apply_session_config_event(workspace_id, target);
-                if method == "cowork/session/config/set"
-                    && let Some(tid) = self.pending_draft_config_by_rpc_id.remove(&request_id)
-                {
+                if let Some(tid) = self.pending_draft_config_by_rpc_id.remove(&request_id) {
                     self.flush_next_pending_message(workspace_id, &tid);
                 }
             }
@@ -11739,11 +11834,20 @@ impl AppState {
             "task/artifact/read"
             | "task/artifact/version/accept"
             | "task/artifact/version/restore" => {
+                let pending = self.pending_task_artifact_rpcs.remove(&request_id);
                 let detail = payload.get("detail").cloned().unwrap_or(payload.clone());
                 let artifact_id = detail
                     .get("artifact")
                     .and_then(|a| a.get("id"))
                     .or_else(|| detail.get("id").or_else(|| detail.get("artifactId")))
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+                    .or_else(|| pending.as_ref().map(|p| p.artifact_id.clone()));
+                let response_task_id = detail
+                    .get("artifact")
+                    .and_then(|a| a.get("taskId"))
+                    .or_else(|| detail.get("taskId"))
+                    .or_else(|| payload.get("task").and_then(|t| t.get("id")))
                     .and_then(Value::as_str)
                     .map(str::to_string);
                 if let Some(task_val) = payload.get("task") {
@@ -11754,11 +11858,35 @@ impl AppState {
                     );
                 }
                 if let Some(active) = self.active_task.as_mut() {
-                    if let Some(aid) = artifact_id {
-                        reconcile_artifact_detail_into_list(&mut active.artifacts, &aid, &detail);
-                        active.artifact_details_by_id.insert(aid, detail.clone());
+                    let nav_matches = self
+                        .nav
+                        .current()
+                        .active_task_id
+                        .as_deref()
+                        .is_none_or(|nav_tid| nav_tid == active.summary.id);
+                    let ws_matches = active.summary.workspace_id == workspace_id
+                        && pending
+                            .as_ref()
+                            .is_none_or(|p| p.workspace_id == active.summary.workspace_id);
+                    let has_owner_identity = response_task_id.is_some() || pending.is_some();
+                    let task_matches = has_owner_identity
+                        && response_task_id
+                            .as_deref()
+                            .is_none_or(|tid| active.summary.id == tid)
+                        && pending
+                            .as_ref()
+                            .is_none_or(|p| active.summary.id == p.task_id);
+                    if nav_matches && ws_matches && task_matches {
+                        if let Some(aid) = artifact_id {
+                            reconcile_artifact_detail_into_list(
+                                &mut active.artifacts,
+                                &aid,
+                                &detail,
+                            );
+                            active.artifact_details_by_id.insert(aid, detail.clone());
+                        }
+                        active.active_artifact_detail = Some(detail);
                     }
-                    active.active_artifact_detail = Some(detail);
                 }
             }
             "cowork/workspace/document/open"
@@ -11827,6 +11955,35 @@ impl AppState {
             && let Some(tid) = self.pending_draft_config_by_rpc_id.remove(&request_id)
         {
             self.flush_next_pending_message(workspace_id, &tid);
+        }
+        if method == "cowork/session/defaults/apply"
+            && let Some((ws_id, failed_gen)) =
+                self.in_flight_defaults_apply_by_rpc_id.remove(&request_id)
+        {
+            let lower_msg = err.message.to_ascii_lowercase();
+            let transient_disconnect = !self.is_workspace_ws_connected(&ws_id)
+                || lower_msg.contains("not connected")
+                || lower_msg.contains("disconnected")
+                || lower_msg.contains("closed");
+            if transient_disconnect {
+                self.ensure_workspace_server_started(&ws_id);
+                return;
+            }
+            let has_newer = self
+                .pending_defaults_apply_by_workspace
+                .get(&ws_id)
+                .is_some_and(|pending| pending.generation > failed_gen);
+            if has_newer {
+                self.flush_pending_workspace_defaults(&ws_id, false);
+            } else {
+                self.pending_defaults_apply_by_workspace.remove(&ws_id);
+            }
+        }
+        if matches!(
+            method,
+            "task/artifact/read" | "task/artifact/version/accept" | "task/artifact/version/restore"
+        ) {
+            self.pending_task_artifact_rpcs.remove(&request_id);
         }
         if method == "thread/resume" {
             self.pending_resume_threads_by_rpc_id.remove(&request_id);
@@ -13930,6 +14087,69 @@ impl AppState {
         }
     }
 
+    fn enqueue_pending_workspace_defaults(
+        &mut self,
+        workspace_id: &str,
+        params: SessionDefaultsApplyParams,
+    ) {
+        if let Some(existing) = self
+            .pending_defaults_apply_by_workspace
+            .get_mut(workspace_id)
+        {
+            merge_session_defaults_apply_params(&mut existing.params, params);
+            existing.generation = existing.generation.saturating_add(1);
+        } else {
+            self.pending_defaults_apply_by_workspace.insert(
+                workspace_id.to_string(),
+                PendingWorkspaceDefaultsApply {
+                    params,
+                    generation: 1,
+                },
+            );
+        }
+    }
+
+    fn flush_pending_workspace_defaults(&mut self, workspace_id: &str, connection_ready: bool) {
+        if !connection_ready && !self.is_workspace_ws_connected(workspace_id) {
+            return;
+        }
+        let Some(pending) = self
+            .pending_defaults_apply_by_workspace
+            .get(workspace_id)
+            .cloned()
+        else {
+            return;
+        };
+        let already_in_flight =
+            self.in_flight_defaults_apply_by_rpc_id
+                .values()
+                .any(|(ws_id, in_flight_gen)| {
+                    ws_id == workspace_id && *in_flight_gen == pending.generation
+                });
+        if already_in_flight {
+            return;
+        }
+        let mut params = pending.params;
+        if params.cwd.is_none() {
+            params.cwd = self.workspace_path(workspace_id);
+        }
+        // Drop any stale thread_id that is no longer an active non-draft, non-task thread in this workspace.
+        params.thread_id = params.thread_id.filter(|tid| {
+            self.threads.iter().find(|t| t.id == *tid).is_some_and(|t| {
+                t.workspace_id == workspace_id && !t.draft && t.source_task_id.is_none()
+            })
+        });
+        if let Some(req_id) = self.send_ws_typed(
+            workspace_id,
+            "cowork/session/defaults/apply",
+            &params,
+            false,
+        ) {
+            self.in_flight_defaults_apply_by_rpc_id
+                .insert(req_id, (workspace_id.to_string(), pending.generation));
+        }
+    }
+
     fn flush_pending_expired_archived_deletes(&mut self, workspace_id: &str) {
         let mut to_delete: Vec<String> = Vec::new();
         self.pending_expired_archived_deletes
@@ -14287,25 +14507,93 @@ impl AppState {
                 });
             }
         }
-        let viewing_this_task = self.nav.current().active_task_id.as_deref()
-            == Some(task.summary.id.as_str())
-            || self
+        let viewing_this_task = match self.nav.current().active_task_id.as_deref() {
+            Some(nav_tid) => nav_tid == task.summary.id,
+            None => self
                 .active_task
                 .as_ref()
-                .is_some_and(|t| t.summary.id == task.summary.id);
+                .is_some_and(|t| t.summary.id == task.summary.id),
+        };
         let task_id_for_refresh = task.summary.id.clone();
         if viewing_this_task {
             self.active_task = Some(task);
             for artifact_id in stale_artifact_ids_to_refresh {
-                self.send_task_ws(
+                if let Some(req_id) = self.send_task_ws(
                     workspace_id,
                     "task/artifact/read",
                     json!({
                         "taskId": task_id_for_refresh,
                         "artifactId": artifact_id,
                     }),
-                );
+                ) {
+                    self.pending_task_artifact_rpcs.insert(
+                        req_id,
+                        PendingTaskArtifactRpc {
+                            workspace_id: workspace_id.to_string(),
+                            task_id: task_id_for_refresh.clone(),
+                            artifact_id,
+                        },
+                    );
+                }
             }
+        }
+    }
+}
+
+fn merge_session_defaults_apply_params(
+    dst: &mut SessionDefaultsApplyParams,
+    next: SessionDefaultsApplyParams,
+) {
+    if next.cwd.is_some() {
+        dst.cwd = next.cwd;
+    }
+    if next.thread_id.is_some() {
+        dst.thread_id = next.thread_id;
+    }
+    if next.provider.is_some() && next.model.is_some() {
+        dst.provider = next.provider;
+        dst.model = next.model;
+    }
+    if next.enable_mcp.is_some() {
+        dst.enable_mcp = next.enable_mcp;
+    }
+    if let Some(next_cfg) = next.config {
+        let dst_cfg = dst.config.get_or_insert_with(Map::new);
+        for (k, v) in next_cfg {
+            match k.as_str() {
+                "clearToolOutputOverflowChars" => {
+                    dst_cfg.remove("toolOutputOverflowChars");
+                }
+                "toolOutputOverflowChars" => {
+                    dst_cfg.remove("clearToolOutputOverflowChars");
+                }
+                "clearToolCalling" => {
+                    dst_cfg.remove("toolCalling");
+                }
+                "toolCalling" => {
+                    dst_cfg.remove("clearToolCalling");
+                }
+                "clearMemoryGenerationModel" => {
+                    dst_cfg.remove("memoryGenerationModel");
+                }
+                "memoryGenerationModel" => {
+                    dst_cfg.remove("clearMemoryGenerationModel");
+                }
+                "clearSkillImprovementModel" => {
+                    dst_cfg.remove("skillImprovementModel");
+                }
+                "skillImprovementModel" => {
+                    dst_cfg.remove("clearSkillImprovementModel");
+                }
+                "clearUserProfile" => {
+                    dst_cfg.remove("userProfile");
+                }
+                "userProfile" => {
+                    dst_cfg.remove("clearUserProfile");
+                }
+                _ => {}
+            }
+            dst_cfg.insert(k, v);
         }
     }
 }
@@ -17851,13 +18139,25 @@ mod tests {
             task_id: "task-1".to_string(),
             artifact_id: "art-1".to_string(),
         }));
+        let read_req_id = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .rev()
+            .find_map(|c| match c {
+                WsCommand::SendRequest {
+                    request_id, method, ..
+                } if method == "task/artifact/read" => Some(*request_id),
+                _ => None,
+            })
+            .expect("expected task/artifact/read request");
         state.apply_store_event(StoreEvent::WsResponse {
             workspace_id: "ws-1".to_string(),
-            request_id: 12,
+            request_id: read_req_id,
             method: "task/artifact/read".to_string(),
             result: Ok(json!({
                 "detail": {
-                    "artifact": { "id": "art-1", "title": "Plan.md" },
+                    "artifact": { "id": "art-1", "taskId": "task-1", "title": "Plan.md" },
                     "latestVersionId": "v-2"
                 }
             })),
@@ -18216,6 +18516,9 @@ mod tests {
         state
             .workspaces
             .push(WorkspaceRecord::new("ws-1", "Demo", "/tmp/demo", 1));
+        state
+            .workspace_socket_by_id
+            .insert("ws-1".to_string(), WsConnectionState::Connected);
         state.active_workspace_id = Some("ws-1".to_string());
 
         state.dispatch(Action::Settings(SettingsAction::UpdateWorkspaceDefaults {
@@ -19363,6 +19666,9 @@ mod tests {
         state
             .workspaces
             .push(WorkspaceRecord::new("ws-1", "Demo", "/tmp/demo", 1));
+        state
+            .workspace_socket_by_id
+            .insert("ws-1".to_string(), WsConnectionState::Connected);
 
         // 1. UpdateWorkspaceDefaults syncs child model routing fields + remaps server keys.
         state.dispatch(Action::Settings(SettingsAction::UpdateWorkspaceDefaults {
@@ -19375,16 +19681,19 @@ mod tests {
                 "defaultBackupsEnabled": false
             }),
         }));
-        let params = state
+        let (defaults_rpc_id, params) = state
             .services
             .emitted_ws_commands
             .iter()
             .rev()
             .find_map(|c| match c {
-                WsCommand::SendRequest { method, params, .. }
-                    if method == "cowork/session/defaults/apply" =>
-                {
-                    Some(params.clone())
+                WsCommand::SendRequest {
+                    request_id,
+                    method,
+                    params,
+                    ..
+                } if method == "cowork/session/defaults/apply" => {
+                    Some((*request_id, params.clone()))
                 }
                 _ => None,
             })
@@ -19426,6 +19735,25 @@ mod tests {
             ]
         );
         assert!(!ws.default_backups_enabled);
+
+        // Acknowledge the initial defaults mutation before testing a subsequent server push.
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-1".to_string(),
+            request_id: defaults_rpc_id,
+            method: "cowork/session/defaults/apply".to_string(),
+            result: Ok(json!({
+                "event": {
+                    "type": "session_config",
+                    "config": {
+                        "childModelRoutingMode": "custom",
+                        "preferredChildModel": "claude-haiku-4-5",
+                        "preferredChildModelRef": "anthropic:claude-haiku-4-5",
+                        "allowedChildModelRefs": ["anthropic:claude-haiku-4-5", "openai:gpt-4.1-mini"],
+                        "backupsEnabled": false
+                    }
+                }
+            })),
+        });
 
         // Incoming session_config syncs updated defaults back onto WorkspaceRecord.
         state.apply_store_event(StoreEvent::WsNotification {
@@ -22255,6 +22583,9 @@ mod tests {
         ws.default_provider = Some("openai".to_string());
         ws.default_model = Some("gpt-5.2".to_string());
         state.workspaces.push(ws);
+        state
+            .workspace_socket_by_id
+            .insert("ws-1".to_string(), WsConnectionState::Connected);
         state.active_workspace_id = Some("ws-1".to_string());
 
         state.dispatch(Action::Settings(SettingsAction::UpdateWorkspaceDefaults {
@@ -22372,6 +22703,11 @@ mod tests {
         let mut ws_chat_2 = WorkspaceRecord::new("ws-chat-2", "Chats 2", "/tmp/chats/2", 4);
         ws_chat_2.one_off_chat = true;
         state.workspaces = vec![ws_a, ws_b, ws_chat_1, ws_chat_2];
+        for id in ["ws-a", "ws-b", "ws-chat-1", "ws-chat-2"] {
+            state
+                .workspace_socket_by_id
+                .insert(id.to_string(), WsConnectionState::Connected);
+        }
 
         // Shared settings (default) must propagate to all workspaces and emit RPCs for each.
         state.dispatch(Action::Settings(SettingsAction::UpdateWorkspaceDefaults {
@@ -24293,6 +24629,9 @@ mod tests {
             .workspaces
             .push(WorkspaceRecord::new("ws-1", "Demo", "/tmp/demo", 1));
         state.active_workspace_id = Some("ws-1".to_string());
+        state
+            .workspace_socket_by_id
+            .insert("ws-1".to_string(), WsConnectionState::Connected);
 
         // Set explicit override first.
         state.dispatch(Action::Settings(SettingsAction::UpdateWorkspaceDefaults {
@@ -25028,6 +25367,12 @@ mod tests {
 
         state.workspaces.push(ws_a);
         state.workspaces.push(ws_b);
+        state
+            .workspace_socket_by_id
+            .insert("ws-a".to_string(), WsConnectionState::Connected);
+        state
+            .workspace_socket_by_id
+            .insert("ws-b".to_string(), WsConnectionState::Connected);
         state.active_workspace_id = Some("ws-a".to_string());
 
         sync_workspace_defaults_everywhere(&mut state, "ws-a");
@@ -26295,28 +26640,35 @@ mod tests {
                 .artifact_details_by_id
                 .is_empty()
         );
-        assert!(
-            state
-                .services
-                .emitted_ws_commands
-                .iter()
-                .any(|cmd| matches!(
-                    cmd,
-                    WsCommand::SendRequest { method, params, .. }
-                        if method == "task/artifact/read"
-                            && params["taskId"] == "task-1"
-                            && params["artifactId"] == "art-1"
-                ))
-        );
+        let refresh_req_id = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .rev()
+            .find_map(|cmd| match cmd {
+                WsCommand::SendRequest {
+                    request_id,
+                    method,
+                    params,
+                    ..
+                } if method == "task/artifact/read"
+                    && params["taskId"] == "task-1"
+                    && params["artifactId"] == "art-1" =>
+                {
+                    Some(*request_id)
+                }
+                _ => None,
+            })
+            .expect("expected task/artifact/read refresh");
 
         // Applying the refreshed detail exposes the new unaccepted `ver-3`.
         state.apply_store_event(StoreEvent::WsResponse {
             workspace_id: "ws-1".to_string(),
-            request_id: 22,
+            request_id: refresh_req_id,
             method: "task/artifact/read".to_string(),
             result: Ok(json!({
                 "detail": {
-                    "artifact": { "id": "art-1", "title": "Report", "path": "output/report.md" },
+                    "artifact": { "id": "art-1", "taskId": "task-1", "title": "Report", "path": "output/report.md" },
                     "latestVersionId": "ver-3",
                     "acceptedVersionId": "ver-2",
                     "versions": [
@@ -27254,5 +27606,268 @@ mod tests {
                 ws.defaults
             );
         }
+    }
+
+    #[test]
+    fn update_workspace_defaults_starts_disconnected_workspace_and_flushes_on_ws_initialized() {
+        let mut state = AppState::default();
+        state.desktop_settings.per_workspace_settings = false;
+        let ws_a = WorkspaceRecord::new("ws-a", "Project A", "/tmp/a", 1);
+        let ws_b = WorkspaceRecord::new("ws-b", "Project B", "/tmp/b", 2);
+        state.workspaces = vec![ws_a, ws_b];
+        state
+            .workspace_socket_by_id
+            .insert("ws-a".to_string(), WsConnectionState::Connected);
+        state.active_workspace_id = Some("ws-a".to_string());
+
+        // Toggle two settings while project B has not yet been started/connected.
+        state.dispatch(Action::Settings(SettingsAction::UpdateWorkspaceDefaults {
+            workspace_id: "ws-a".to_string(),
+            defaults: json!({
+                "defaultAdvancedMemory": true,
+                "defaultToolCalling": { "codeMode": true, "deferredToolSearch": true, "strategy": "harness" }
+            }),
+        }));
+        state.dispatch(Action::Settings(SettingsAction::UpdateWorkspaceDefaults {
+            workspace_id: "ws-a".to_string(),
+            defaults: json!({
+                "defaultChildModelRoutingMode": "same-provider",
+                "defaultEnableMcp": false
+            }),
+        }));
+
+        // Project A (connected) received RPCs immediately; Project B (disconnected) must NOT
+        // have sent a doomed SendRequest yet, and must have requested StartWorkspaceServer.
+        assert!(state.services.emitted_ws_commands.iter().any(|c| matches!(
+            c,
+            WsCommand::SendRequest { workspace_id, method, .. }
+                if workspace_id == "ws-a" && method == "cowork/session/defaults/apply"
+        )));
+        assert!(!state.services.emitted_ws_commands.iter().any(|c| matches!(
+            c,
+            WsCommand::SendRequest { workspace_id, method, .. }
+                if workspace_id == "ws-b" && method == "cowork/session/defaults/apply"
+        )));
+        assert!(state.services.emitted_native_commands.iter().any(|c| matches!(
+            c,
+            NativeCommand::StartWorkspaceServer { workspace_id, .. } if workspace_id == "ws-b"
+        )));
+        assert!(
+            state
+                .pending_defaults_apply_by_workspace
+                .contains_key("ws-b")
+        );
+
+        // An unsolicited startup `session_config` push with B's stale pre-sync defaults must
+        // not clobber B's queued desktop defaults before the pending apply is acknowledged.
+        state.apply_store_event(StoreEvent::WsNotification {
+            workspace_id: "ws-b".to_string(),
+            method: "cowork/event".to_string(),
+            params: json!({
+                "event": {
+                    "type": "session_config",
+                    "config": {
+                        "advancedMemory": false,
+                        "enableMcp": true,
+                        "childModelRoutingMode": "inherit"
+                    }
+                }
+            }),
+        });
+        let b_before_flush = state.workspaces.iter().find(|w| w.id == "ws-b").unwrap();
+        assert_eq!(
+            b_before_flush.defaults["defaultAdvancedMemory"],
+            json!(true)
+        );
+        assert!(!b_before_flush.default_enable_mcp);
+        assert_eq!(
+            b_before_flush.default_child_model_routing_mode.as_deref(),
+            Some("same-provider")
+        );
+
+        // Once Project B's WebSocket initializes, the single merged defaults mutation flushes.
+        state.services.emitted_ws_commands.clear();
+        state.apply_store_event(StoreEvent::WsStateChanged {
+            workspace_id: "ws-b".to_string(),
+            state: WsConnectionState::Connected,
+        });
+        let init_res: InitializeResult = serde_json::from_value(json!({
+            "protocolVersion": "1",
+            "serverInfo": { "name": "cowork-server" },
+            "capabilities": { "experimentalApi": true },
+            "transport": { "type": "websocket", "protocolMode": "jsonrpc-lite" }
+        }))
+        .unwrap();
+        state.apply_store_event(StoreEvent::WsInitialized {
+            workspace_id: "ws-b".to_string(),
+            result: Box::new(init_res),
+        });
+        let (rpc_id, params) = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .find_map(|c| match c {
+                WsCommand::SendRequest {
+                    workspace_id,
+                    request_id,
+                    method,
+                    params,
+                    ..
+                } if workspace_id == "ws-b" && method == "cowork/session/defaults/apply" => {
+                    Some((*request_id, params.clone()))
+                }
+                _ => None,
+            })
+            .expect("expected deferred cowork/session/defaults/apply on ws-b init");
+        assert_eq!(params["enableMcp"], json!(false));
+        assert_eq!(params["config"]["advancedMemory"], json!(true));
+        assert_eq!(
+            params["config"]["childModelRoutingMode"],
+            json!("same-provider")
+        );
+        assert_eq!(params["config"]["toolCalling"]["codeMode"], json!(true));
+
+        // Acknowledging the flushed RPC clears the pending entry and reconciles B's config.
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-b".to_string(),
+            request_id: rpc_id,
+            method: "cowork/session/defaults/apply".to_string(),
+            result: Ok(json!({
+                "event": {
+                    "type": "session_config",
+                    "config": {
+                        "advancedMemory": true,
+                        "enableMcp": false,
+                        "childModelRoutingMode": "same-provider"
+                    }
+                }
+            })),
+        });
+        assert!(
+            !state
+                .pending_defaults_apply_by_workspace
+                .contains_key("ws-b")
+        );
+        assert!(
+            !state
+                .in_flight_defaults_apply_by_rpc_id
+                .contains_key(&rpc_id)
+        );
+    }
+
+    #[test]
+    fn task_artifact_response_ignores_stale_or_mismatched_task_details() {
+        let mut state = AppState::default();
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-1", "Repo", "/tmp/repo", 1));
+        state.active_workspace_id = Some("ws-1".to_string());
+
+        // Open task A and request Review on artifact A.
+        state.dispatch(Action::Navigate(NavAction::OpenTask("task-a".to_string())));
+        state.apply_task_record_update(
+            "ws-1",
+            &json!({
+                "id": "task-a",
+                "title": "Task A",
+                "status": "in_progress",
+                "revision": 1,
+                "artifacts": [{ "id": "art-a", "title": "Spec A", "path": "a.md", "kind": "document" }]
+            }),
+        );
+        state.dispatch(Action::Task(TaskAction::ReadArtifact {
+            workspace_id: "ws-1".to_string(),
+            task_id: "task-a".to_string(),
+            artifact_id: "art-a".to_string(),
+        }));
+        let req_a = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .rev()
+            .find_map(|c| match c {
+                WsCommand::SendRequest {
+                    request_id, method, ..
+                } if method == "task/artifact/read" => Some(*request_id),
+                _ => None,
+            })
+            .expect("expected task/artifact/read for task-a");
+
+        // Before task A's artifact detail arrives, user opens task B.
+        state.dispatch(Action::Navigate(NavAction::OpenTask("task-b".to_string())));
+        state.apply_task_record_update(
+            "ws-1",
+            &json!({
+                "id": "task-b",
+                "title": "Task B",
+                "status": "in_progress",
+                "revision": 2,
+                "artifacts": [{ "id": "art-b", "title": "Spec B", "path": "b.md", "kind": "document" }]
+            }),
+        );
+
+        // Task A's late response arrives (even without taskId or with task-a taskId) and MUST NOT
+        // pollute task B's active_artifact_detail or artifact_details_by_id.
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-1".to_string(),
+            request_id: req_a,
+            method: "task/artifact/read".to_string(),
+            result: Ok(json!({
+                "detail": {
+                    "artifact": { "id": "art-a", "taskId": "task-a", "title": "Spec A" },
+                    "latestVersionId": "ver-a1",
+                    "versions": [{ "id": "ver-a1", "reviewStatus": "pending" }]
+                }
+            })),
+        });
+        let active_b = state.active_task.as_ref().expect("task-b active");
+        assert_eq!(active_b.summary.id, "task-b");
+        assert!(
+            active_b.active_artifact_detail.is_none(),
+            "stale task-a artifact detail must not overwrite task-b active_artifact_detail"
+        );
+        assert!(
+            !active_b.artifact_details_by_id.contains_key("art-a"),
+            "stale task-a artifact detail must not be inserted into task-b cache"
+        );
+
+        // Requesting and receiving task B's own artifact detail applies cleanly.
+        state.dispatch(Action::Task(TaskAction::ReadArtifact {
+            workspace_id: "ws-1".to_string(),
+            task_id: "task-b".to_string(),
+            artifact_id: "art-b".to_string(),
+        }));
+        let req_b = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .rev()
+            .find_map(|c| match c {
+                WsCommand::SendRequest {
+                    request_id, method, ..
+                } if method == "task/artifact/read" => Some(*request_id),
+                _ => None,
+            })
+            .expect("expected task/artifact/read for task-b");
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-1".to_string(),
+            request_id: req_b,
+            method: "task/artifact/read".to_string(),
+            result: Ok(json!({
+                "detail": {
+                    "artifact": { "id": "art-b", "taskId": "task-b", "title": "Spec B" },
+                    "latestVersionId": "ver-b1"
+                }
+            })),
+        });
+        let active_b = state.active_task.as_ref().unwrap();
+        assert_eq!(
+            active_b
+                .active_artifact_detail
+                .as_ref()
+                .and_then(|d| d["artifact"]["id"].as_str()),
+            Some("art-b")
+        );
+        assert!(active_b.artifact_details_by_id.contains_key("art-b"));
     }
 }

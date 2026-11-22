@@ -922,13 +922,21 @@ impl ProviderTransport for AntigravityAcpTransport {
                     })?
             };
 
-            let _ = client
-                .request(
-                    "session/set_model",
-                    json!({ "sessionId": session_id, "modelId": request.model_id }),
-                    Some(ACP_RPC_TIMEOUT),
-                )
-                .await;
+            if !request.model_id.trim().is_empty() {
+                client
+                    .request(
+                        "session/set_model",
+                        json!({ "sessionId": session_id, "modelId": request.model_id }),
+                        Some(ACP_RPC_TIMEOUT),
+                    )
+                    .await
+                    .map_err(|err| {
+                        ProviderTransportError::protocol(format!(
+                            "Antigravity ACP failed to select model '{}': {}",
+                            request.model_id, err.message
+                        ))
+                    })?;
+            }
 
             if let Some(effort) = antigravity_effort(&request.provider_options) {
                 let _ = client

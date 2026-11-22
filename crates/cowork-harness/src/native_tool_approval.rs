@@ -596,6 +596,79 @@ fn validate_glob_or_search_pattern(raw: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Rejects native recursive/directory search roots that can traverse into protected credential
+/// directories or private Cowork state without Cowork's per-file `create_read_path_checker`.
+fn assert_search_root_has_no_protected_descendant(
+    canonical_root: &Path,
+    ctx: &ToolExecutionContext,
+) -> Result<(), String> {
+    let is_ancestor_or_eq = |ancestor: &Path, descendant: &Path| -> bool {
+        descendant == ancestor || descendant.starts_with(ancestor)
+    };
+
+    // Never allow native directory traversal rooted at Cowork home itself or an ancestor of it
+    // (only `cowork_home_read_roots` such as `skills` / `plugins` may be searched).
+    let cowork_home_canon = canonicalize_with_missing_tail(&ctx.cowork_home);
+    let in_allowed_cowork_subroot =
+        cowork_home_read_roots(&ctx.cowork_home)
+            .into_iter()
+            .any(|sub| {
+                let sub_canon = canonicalize_with_missing_tail(&sub);
+                canonical_root == sub_canon || canonical_root.starts_with(&sub_canon)
+            });
+    if !in_allowed_cowork_subroot
+        && (is_ancestor_or_eq(canonical_root, &cowork_home_canon)
+            || is_ancestor_or_eq(&cowork_home_canon, canonical_root))
+    {
+        return Err(format!(
+            "Native search at '{}' is blocked because it can traverse protected Cowork state.",
+            canonical_root.display()
+        ));
+    }
+
+    // Never allow native directory traversal rooted directly at `<workspace>/.cowork` or
+    // `<project>/.cowork` (parents of workspace/project MCP credential stores), even if
+    // `.cowork/auth` has not been created yet.
+    let mut cowork_meta_dirs = vec![ctx.working_directory.join(".cowork")];
+    if let Some(project_root) = ctx
+        .agent_config
+        .as_ref()
+        .and_then(|c| c.project_cowork_dir.parent())
+    {
+        cowork_meta_dirs.push(project_root.join(".cowork"));
+    }
+    for meta_dir in cowork_meta_dirs {
+        let meta_canon = canonicalize_with_missing_tail(&meta_dir);
+        if canonical_root == meta_canon {
+            return Err(format!(
+                "Native search at '{}' is blocked because it can traverse protected '.cowork/auth' credentials.",
+                canonical_root.display()
+            ));
+        }
+    }
+
+    // Reject any search root that contains an existing protected credential directory so
+    // unsandboxed recursive `Grep`/`Glob`/`LS` cannot traverse into `.cowork/auth`, `.ssh`, etc.
+    for cred_root in protected_credential_roots(ctx) {
+        let cred_lexical = normalize_lexical_path(&cred_root);
+        let cred_canon = canonicalize_with_missing_tail(&cred_root);
+        let exists = std::fs::symlink_metadata(&cred_lexical).is_ok()
+            || std::fs::symlink_metadata(&cred_canon).is_ok();
+        if exists
+            && (is_ancestor_or_eq(canonical_root, &cred_canon)
+                || is_ancestor_or_eq(canonical_root, &cred_lexical))
+        {
+            return Err(format!(
+                "Native search at '{}' is blocked because it contains protected credential directory '{}'; narrow the search path to a non-credential subdirectory.",
+                canonical_root.display(),
+                cred_root.display()
+            ));
+        }
+    }
+
+    Ok(())
+}
+
 fn validate_read_dir_or_search(
     parsed: &ParsedNativeRequest<'_>,
     ctx: &ToolExecutionContext,
@@ -623,11 +696,13 @@ fn validate_read_dir_or_search(
     let mut validated = Vec::new();
     if raw_paths.is_empty() {
         let canonical = assert_read_path_allowed(&base_dir, ctx).map_err(|e| e.to_string())?;
+        assert_search_root_has_no_protected_descendant(&canonical, ctx)?;
         validated.push(canonical.display().to_string());
     } else {
         for raw in &raw_paths {
             let candidate = resolve_native_tool_path(raw, &base_dir, &ctx.homedir)?;
             let canonical = assert_read_path_allowed(&candidate, ctx).map_err(|e| e.to_string())?;
+            assert_search_root_has_no_protected_descendant(&canonical, ctx)?;
             validated.push(canonical.display().to_string());
         }
     }

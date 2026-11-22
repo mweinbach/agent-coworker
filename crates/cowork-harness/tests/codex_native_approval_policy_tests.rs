@@ -1063,3 +1063,58 @@ for line in sys.stdin:
         "r_secret=deny;w_outside=deny;b_secret=deny;r_ok=allow"
     );
 }
+
+#[tokio::test]
+async fn claude_native_recursive_searches_block_protected_credential_ancestors() {
+    for yolo in [true, false] {
+        let h = Harness::new(Turn {
+            yolo,
+            ..Turn::default()
+        });
+        std::fs::write(h.ws.join("src/ok.rs"), "fn ok() {}\n").unwrap();
+        std::fs::create_dir_all(h.ws.join(".cowork/auth")).unwrap();
+        std::fs::write(
+            h.ws.join(".cowork/auth/mcp-credentials.json"),
+            r#"{"token":"secret-mcp-token"}"#,
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(h.ws.join(".cowork"), h.ws.join("cfg_link")).unwrap();
+        }
+
+        let mut blocked = vec![
+            claude_tool(
+                "Grep",
+                json!({ "path": h.path(".cowork"), "pattern": "token" }),
+            ),
+            claude_tool("Glob", json!({ "path": ".cowork", "pattern": "**/*" })),
+            claude_tool("LS", json!({ "path": h.path(".cowork") })),
+            claude_tool("Grep", json!({ "path": h.path(""), "pattern": "token" })),
+            claude_tool("Grep", json!({ "pattern": "token" })),
+            claude_tool("Glob", json!({ "pattern": "**/*.json" })),
+        ];
+        #[cfg(unix)]
+        {
+            blocked.push(claude_tool(
+                "Grep",
+                json!({ "path": h.path("cfg_link"), "pattern": "token" }),
+            ));
+        }
+
+        for params in blocked {
+            assert!(
+                !h.decide_silently(CLAUDE_TOOL, params.clone()).await,
+                "yolo={yolo}: recursive search over credential ancestor must be denied: {params}"
+            );
+        }
+
+        // Narrowing search to a non-credential subdirectory (`src`) still works.
+        let safe_grep = claude_tool("Grep", json!({ "path": h.path("src"), "pattern": "ok" }));
+        if yolo {
+            assert!(h.decide_silently(CLAUDE_TOOL, safe_grep).await);
+        } else {
+            assert!(h.decide_interactively(CLAUDE_TOOL, safe_grep, true).await);
+        }
+    }
+}

@@ -1165,3 +1165,83 @@ for line in sys.stdin:
         .unwrap();
     assert_eq!(full_text, "Checking files...Final answer.");
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn antigravity_acp_aborts_before_prompt_when_set_model_fails() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = TempDir::new().unwrap();
+    let prompt_marker = tmp.path().join("prompt-called.txt");
+    let script_path = tmp.path().join("mock-acp-bad-model.py");
+    let script = format!(
+        r#"#!/usr/bin/env python3
+import json, pathlib, sys
+
+marker = pathlib.Path({marker:?})
+
+def send(obj):
+    sys.stdout.write(json.dumps(obj) + "\n")
+    sys.stdout.flush()
+
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    msg = json.loads(line)
+    method = msg.get("method")
+    req_id = msg.get("id")
+    if method == "initialize":
+        send({{"jsonrpc": "2.0", "id": req_id, "result": {{"protocolVersion": 1}}}})
+    elif method == "session/new":
+        send({{"jsonrpc": "2.0", "id": req_id, "result": {{"sessionId": "acp-bad-model"}}}})
+    elif method == "session/set_model":
+        send({{"jsonrpc": "2.0", "id": req_id, "error": {{"code": -32602, "message": "Unknown modelId"}}}})
+    elif method == "session/prompt":
+        marker.write_text("prompt-sent")
+        send({{"jsonrpc": "2.0", "id": req_id, "result": {{"stopReason": "end_turn"}}}})
+        break
+"#,
+        marker = prompt_marker.to_string_lossy()
+    );
+    std::fs::write(&script_path, script).unwrap();
+    std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let mut env = HashMap::new();
+    env.insert("HOME".into(), tmp.path().to_string_lossy().into_owned());
+    env.insert("PATH".into(), std::env::var("PATH").unwrap_or_default());
+    let mut transport = AntigravityAcpTransport::with_env(env);
+    transport.command_override = Some((script_path.to_string_lossy().into_owned(), Vec::new()));
+
+    let mut provider_options = Map::new();
+    provider_options.insert("cwd".into(), json!(tmp.path().to_string_lossy()));
+
+    let req = ProviderStepRequest {
+        model_id: "nonexistent-model".to_owned(),
+        base_url: None,
+        api_key: Some("gem-key".to_owned()),
+        extra_headers: HashMap::new(),
+        system_prompt: String::new(),
+        messages: vec![user_msg("Hello")],
+        tools: Vec::new(),
+        authorized_tool_names: None,
+        provider_options,
+        continuation: None,
+        policy: RequestPolicy::default(),
+        turn_id: "turn-acp-bad-model".to_owned(),
+    };
+
+    let budget = StepBudget::unbounded(Some(CancellationToken::new()));
+    let err = transport
+        .stream_step(req, &budget, &mut |_| {})
+        .await
+        .expect_err("ACP turn must fail when session/set_model rejects the model");
+    assert!(
+        err.message.contains("nonexistent-model") && err.message.contains("Unknown modelId"),
+        "unexpected error: {err:?}"
+    );
+    assert!(
+        !prompt_marker.exists(),
+        "session/prompt must not be submitted after session/set_model fails"
+    );
+}

@@ -19,7 +19,6 @@ use cowork_tools::{
     ApprovalDecisionRequest, ToolExecutionContext, assert_read_path_allowed,
     assert_write_path_allowed, canonicalize_with_missing_tail, cowork_home_read_roots,
     matches_ts_approval_patterns, normalize_lexical_path, protected_credential_roots,
-    resolve_and_validate_url_target,
 };
 use serde_json::{Map, Value};
 use url::Url;
@@ -148,7 +147,7 @@ pub(crate) async fn validate_native_runtime_approval(
         NativeToolKind::ShellControl => {
             validate_shell_control(&parsed, ctx, read_only, scoped, network_allowed)
         }
-        NativeToolKind::WebFetch => validate_web_fetch(&parsed, ctx, network_allowed).await,
+        NativeToolKind::WebFetch => validate_web_fetch(&parsed, ctx, network_allowed),
         NativeToolKind::WebSearch => validate_web_search(&parsed, ctx, network_allowed),
         NativeToolKind::McpCall => {
             validate_mcp_call(&parsed, ctx, read_only, scoped, network_allowed)
@@ -219,7 +218,7 @@ fn parse_claude_request<'a>(
         }
     }
 
-    let kind = classify_native_tool_kind(&tool_name, None, input)?;
+    let kind = classify_native_tool_kind(&tool_name, None)?;
     Ok(ParsedNativeRequest {
         runtime: NativeRuntime::Claude,
         tool_name,
@@ -342,7 +341,7 @@ fn parse_acp_request<'a>(
     let top_level_command = extract_command_value(params.get("command"))
         .or_else(|| tool_call.and_then(|tc| extract_command_value(tc.get("command"))));
 
-    let kind = classify_native_tool_kind(&tool_name, acp_kind, input)?;
+    let kind = classify_native_tool_kind(&tool_name, acp_kind)?;
     Ok(ParsedNativeRequest {
         runtime: NativeRuntime::Acp,
         tool_name,
@@ -356,7 +355,6 @@ fn parse_acp_request<'a>(
 fn classify_native_tool_kind(
     tool_name: &str,
     acp_kind: Option<&str>,
-    input: &Map<String, Value>,
 ) -> Result<NativeToolKind, String> {
     let lower = tool_name.trim().to_ascii_lowercase();
     let kind_lower = acp_kind.map(|k| k.trim().to_ascii_lowercase());
@@ -421,16 +419,7 @@ fn classify_native_tool_kind(
         _ => match kind_lower.as_deref() {
             Some("read") => Ok(NativeToolKind::ReadFile),
             Some("search") => Ok(NativeToolKind::ReadDirOrSearch),
-            Some("fetch") => {
-                if input.contains_key("url")
-                    || input.contains_key("Url")
-                    || input.contains_key("uri")
-                {
-                    Ok(NativeToolKind::WebFetch)
-                } else {
-                    Ok(NativeToolKind::WebSearch)
-                }
-            }
+            Some("fetch") => Ok(NativeToolKind::WebFetch),
             _ => Err(format!(
                 "Unsupported native tool '{tool_name}' cannot be validated by Cowork policy."
             )),
@@ -1061,38 +1050,21 @@ fn validate_shell_control(
     })
 }
 
-async fn validate_web_fetch(
+fn validate_web_fetch(
     parsed: &ParsedNativeRequest<'_>,
-    ctx: &ToolExecutionContext,
+    _ctx: &ToolExecutionContext,
     network_allowed: bool,
 ) -> Result<ApprovalDecisionRequest, String> {
     if !network_allowed {
         return Err("Native WebFetch is blocked because network access is disabled.".into());
     }
-    let raw_url = ["url", "Url", "uri"]
-        .iter()
-        .find_map(|k| parsed.input.get(*k).and_then(Value::as_str))
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .ok_or_else(|| {
-            format!(
-                "Native tool '{}' requires a non-empty URL.",
-                parsed.tool_name
-            )
-        })?;
-    let parsed_url = Url::parse(raw_url)
-        .map_err(|e| format!("Invalid URL for native tool '{}': {e}", parsed.tool_name))?;
-    resolve_and_validate_url_target(&parsed_url, ctx.dns_override_for_tests.as_ref())
-        .await
-        .map_err(|e| e.to_string())?;
-    let summary = truncate_summary(raw_url);
-    Ok(ApprovalDecisionRequest {
-        command: format!("{} {}", parsed.tool_name, summary),
-        reason: "requires_manual_review".to_owned(),
-        category: Some("network".to_owned()),
-        detail: Some(format!("Fetch URL {summary}")),
-        cwd: ctx.working_directory.clone(),
-    })
+    // Provider-native WebFetch executes inside the out-of-sandbox child process and resolves DNS
+    // independently, allowing DNS-rebinding SSRF even after pre-flight validation. Always disable
+    // native WebFetch so URL reads route through Cowork's DNS-pinned bridged `webFetch` tool.
+    Err(format!(
+        "Native tool '{}' is disabled because provider-native HTTP clients cannot enforce Cowork's DNS-pinned SSRF protection; use Cowork's bridged webFetch tool instead.",
+        parsed.tool_name
+    ))
 }
 
 fn validate_web_search(

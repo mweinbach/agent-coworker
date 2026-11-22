@@ -36,21 +36,16 @@ pub(crate) const HARNESS_MCP_SERVER_NAME: &str = "cowork";
 const MAX_MCP_BRIDGE_REQUEST_BYTES: usize = 16 * 1024 * 1024;
 const DEFAULT_MCP_PROTOCOL_VERSION: &str = "2025-03-26";
 
-/// Returns `true` for local shell, filesystem, and web tools handled natively by the managed
-/// CLI runtimes (and validated per-invocation by Cowork's native approval policy).
+/// Returns `true` for local shell, filesystem, and web-search tools handled natively by the
+/// managed CLI runtimes (and validated per-invocation by Cowork's native approval policy).
+///
+/// `webFetch` is intentionally excluded here so it routes through [`HarnessMcpBridge`] and
+/// executes in-process via Cowork's DNS-pinned HTTP client (`cowork-tools`), preventing DNS
+/// rebinding in out-of-sandbox provider HTTP stacks.
 pub(crate) fn is_native_runtime_tool_name(name: &str) -> bool {
     matches!(
         name.trim().to_ascii_lowercase().as_str(),
-        "bash"
-            | "read"
-            | "write"
-            | "edit"
-            | "glob"
-            | "grep"
-            | "webfetch"
-            | "web_fetch"
-            | "websearch"
-            | "web_search"
+        "bash" | "read" | "write" | "edit" | "glob" | "grep" | "websearch" | "web_search"
     )
 }
 

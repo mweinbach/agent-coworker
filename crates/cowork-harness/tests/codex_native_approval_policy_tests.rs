@@ -6,7 +6,6 @@
 //! task-mutation lock (TS `assertCanMutate`) before asking and again after acceptance.
 
 use std::collections::HashMap;
-use std::net::{IpAddr, Ipv4Addr};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -20,7 +19,7 @@ use cowork_inference::{
 use cowork_providers::codex_app_server::DynamicToolHandler;
 use cowork_providers::{ClaudeSdkTransport, ProviderStepRequest, ProviderTransport};
 use cowork_sandbox::{ResolveSandboxPolicyInput, resolve_sandbox_policy};
-use cowork_tools::{DnsOverrideFn, ToolExecutionContext, ToolMap};
+use cowork_tools::{ToolExecutionContext, ToolMap};
 use parking_lot::Mutex;
 use serde_json::{Map, Value, json};
 use tokio_util::sync::CancellationToken;
@@ -56,8 +55,6 @@ struct Turn {
     targets: Vec<&'static str>,
     /// Installs a task-mutation lock hook (as the server does) that blocks while this is set.
     task_lock: Option<Arc<AtomicBool>>,
-    /// Deterministic DNS override for native `WebFetch` SSRF validation tests.
-    dns_override: Option<DnsOverrideFn>,
 }
 
 struct Harness {
@@ -115,7 +112,6 @@ impl Harness {
         ctx.yolo = turn.yolo;
         ctx.read_only_role = turn.read_only_role;
         ctx.target_paths = (!targets.is_empty()).then_some(targets);
-        ctx.dns_override_for_tests = turn.dns_override;
         let lock_checks = Arc::new(Mutex::new(Vec::new()));
         if let Some(locked) = turn.task_lock {
             let checks = Arc::clone(&lock_checks);
@@ -833,37 +829,63 @@ async fn claude_native_bash_enforces_path_credential_and_command_controls() {
 
 #[tokio::test]
 async fn claude_native_webfetch_unknown_tools_and_acp_permissions_are_validated() {
-    let dns: DnsOverrideFn = Arc::new(|host, _port| match host {
-        "example.com" => Ok((vec![IpAddr::V4(Ipv4Addr::new(93, 184, 216, 34))], None)),
-        _ => Ok((vec![IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1))], None)),
-    });
-    let h = Harness::new(Turn {
-        yolo: true,
-        dns_override: Some(dns),
-        ..Turn::default()
-    });
+    for yolo in [true, false] {
+        let h = Harness::new(Turn {
+            yolo,
+            ..Turn::default()
+        });
 
-    // SSRF & unsupported schemes blocked even in YOLO.
-    for url in [
-        "http://127.0.0.1:7337/ws",
-        "http://169.254.169.254/latest/meta-data/",
-        "http://localhost/admin",
-        "file:///etc/passwd",
-        "http://rebind.internal/secret",
-    ] {
-        assert!(
-            !h.decide_silently(CLAUDE_TOOL, claude_tool("WebFetch", json!({ "url": url })))
+        // Native WebFetch is disabled unconditionally (even for public-looking URLs under YOLO)
+        // because out-of-sandbox provider HTTP clients cannot enforce Cowork's DNS-pinned sockets.
+        for url in [
+            "http://127.0.0.1:7337/ws",
+            "http://169.254.169.254/latest/meta-data/",
+            "http://localhost/admin",
+            "file:///etc/passwd",
+            "http://rebind.internal/secret",
+            "https://example.com/docs",
+        ] {
+            assert!(
+                !h.decide_silently(CLAUDE_TOOL, claude_tool("WebFetch", json!({ "url": url })))
+                    .await,
+                "yolo={yolo}: native Claude WebFetch must be denied: {url}"
+            );
+            assert!(
+                !h.decide_silently(
+                    ACP_PERMISSION,
+                    json!({
+                        "toolCall": {
+                            "toolName": "read_url_content",
+                            "kind": "fetch",
+                            "rawInput": { "url": url }
+                        }
+                    }),
+                )
                 .await,
-            "SSRF URL must be blocked: {url}"
+                "yolo={yolo}: native ACP WebFetch must be denied: {url}"
+            );
+        }
+        // Unrecognized ACP `kind: "fetch"` with an alternate key must also fail closed as WebFetch.
+        assert!(
+            !h.decide_silently(
+                ACP_PERMISSION,
+                json!({
+                    "toolCall": {
+                        "toolName": "custom_http_reader",
+                        "kind": "fetch",
+                        "rawInput": { "href": "https://example.com/docs" }
+                    }
+                }),
+            )
+            .await,
+            "yolo={yolo}: unrecognized ACP fetch tool must fail closed"
         );
     }
-    assert!(
-        h.decide_silently(
-            CLAUDE_TOOL,
-            claude_tool("WebFetch", json!({ "url": "https://example.com/docs" }))
-        )
-        .await
-    );
+
+    let h = Harness::new(Turn {
+        yolo: true,
+        ..Turn::default()
+    });
 
     // Unknown native tools fail closed even under YOLO.
     assert!(

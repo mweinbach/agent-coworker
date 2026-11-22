@@ -2609,3 +2609,288 @@ for line in sys.stdin:
         "unexpected error: {err:?}"
     );
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn claude_sdk_and_acp_bridge_webfetch_while_blocking_native_webfetch() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = TempDir::new().unwrap();
+    let web_fetch_tools = vec![
+        ToolDefinition {
+            name: "read".to_owned(),
+            description: "Read local file".to_owned(),
+            parameters: json!({ "type": "object", "properties": { "path": { "type": "string" } } }),
+        },
+        ToolDefinition {
+            name: "webFetch".to_owned(),
+            description: "Fetch URL via Cowork DNS-pinned HTTP client".to_owned(),
+            parameters: json!({
+                "type": "object",
+                "properties": { "url": { "type": "string" } },
+                "required": ["url"]
+            }),
+        },
+    ];
+
+    // 1. Claude SDK: always passes `--disallowedTools ...WebFetch...`, denies native `WebFetch`
+    //    `can_use_tool`, and bridges Cowork's `webFetch` as `mcp__cowork__webFetch`.
+    let claude_script = tmp.path().join("mock-claude-webfetch.py");
+    let claude_py = r#"#!/usr/bin/env python3
+import json, sys, urllib.request
+
+args = sys.argv[1:]
+disallowed = args[args.index("--disallowedTools") + 1] if "--disallowedTools" in args else ""
+mcp_cfg_path = args[args.index("--mcp-config") + 1] if "--mcp-config" in args else None
+assert mcp_cfg_path, f"expected --mcp-config for bridged webFetch: {args}"
+with open(mcp_cfg_path, "r") as f:
+    mcp_cfg = json.load(f)
+srv = mcp_cfg["mcpServers"]["cowork"]
+mcp_url = srv["url"]
+mcp_headers = srv["headers"]
+
+def rpc(method, params, rid):
+    req = urllib.request.Request(
+        mcp_url,
+        data=json.dumps({"jsonrpc": "2.0", "id": rid, "method": method, "params": params}).encode(),
+        headers={"Content-Type": "application/json", **mcp_headers},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=5) as resp:
+        return json.loads(resp.read().decode())
+
+def emit(obj):
+    sys.stdout.write(json.dumps(obj) + "\n")
+    sys.stdout.flush()
+
+def ask(req_id, tool_name, tool_input):
+    emit({
+        "type": "control_request",
+        "request_id": req_id,
+        "request": {"subtype": "can_use_tool", "tool_name": tool_name, "input": tool_input},
+    })
+    return json.loads(sys.stdin.readline().strip())["response"]["response"]["behavior"]
+
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    msg = json.loads(line)
+    if msg.get("type") == "control_request" and msg.get("request", {}).get("subtype") == "initialize":
+        emit({"type": "control_response", "response": {"subtype": "success", "request_id": msg["request_id"], "response": {}}})
+    elif msg.get("type") == "user":
+        listed = [t["name"] for t in rpc("tools/list", {}, 1)["result"]["tools"]]
+        native_perm = ask("p-native", "WebFetch", {"url": "https://example.com/docs"})
+        bridged_perm = ask("p-bridged", "mcp__cowork__webFetch", {"url": "https://example.com/docs"})
+        call_res = rpc("tools/call", {"name": "webFetch", "arguments": {"url": "https://example.com/docs"}}, 2)
+        summary = json.dumps({
+            "disallowed": disallowed.split(",") if disallowed else [],
+            "listed": listed,
+            "native_perm": native_perm,
+            "bridged_perm": bridged_perm,
+            "call_text": call_res["result"]["content"][0]["text"],
+        })
+        emit({"type": "stream_event", "event": {"type": "content_block_start", "index": 0, "content_block": {"type": "text"}}})
+        emit({"type": "stream_event", "event": {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": summary}}})
+        emit({"type": "stream_event", "event": {"type": "content_block_stop", "index": 0}})
+        emit({
+            "type": "result",
+            "subtype": "success",
+            "is_error": False,
+            "session_id": "claude-webfetch-1",
+            "result": summary,
+            "usage": {"input_tokens": 5, "output_tokens": 5},
+        })
+        break
+"#;
+    std::fs::write(&claude_script, claude_py).unwrap();
+    std::fs::set_permissions(&claude_script, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let mut env = HashMap::new();
+    env.insert("HOME".into(), tmp.path().to_string_lossy().into_owned());
+    env.insert("PATH".into(), std::env::var("PATH").unwrap_or_default());
+
+    let handler = Arc::new(RecordingHarnessToolHandler::new(true));
+    let mut claude_transport =
+        ClaudeSdkTransport::with_env_and_handler(env.clone(), Some(handler.clone()));
+    claude_transport.command_override =
+        Some((claude_script.to_string_lossy().into_owned(), Vec::new()));
+
+    let mut provider_options = Map::new();
+    provider_options.insert("cwd".into(), json!(tmp.path().to_string_lossy()));
+    let budget = StepBudget::unbounded(Some(CancellationToken::new()));
+
+    // Verify both unrestricted (`authorized_tool_names: None`) and explicit `webFetch` allowlist.
+    for allowlist in [None, Some(vec!["webFetch".to_owned()])] {
+        let res = claude_transport
+            .stream_step(
+                ProviderStepRequest {
+                    model_id: "claude-opus-4-8".to_owned(),
+                    base_url: None,
+                    api_key: Some("sk-ant-test".to_owned()),
+                    extra_headers: HashMap::new(),
+                    system_prompt: "Fetch docs.".to_owned(),
+                    messages: vec![user_msg("Read https://example.com/docs")],
+                    tools: web_fetch_tools.clone(),
+                    authorized_tool_names: allowlist,
+                    provider_options: provider_options.clone(),
+                    continuation: None,
+                    policy: RequestPolicy::default(),
+                    turn_id: "turn-claude-wf".to_owned(),
+                },
+                &budget,
+                &mut |_| {},
+            )
+            .await
+            .expect("Claude SDK bridged webFetch turn succeeds");
+        let text = res
+            .assistant
+            .content
+            .iter()
+            .find_map(|b| match b {
+                ContentBlock::Text { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .unwrap();
+        let payload: Value = serde_json::from_str(text).unwrap();
+        assert!(
+            payload["disallowed"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v == "WebFetch"),
+            "Claude SDK must always disable native WebFetch via --disallowedTools: {payload}"
+        );
+        assert_eq!(payload["listed"], json!(["webFetch"]));
+        assert_eq!(payload["native_perm"], json!("deny"));
+        assert_eq!(payload["bridged_perm"], json!("allow"));
+        assert!(payload["call_text"].as_str().unwrap().contains("webFetch"));
+    }
+
+    // 2. Antigravity ACP: denies native `web_fetch` / `read_url_content` / `kind: "fetch"`
+    //    permissions and bridges Cowork's `webFetch` over the loopback MCP server.
+    let acp_script = tmp.path().join("mock-acp-webfetch.py");
+    let acp_py = r#"#!/usr/bin/env python3
+import json, sys, urllib.request
+
+def send(obj):
+    sys.stdout.write(json.dumps(obj) + "\n")
+    sys.stdout.flush()
+
+def rpc(url, headers, method, params, rid):
+    req = urllib.request.Request(
+        url,
+        data=json.dumps({"jsonrpc": "2.0", "id": rid, "method": method, "params": params}).encode(),
+        headers={"Content-Type": "application/json", **headers},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=5) as resp:
+        return json.loads(resp.read().decode())
+
+def ask_perm(rid, sid, tool_call):
+    send({
+        "jsonrpc": "2.0",
+        "id": rid,
+        "method": "session/request_permission",
+        "params": {
+            "sessionId": sid,
+            "toolCall": tool_call,
+            "options": [
+                {"optionId": "opt-allow", "name": "Allow", "kind": "allow_once"},
+                {"optionId": "opt-reject", "name": "Reject", "kind": "reject_once"},
+            ],
+        },
+    })
+    resp = json.loads(sys.stdin.readline().strip())
+    return resp["result"]["outcome"]["optionId"]
+
+mcp_url = None
+mcp_headers = {}
+sid = "acp-wf-1"
+
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    msg = json.loads(line)
+    method = msg.get("method")
+    rid = msg.get("id")
+    if method == "initialize":
+        send({"jsonrpc": "2.0", "id": rid, "result": {"protocolVersion": 1, "agentCapabilities": {"mcpCapabilities": {"http": True}}}})
+    elif method == "session/new":
+        servers = msg.get("params", {}).get("mcpServers", [])
+        srv = next(s for s in servers if s.get("name") == "cowork")
+        mcp_url = srv["url"]
+        mcp_headers = {h["name"]: h["value"] for h in srv.get("headers", [])}
+        send({"jsonrpc": "2.0", "id": rid, "result": {"sessionId": sid}})
+    elif method in ("session/set_model", "session/set_config_option"):
+        send({"jsonrpc": "2.0", "id": rid, "result": {}})
+    elif method == "session/prompt":
+        listed = [t["name"] for t in rpc(mcp_url, mcp_headers, "tools/list", {}, 1)["result"]["tools"]]
+        native_name_perm = ask_perm(91, sid, {"toolCallId": "tc-1", "toolName": "read_url_content", "kind": "fetch", "rawInput": {"url": "https://example.com"}})
+        native_kind_perm = ask_perm(92, sid, {"toolCallId": "tc-2", "toolName": "custom_fetch", "kind": "fetch", "rawInput": {"href": "https://example.com"}})
+        bridged_perm = ask_perm(93, sid, {"toolCallId": "tc-3", "toolName": "cowork/webFetch", "kind": "other", "rawInput": {"url": "https://example.com"}})
+        call_res = rpc(mcp_url, mcp_headers, "tools/call", {"name": "webFetch", "arguments": {"url": "https://example.com"}}, 2)
+        summary = json.dumps({
+            "listed": listed,
+            "native_name_perm": native_name_perm,
+            "native_kind_perm": native_kind_perm,
+            "bridged_perm": bridged_perm,
+            "call_text": call_res["result"]["content"][0]["text"],
+        })
+        send({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": sid, "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": summary}}}})
+        send({"jsonrpc": "2.0", "id": rid, "result": {"stopReason": "end_turn"}})
+        break
+"#;
+    std::fs::write(&acp_script, acp_py).unwrap();
+    std::fs::set_permissions(&acp_script, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let mut acp_transport =
+        AntigravityAcpTransport::with_env_and_handler(env, Some(handler.clone()));
+    acp_transport.command_override = Some((acp_script.to_string_lossy().into_owned(), Vec::new()));
+
+    for allowlist in [None, Some(vec!["webFetch".to_owned()])] {
+        let res = acp_transport
+            .stream_step(
+                ProviderStepRequest {
+                    model_id: "gemini-4-neon".to_owned(),
+                    base_url: None,
+                    api_key: None,
+                    extra_headers: HashMap::new(),
+                    system_prompt: "Fetch docs.".to_owned(),
+                    messages: vec![user_msg("Read https://example.com")],
+                    tools: web_fetch_tools.clone(),
+                    authorized_tool_names: allowlist,
+                    provider_options: provider_options.clone(),
+                    continuation: None,
+                    policy: RequestPolicy::default(),
+                    turn_id: "turn-acp-wf".to_owned(),
+                },
+                &budget,
+                &mut |_| {},
+            )
+            .await
+            .expect("ACP bridged webFetch turn succeeds");
+        let text = res
+            .assistant
+            .content
+            .iter()
+            .find_map(|b| match b {
+                ContentBlock::Text { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .unwrap();
+        let payload: Value = serde_json::from_str(text).unwrap();
+        assert_eq!(payload["listed"], json!(["webFetch"]));
+        assert_eq!(payload["native_name_perm"], json!("opt-reject"));
+        assert_eq!(payload["native_kind_perm"], json!("opt-reject"));
+        assert_eq!(payload["bridged_perm"], json!("opt-allow"));
+        assert!(payload["call_text"].as_str().unwrap().contains("webFetch"));
+    }
+
+    assert_eq!(
+        handler.approval_calls.load(Ordering::Relaxed),
+        0,
+        "native WebFetch must be denied before reaching the approval handler, and bridged webFetch executes via MCP"
+    );
+}

@@ -310,31 +310,12 @@ fn acp_permission_is_authorized(
     {
         return false;
     }
-    let Some(allowlist) = authorized_tool_names else {
-        return true;
-    };
-    if allowlist.is_empty() {
-        return false;
-    }
-
     let kind = tool_call
         .and_then(|tc| tc.get("kind"))
         .or_else(|| params.get("kind"))
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|s| !s.is_empty());
-
-    // Never allow a misleading display title to bypass a mutating/exec ACP ToolKind.
-    if let Some(k) = kind {
-        let kind_tools = acp_kind_canonical_tools(k);
-        if !kind_tools.is_empty()
-            && !kind_tools
-                .iter()
-                .any(|&canon| allowlist_contains_tool(allowlist, canon))
-        {
-            return false;
-        }
-    }
 
     let raw_name = tool_call
         .and_then(|tc| {
@@ -351,6 +332,35 @@ fn acp_permission_is_authorized(
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|s| !s.is_empty());
+
+    // Never allow provider-native URL fetching outside Cowork's DNS-pinned `webFetch` bridge.
+    let is_explicit_web_search =
+        raw_name.is_some_and(|name| acp_name_canonical_tools(name) == ["webSearch"]);
+    let is_native_web_fetch = raw_name
+        .is_some_and(|name| acp_name_canonical_tools(name) == ["webFetch"])
+        || (kind.is_some_and(|k| k.eq_ignore_ascii_case("fetch")) && !is_explicit_web_search);
+    if is_native_web_fetch {
+        return false;
+    }
+
+    let Some(allowlist) = authorized_tool_names else {
+        return true;
+    };
+    if allowlist.is_empty() {
+        return false;
+    }
+
+    // Never allow a misleading display title to bypass a mutating/exec ACP ToolKind.
+    if let Some(k) = kind {
+        let kind_tools = acp_kind_canonical_tools(k);
+        if !kind_tools.is_empty()
+            && !kind_tools
+                .iter()
+                .any(|&canon| allowlist_contains_tool(allowlist, canon))
+        {
+            return false;
+        }
+    }
 
     if let Some(name) = raw_name {
         if allowlist_contains_tool(allowlist, name) {

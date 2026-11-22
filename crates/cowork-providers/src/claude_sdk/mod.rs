@@ -226,6 +226,11 @@ fn claude_disallowed_native_tools(authorized_tool_names: &[String]) -> Vec<&'sta
         .iter()
         .copied()
         .filter(|&native| {
+            if native == "WebFetch" {
+                // Provider-native WebFetch resolves DNS outside Cowork's pinned HTTP client;
+                // always disable it so URL fetches route through Cowork's bridged `webFetch` tool.
+                return true;
+            }
             let canonical_allowed = claude_native_tool_canonical_name(native)
                 .is_some_and(|canon| allowlist_contains_tool(authorized_tool_names, canon));
             let direct_allowed = allowlist_contains_tool(authorized_tool_names, native);
@@ -287,6 +292,11 @@ fn claude_tool_is_authorized(
     {
         return Err(format!(
             "Tool '{tool_name}' execution denied: native tool input must be a JSON object."
+        ));
+    }
+    if claude_native_tool_canonical_name(tool_name) == Some("webFetch") {
+        return Err(format!(
+            "Native tool '{tool_name}' is disabled because provider-native HTTP clients cannot enforce Cowork's DNS-pinned SSRF protection; use Cowork's bridged webFetch tool instead."
         ));
     }
     let Some(allowlist) = authorized_tool_names else {
@@ -630,8 +640,11 @@ fn build_claude_sdk_args(
     if tools_disabled || request.authorized_tool_names.as_deref() == Some(&[]) {
         args.push("--tools".to_owned());
         args.push(String::new());
-    } else if let Some(allowlist) = request.authorized_tool_names.as_deref() {
-        let disallowed = claude_disallowed_native_tools(allowlist);
+    } else {
+        let disallowed = match request.authorized_tool_names.as_deref() {
+            Some(allowlist) => claude_disallowed_native_tools(allowlist),
+            None => vec!["WebFetch"],
+        };
         if !disallowed.is_empty() {
             args.push("--disallowedTools".to_owned());
             args.push(disallowed.join(","));

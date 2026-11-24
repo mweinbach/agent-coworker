@@ -80,6 +80,7 @@ fn find_static_top_menu_by_mnemonic(ch: char) -> Option<usize> {
 const MENU_STRIP_KEY: &str = "menu-bar-strip";
 const MENU_HAMBURGER_KEY: &str = "menu-bar-hamburger";
 const MENU_DROPDOWN_MODAL_KEY: &str = "menu-bar-dropdown-modal";
+const MENU_DROPDOWN_SCOPE_KEY: &str = "menu-bar-dropdown-scope";
 const MENU_FOCUS_BACKDROP_KEY: &str = "menu-bar-focus-backdrop";
 const MENU_BAR_MIN_INLINE_WIDTH: f32 = 520.0;
 const WINDOWS_CAPTION_RESERVE_ESTIMATE: f32 = 138.0;
@@ -997,12 +998,12 @@ fn build_menu_entry_row(
     }
 }
 
-fn push_top_item_bridges(
-    s: &AppState,
-    menus_len: usize,
-    hover_to_switch: bool,
-    overlays: &mut Vec<El>,
-) {
+/// Transparent press/hover bridges laid over the inline menu strip's top buttons (`File`..`Help`)
+/// at the strip buttons' window rects. With a dropdown open they are children of the dropdown's
+/// modal root, so Rune's modal scope keeps them live; with the bar merely focused they sit above
+/// the non-modal click-outside backdrop.
+fn top_item_bridges(s: &AppState, menus_len: usize, hover_to_switch: bool) -> Vec<El> {
+    let mut bridges = Vec::new();
     for idx in 0..menus_len.min(MENU_BAR_COUNT) {
         let rect = s.shell_ui.menu_bar.button_rects[idx];
         if rect[2] <= 0.0 || rect[3] <= 0.0 {
@@ -1032,8 +1033,9 @@ fn push_top_item_bridges(
                 }
             });
         }
-        overlays.push(sensor);
+        bridges.push(sensor);
     }
+    bridges
 }
 
 /// Pushes the active menu dropdown modal overlay (and wide hover-to-switch bar sensors).
@@ -1083,7 +1085,7 @@ pub fn push_menu_bar_overlay(
                 }),
         );
         if !compact {
-            push_top_item_bridges(s, MENU_BAR_COUNT, false, overlays);
+            overlays.extend(top_item_bridges(s, MENU_BAR_COUNT, false));
         }
         return;
     }
@@ -1206,21 +1208,34 @@ pub fn push_menu_bar_overlay(
         .border(1.0, t.border_strong)
         .shadow(6.0, 18.0, t.scrim)
         .anchored_fit(&anchor_key, Side::Bottom, Align::Start, 4.0)
-        .modal_tx(true, |s: &mut AppState, tx: &mut Tx| {
-            dismiss_menu_bar(s, tx, true);
-        })
         .on_key(|s: &mut AppState, ev: &KeyEvent, tx: &mut Tx| {
             let menus = build_application_menu(s);
             handle_dropdown_key(s, ev, tx, &menus)
         })
         .child(list);
 
-    overlays.push(dropdown);
-
-    // Mount transparent hover-to-switch / click-toggle bridges over the inline menu strip buttons
-    // AFTER the `.modal_tx` element so Rune's `modal_scope` includes them in allowed hit targets.
+    // Rune's modal scope lets input reach only the open modal's own subtree, the popovers
+    // anchored inside it and the window's caption buttons; every other node is inert. The
+    // hover-to-switch / click-toggle bridges over the inline menu strip therefore have to live
+    // inside the modal: mount the dropdown and its bridges under one modal root. The root is out
+    // of flow and sized zero (both children are out of flow), so it covers nothing itself: the
+    // bridges keep the strip buttons' window rects, the dropdown still anchors below its button,
+    // and a press anywhere else lands outside the modal and dismisses it.
     if !compact && open_idx.is_some() {
-        push_top_item_bridges(s, bridge_count, true, overlays);
+        overlays.push(
+            col()
+                .key(MENU_DROPDOWN_SCOPE_KEY)
+                .absolute(0.0, 0.0)
+                .modal_tx(true, |s: &mut AppState, tx: &mut Tx| {
+                    dismiss_menu_bar(s, tx, true);
+                })
+                .children(top_item_bridges(s, bridge_count, true))
+                .child(dropdown),
+        );
+    } else {
+        overlays.push(dropdown.modal_tx(true, |s: &mut AppState, tx: &mut Tx| {
+            dismiss_menu_bar(s, tx, true);
+        }));
     }
 }
 
@@ -1454,6 +1469,21 @@ mod tests {
         rt.pointer_move(view_btn[0] + 10.0, view_btn[1] + 10.0);
         rt.frame(0.016);
         assert_eq!(rt.state.shell_ui.menu_bar.open_menu_idx, Some(2));
+
+        // Presses must reach the bridges inside the modal instead of being swallowed as outside
+        // clicks: clicking the open menu's own button toggles it closed, and clicking another
+        // top button while no menu is open opens that menu directly.
+        rt.pointer_down(view_btn[0] + 10.0, view_btn[1] + 10.0);
+        rt.pointer_up(view_btn[0] + 10.0, view_btn[1] + 10.0);
+        rt.frame(0.016);
+        assert_eq!(rt.state.shell_ui.menu_bar.open_menu_idx, None);
+        assert!(element_rect(&rt, MENU_DROPDOWN_MODAL_KEY).is_none());
+
+        rt.pointer_down(file_btn[0] + 10.0, file_btn[1] + 10.0);
+        rt.pointer_up(file_btn[0] + 10.0, file_btn[1] + 10.0);
+        rt.frame(0.016);
+        assert_eq!(rt.state.shell_ui.menu_bar.open_menu_idx, Some(0));
+        assert!(element_rect(&rt, MENU_DROPDOWN_MODAL_KEY).is_some());
 
         // Clicking outside dismisses the modal dropdown.
         rt.pointer_down(900.0, 500.0);

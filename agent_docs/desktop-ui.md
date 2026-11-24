@@ -33,10 +33,11 @@ Load this file when working in `crates/cowork-desktop/`.
   cargo run -p cowork-desktop --bin cowork-desktop
   ```
 - Or via root Bun shortcut: `bun run start` (alias: `bun run desktop:rune`).
-- Inspect headless scenes (`default`, `light`, `dark`, `settings`, `chat`, `chat-demo`, `quick-chat`, `utility`) using `--snap` and `--tree`:
+- Inspect headless scenes (`default`, `light`, `dark`, `settings`, `chat`, `chat-demo`, `quick-chat`, `utility`, `tasks`) using `--snap` and `--tree`. Always pair `--scene` with `--snap` or `--tree`; on its own it opens a real window. `COWORK_SCENE_SETTINGS_PAGE=<route segment>` shows another Settings page, and `COWORK_SCENE_POPUP=model|effort` opens the composer popovers in `chat-demo`:
   ```bash
   cargo run --quiet -p cowork-desktop --bin cowork-desktop -- --scene chat-demo --theme dark --chrome --snap /tmp/cowork-chat.png
   cargo run --quiet -p cowork-desktop --bin cowork-desktop -- --scene settings --size 1280x820 --tree /tmp/cowork-settings.json
+  COWORK_SCENE_SETTINGS_PAGE=desktop cargo run --quiet -p cowork-desktop --bin cowork-desktop -- --scene settings --snap /tmp/cowork-settings-desktop.png
   ```
 - Run crate unit tests, bridge profile continuity checks, and live sidecar roundtrip:
   ```bash

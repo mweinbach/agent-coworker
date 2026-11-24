@@ -166,6 +166,7 @@ static SCENES: &[SceneEntry] = &[
     ("chat-demo", scene_chat_demo),
     ("quick-chat", scene_quick_chat),
     ("utility", scene_utility),
+    ("tasks", scene_tasks),
 ];
 
 fn apply_scene_env_overrides(state: &mut AppState) {
@@ -205,11 +206,22 @@ fn scene_dark(state: &mut AppState) {
     state.system_dark_override = Some(true);
 }
 
+/// The Settings surface. `COWORK_SCENE_SETTINGS_PAGE` names a page other than the default
+/// Models page by its route segment (for example `desktop` or `behavior`); an unknown or empty
+/// segment falls back to Models.
 fn scene_settings(state: &mut AppState) {
     apply_scene_env_overrides(state);
+    let requested = std::env::var("COWORK_SCENE_SETTINGS_PAGE").unwrap_or_default();
     state.dispatch(Action::Navigate(NavAction::OpenSettings(Some(
-        SettingsPageId::Models,
+        SettingsPageId::from_route_segment(&requested),
     ))));
+}
+
+/// The Tasks view's landing, with the Tasks feature flag switched on so the surface exists.
+fn scene_tasks(state: &mut AppState) {
+    apply_scene_env_overrides(state);
+    state.feature_flags.insert("tasks".into(), true);
+    state.dispatch(Action::Navigate(NavAction::OpenView(ViewId::Task)));
 }
 
 fn scene_chat(state: &mut AppState) {

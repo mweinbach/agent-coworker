@@ -5,8 +5,9 @@
 
 use std::collections::HashSet;
 
-use rune::Color;
-use rune_kit::shell::RowStatus;
+use rune::{Color, El, Icon, TextStyle, icon, row};
+use rune_kit::Kit;
+use rune_kit::shell::{RowStatus, SidebarRow};
 
 use crate::state::{AppState, ThreadRecord, WorkspaceRecord};
 use crate::theme::ThemeTokens;
@@ -308,6 +309,47 @@ pub fn split_workspaces(s: &AppState) -> (Vec<&WorkspaceRecord>, HashSet<&str>, 
 /// Whether durable Tasks surfaces are enabled (`feature_flags["tasks"] == true`, default `false`).
 pub fn tasks_feature_enabled(s: &AppState) -> bool {
     s.feature_flags.get("tasks").copied().unwrap_or(false)
+}
+
+/// Gives a selectable `SidebarRow` Cowork's selected state before it is built: a medium-weight
+/// label and, where the row has an icon, the accent in place of the kit's muted glyph. Pass the
+/// row's icon here rather than with `SidebarRow::icon`, and finish the built row with
+/// [`warm_selected`].
+pub fn warm_row(
+    item: SidebarRow,
+    glyph: Option<&'static Icon>,
+    selected: bool,
+    k: &Kit,
+    t: &ThemeTokens,
+) -> SidebarRow {
+    let item = match (glyph, selected) {
+        (Some(g), true) => item.avatar(
+            row()
+                .size(16.0, 16.0)
+                .center()
+                .child(icon(g, 16.0).color(t.accent)),
+        ),
+        (Some(g), false) => item.icon(g),
+        (None, _) => item,
+    };
+    if selected {
+        item.title_style(TextStyle {
+            weight: 500.0,
+            ..k.ty.ui
+        })
+    } else {
+        item
+    }
+}
+
+/// Finishes a row from [`warm_row`]: the selected row takes Cowork's warm accent wash in place
+/// of the kit's neutral fill, and keeps it under the pointer.
+pub fn warm_selected(item: El, selected: bool, t: &ThemeTokens) -> El {
+    if selected {
+        item.fill(t.nav_selected).hover(t.nav_selected_hover)
+    } else {
+        item
+    }
 }
 
 #[cfg(test)]

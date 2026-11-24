@@ -5,7 +5,7 @@
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
-use rune::{Cx, El, col, el, memo, row, spacer, text};
+use rune::{Cx, El, TextStyle, col, el, memo, row, spacer, text};
 use rune_kit::shell;
 use rune_kit::{
     Badge, BadgeVariant, Button, ButtonVariant, ControlSize, Divider, IconButton,
@@ -90,12 +90,7 @@ pub fn build_settings_toolbar(
         .gap(8.0)
         .min_w(0.0)
         .transition(rune::Transition::none())
-        .child(
-            text(title)
-                .font(k.ty.ui_medium)
-                .color(t.text_base)
-                .truncate(),
-        );
+        .child(text(title).font(t.title_sm).color(t.text_base).truncate());
     if let Some(badge_label) = workspace_badge {
         heading = heading.child(
             Badge::new(badge_label)
@@ -219,7 +214,10 @@ pub fn build_toolbar(
         heading = heading.child(
             text(title.to_owned())
                 .key("topbar-title")
-                .font(k.ty.ui_medium)
+                .font(TextStyle {
+                    weight: 600.0,
+                    ..k.ty.ui_medium
+                })
                 .color(k.c.text_base)
                 .truncate(),
         );

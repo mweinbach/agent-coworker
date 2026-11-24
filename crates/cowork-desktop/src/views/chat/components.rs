@@ -207,7 +207,7 @@ pub fn canvas_request_pill(k: &Kit, t: &ThemeTokens, filename: &str, spreadsheet
 /// Renders a compact status badge (`REVIEW`, `RECOVERED`, `RUNNING`, etc.).
 pub fn status_pill(k: &Kit, t: &ThemeTokens, label: impl Into<String>, tone: StatusPillTone) -> El {
     let (bg, fg, border) = match tone {
-        StatusPillTone::Neutral => (k.c.layer_02, t.text_muted, t.border_muted),
+        StatusPillTone::Neutral => (t.hover, t.text_muted, t.border),
         StatusPillTone::Danger => (k.alpha(t.danger, 0.14), t.danger, k.alpha(t.danger, 0.35)),
         StatusPillTone::Warning => (
             k.alpha(t.warning, 0.14),

@@ -16,7 +16,7 @@ use crate::state::{AppState, ThreadRecord, WorkspaceRecord};
 use crate::theme::ThemeTokens;
 use crate::views::shell::helpers::{
     contains_case_insensitive, filtered_threads, pending_input_count, split_workspaces,
-    thread_row_status,
+    thread_row_status, warm_row, warm_selected,
 };
 use crate::views::shell::icons;
 
@@ -216,7 +216,7 @@ fn build_sidebar_inner(s: &AppState, k: &Kit, t: &ThemeTokens, allow_spinners: b
         .row_gap(1.0);
 
     let pending_count = pending_input_count(s);
-    for item in build_header_items(s, k, pending_count) {
+    for item in build_header_items(s, k, t, pending_count) {
         sb = sb.header(item);
     }
 
@@ -279,24 +279,35 @@ fn build_sidebar_inner(s: &AppState, k: &Kit, t: &ThemeTokens, allow_spinners: b
         }
     }
 
-    let footer = col().key("sidebar-footer-actions").w_full().child(
-        SidebarRow::new("Settings")
-            .icon(&icons::SETTINGS)
+    let settings_selected = s.route().view == ViewId::Settings;
+    let footer = col()
+        .key("sidebar-footer-actions")
+        .w_full()
+        .child(warm_selected(
+            warm_row(
+                SidebarRow::new("Settings"),
+                Some(&icons::SETTINGS),
+                settings_selected,
+                k,
+                t,
+            )
             .height(ROW_H)
-            .selected(s.route().view == ViewId::Settings)
+            .selected(settings_selected)
             .on_select(|s: &mut AppState, tx| {
                 s.dispatch_tx(Action::Navigate(NavAction::OpenSettings(None)), tx);
             })
             .build(k)
             .key("sidebar-settings"),
-    );
+            settings_selected,
+            t,
+        ));
 
     sb.footer(footer)
         .build(k)
         .transition(rune::Transition::none())
 }
 
-fn build_header_items(s: &AppState, k: &Kit, pending: usize) -> Vec<El> {
+fn build_header_items(s: &AppState, k: &Kit, t: &ThemeTokens, pending: usize) -> Vec<El> {
     let new_chat = SidebarRow::new("New chat")
         .icon(&icons::PLUS)
         .detail(crate::shortcut_label("Cmd+N"))
@@ -323,37 +334,53 @@ fn build_header_items(s: &AppState, k: &Kit, pending: usize) -> Vec<El> {
     let mut items = vec![new_chat, search];
 
     if pending > 0 {
-        items.push(
-            SidebarRow::new(if s.shell_ui.needs_input_only {
-                "Showing needs input"
-            } else {
-                "Needs input"
-            })
-            .icon(&icons::ALERT_TRIANGLE)
+        let filtering = s.shell_ui.needs_input_only;
+        items.push(warm_selected(
+            warm_row(
+                SidebarRow::new(if filtering {
+                    "Showing needs input"
+                } else {
+                    "Needs input"
+                }),
+                Some(&icons::ALERT_TRIANGLE),
+                filtering,
+                k,
+                t,
+            )
             .detail(pending.to_string())
             .status(RowStatus::Attention)
-            .selected(s.shell_ui.needs_input_only)
+            .selected(filtering)
             .height(ROW_H)
             .on_select(|s: &mut AppState, _| {
                 s.shell_ui.needs_input_only = !s.shell_ui.needs_input_only;
             })
             .build(k)
             .key("sidebar-needs-input"),
-        );
+            filtering,
+            t,
+        ));
     }
 
     if super::helpers::tasks_feature_enabled(s) {
-        items.push(
-            SidebarRow::new("Tasks")
-                .icon(&icons::CHECK_SQUARE)
-                .height(ROW_H)
-                .selected(s.route().view == ViewId::Task)
-                .on_select(|s: &mut AppState, tx| {
-                    s.dispatch_tx(Action::Navigate(NavAction::OpenView(ViewId::Task)), tx);
-                })
-                .build(k)
-                .key("sidebar-tasks-link"),
-        );
+        let tasks_selected = s.route().view == ViewId::Task;
+        items.push(warm_selected(
+            warm_row(
+                SidebarRow::new("Tasks"),
+                Some(&icons::CHECK_SQUARE),
+                tasks_selected,
+                k,
+                t,
+            )
+            .height(ROW_H)
+            .selected(tasks_selected)
+            .on_select(|s: &mut AppState, tx| {
+                s.dispatch_tx(Action::Navigate(NavAction::OpenView(ViewId::Task)), tx);
+            })
+            .build(k)
+            .key("sidebar-tasks-link"),
+            tasks_selected,
+            t,
+        ));
     }
 
     items.push(
@@ -500,9 +527,10 @@ fn build_tasks_section(
             "needs_input" | "waiting" | "blocked" => Some(RowStatus::Attention),
             _ => None,
         };
-        let mut r = SidebarRow::new(task.title.clone())
+        let selected = s.route().view == ViewId::Task && active_task_id == Some(task.id.as_str());
+        let mut r = warm_row(SidebarRow::new(task.title.clone()), None, selected, k, t)
             .height(ROW_H)
-            .selected(s.route().view == ViewId::Task && active_task_id == Some(task.id.as_str()))
+            .selected(selected)
             .on_select(move |s: &mut AppState, tx| {
                 s.dispatch_tx(Action::Navigate(NavAction::OpenTask(task_id.clone())), tx);
             });
@@ -521,7 +549,7 @@ fn build_tasks_section(
             }
             None => {}
         }
-        sec = sec.row(r.build(k).key(format!("task-{}", task.id)));
+        sec = sec.row(warm_selected(r.build(k), selected, t).key(format!("task-{}", task.id)));
     }
     Some(sec)
 }
@@ -717,49 +745,55 @@ fn build_workspaces_section(
         .expanded(!collapsed)
         .key(format!("ws-toggle-{}", ws.id));
 
-        let ws_row = SidebarRow::new(ws.name.clone())
-            .height(ROW_H)
-            .selected(is_active_ws && active_thread_id.is_none())
-            .trailing(hover_add_button(
-                k,
-                "New chat in project",
-                format!("ws-new-chat-{}", ws.id),
-                move |s, tx| {
+        let ws_selected = is_active_ws && active_thread_id.is_none();
+        let ws_row = warm_selected(
+            warm_row(SidebarRow::new(ws.name.clone()), None, ws_selected, k, t)
+                .height(ROW_H)
+                .selected(ws_selected)
+                .trailing(hover_add_button(
+                    k,
+                    "New chat in project",
+                    format!("ws-new-chat-{}", ws.id),
+                    move |s, tx| {
+                        s.dispatch_tx(
+                            Action::Navigate(NavAction::OpenNewChat {
+                                workspace_id: Some(ws_id_new.clone()),
+                            }),
+                            tx,
+                        );
+                    },
+                ))
+                .reorder(
+                    &s.shell_ui.sidebar_reorder,
+                    idx,
+                    project_count,
+                    |s: &mut AppState| {
+                        s.shell_ui.sidebar_reorder_rev =
+                            s.shell_ui.sidebar_reorder_rev.wrapping_add(1);
+                        &mut s.shell_ui.sidebar_reorder
+                    },
+                    |s: &mut AppState, from, to| {
+                        let order = reorder_project_workspaces(s, from, to);
+                        if !order.is_empty() {
+                            s.dispatch(Action::Shell(ShellAction::ReorderWorkspaces(order)));
+                        }
+                    },
+                )
+                .on_select(move |s: &mut AppState, tx| {
                     s.dispatch_tx(
-                        Action::Navigate(NavAction::OpenNewChat {
-                            workspace_id: Some(ws_id_new.clone()),
-                        }),
+                        Action::Navigate(NavAction::SelectWorkspace(ws_id.clone())),
                         tx,
                     );
-                },
-            ))
-            .reorder(
-                &s.shell_ui.sidebar_reorder,
-                idx,
-                project_count,
-                |s: &mut AppState| {
-                    s.shell_ui.sidebar_reorder_rev = s.shell_ui.sidebar_reorder_rev.wrapping_add(1);
-                    &mut s.shell_ui.sidebar_reorder
-                },
-                |s: &mut AppState, from, to| {
-                    let order = reorder_project_workspaces(s, from, to);
-                    if !order.is_empty() {
-                        s.dispatch(Action::Shell(ShellAction::ReorderWorkspaces(order)));
-                    }
-                },
-            )
-            .on_select(move |s: &mut AppState, tx| {
-                s.dispatch_tx(
-                    Action::Navigate(NavAction::SelectWorkspace(ws_id.clone())),
-                    tx,
-                );
-            })
-            .build(k)
-            .grow(1.0)
-            .shrink()
-            .min_w(0.0)
-            .pl(2.0)
-            .key(format!("ws-{}", ws.id));
+                })
+                .build(k),
+            ws_selected,
+            t,
+        )
+        .grow(1.0)
+        .shrink()
+        .min_w(0.0)
+        .pl(2.0)
+        .key(format!("ws-{}", ws.id));
 
         projects_header = projects_header.row(
             row()
@@ -937,7 +971,7 @@ fn build_thread_row(
     let tid_archive = tr.id.clone();
     let tid_ctx = tr.id.clone();
 
-    let mut r = SidebarRow::new(title)
+    let mut r = warm_row(SidebarRow::new(title), None, selected, k, t)
         .height(ROW_H)
         .selected(selected)
         .on_select(move |s: &mut AppState, tx| {
@@ -992,7 +1026,7 @@ fn build_thread_row(
         None => {}
     }
 
-    r.build(k)
+    warm_selected(r.build(k), selected, t)
         .key(format!("thread-{}", tr.id))
         .on_secondary_press(move |s: &mut AppState, pt, _| {
             s.shell_ui.context_menu_thread_id = Some(tid_ctx.clone());

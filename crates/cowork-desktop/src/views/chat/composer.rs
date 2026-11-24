@@ -1264,7 +1264,7 @@ fn build_model_selector(
         .px(8.0)
         .py(4.0)
         .radius(7.0)
-        .fill(if is_open { t.hover } else { Color::TRANSPARENT })
+        .fill(if is_open { t.pressed } else { t.hover })
         .help("Choose provider and model");
 
     if let Some(res) = resolved {
@@ -1304,8 +1304,10 @@ fn build_model_selector(
         trigger = trigger.layer_opacity(0.55);
     } else {
         let current_for_toggle = current_id.clone();
-        trigger = trigger.hover(t.hover).cursor(Cursor::Pointer).on_press_tx(
-            move |s: &mut AppState, _tx| {
+        trigger = trigger
+            .hover(t.pressed)
+            .cursor(Cursor::Pointer)
+            .on_press_tx(move |s: &mut AppState, _tx| {
                 s.chat_ui.reasoning_open = false;
                 if s.chat_ui.model_combobox.is_open() {
                     close_model_picker(s);
@@ -1316,8 +1318,7 @@ fn build_model_selector(
                         current: current_for_toggle.as_deref(),
                     });
                 }
-            },
-        );
+            });
     }
 
     if !is_open {
@@ -1869,7 +1870,7 @@ fn build_reasoning_selector(
             .px(7.0)
             .py(4.0)
             .radius(7.0)
-            .fill(if is_open { t.hover } else { Color::TRANSPARENT })
+            .fill(if is_open { t.pressed } else { t.hover })
             .help("Adjust reasoning effort")
             .child(icon(&icons::SIGNAL_BARS, 12.0).color(t.text_muted))
             .child(text(current_label.clone()).font(k.ty.small_medium).color(
@@ -1885,7 +1886,7 @@ fn build_reasoning_selector(
         trigger = trigger.layer_opacity(0.55);
     } else {
         trigger = trigger
-            .hover(t.hover)
+            .hover(t.pressed)
             .cursor(Cursor::Pointer)
             .on_press(|s: &mut AppState| {
                 close_model_picker(s);

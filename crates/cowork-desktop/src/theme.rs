@@ -190,12 +190,19 @@ pub struct ThemeTokens {
     pub scrim: Color,
     pub code_bg: Color,
     pub selection_bg: Color,
+    /// Warm accent wash under the selected sidebar row (the active page, project, task or
+    /// thread), in place of `rune_kit`'s neutral pressed fill.
+    pub nav_selected: Color,
+    /// The same wash a shade stronger, for the pointer resting on a selected row.
+    pub nav_selected_hover: Color,
     pub search_badges: [Color; 7],
     pub caption: TextStyle,
     pub label: TextStyle,
     pub body: TextStyle,
     pub body_lg: TextStyle,
     pub title: TextStyle,
+    /// Toolbar-weight page title: smaller than `title`, but clearly a heading next to `body`.
+    pub title_sm: TextStyle,
     pub code: TextStyle,
 }
 
@@ -601,15 +608,34 @@ fn tokens_with_accent_uncached(dark: bool, accent_palette: AccentPalette) -> The
     let body = TextStyle::new(13.0, 400.0).lh(20.0);
     let body_lg = TextStyle::new(15.0, 400.0).lh(24.0);
     let title = TextStyle::new(16.0, 600.0).lh(22.0);
+    let title_sm = TextStyle::new(15.0, 600.0).lh(20.0);
     let code = TextStyle::new(12.0, 400.0).mono().lh(18.0);
     let set = accent_tokens(accent_palette, dark, false);
+    let sidebar_bg = if dark {
+        srgb(0x1a, 0x1a, 0x1c)
+    } else {
+        srgb(0xee, 0xee, 0xec)
+    };
+    // The hover wash is composited over the sidebar up front, so a selected row keeps its hue
+    // under the pointer instead of flashing to the kit's neutral hover.
+    let (nav_selected, nav_selected_hover) = if dark {
+        (
+            set.accent.alpha(0.17),
+            composite_srgb_over(set.accent.alpha(0.26), sidebar_bg),
+        )
+    } else {
+        (
+            set.accent.alpha(0.19),
+            composite_srgb_over(set.accent.alpha(0.28), sidebar_bg),
+        )
+    };
 
     if dark {
         let text_base = srgb(0xe9, 0xe9, 0xe7);
         ThemeTokens {
             dark: true,
             app_bg: srgb(0x14, 0x14, 0x15),
-            sidebar_bg: srgb(0x1a, 0x1a, 0x1c),
+            sidebar_bg,
             panel_bg: srgb(0x20, 0x20, 0x23),
             elevated_bg: srgb(0x27, 0x27, 0x2b),
             card_bg: srgb(0x24, 0x24, 0x28),
@@ -652,12 +678,15 @@ fn tokens_with_accent_uncached(dark: bool, accent_palette: AccentPalette) -> The
             scrim: srgba(0x00, 0x00, 0x00, 0.56),
             code_bg: srgba(0x00, 0x00, 0x00, 0.30),
             selection_bg: set.accent.alpha(0.28),
+            nav_selected,
+            nav_selected_hover,
             search_badges,
             caption,
             label,
             body,
             body_lg,
             title,
+            title_sm,
             code,
         }
     } else {
@@ -665,7 +694,7 @@ fn tokens_with_accent_uncached(dark: bool, accent_palette: AccentPalette) -> The
         ThemeTokens {
             dark: false,
             app_bg: srgb(0xe8, 0xe8, 0xe5),
-            sidebar_bg: srgb(0xee, 0xee, 0xec),
+            sidebar_bg,
             panel_bg: srgb(0xfa, 0xfa, 0xf8),
             elevated_bg: srgb(0xff, 0xff, 0xff),
             card_bg: srgb(0xfa, 0xfa, 0xf8),
@@ -708,12 +737,15 @@ fn tokens_with_accent_uncached(dark: bool, accent_palette: AccentPalette) -> The
             scrim: srgba(0x1f, 0x1f, 0x1c, 0.36),
             code_bg: srgba(0x1f, 0x1f, 0x1c, 0.05),
             selection_bg: set.accent.alpha(0.24),
+            nav_selected,
+            nav_selected_hover,
             search_badges,
             caption,
             label,
             body,
             body_lg,
             title,
+            title_sm,
             code,
         }
     }
@@ -784,6 +816,12 @@ fn resolve_tokens_with_accent_uncached(
         } else {
             srgba(0x1f, 0x1f, 0x1c, 0.50)
         };
+        // A stronger wash keeps the selected row unmistakable on the deeper high-contrast surfaces.
+        tok.nav_selected = tok.accent.alpha(if dark { 0.28 } else { 0.30 });
+        tok.nav_selected_hover = composite_srgb_over(
+            tok.accent.alpha(if dark { 0.38 } else { 0.40 }),
+            tok.sidebar_bg,
+        );
         tok.text_muted = tok.text_base.alpha(0.88);
     }
     if reduced_transparency {
@@ -1025,6 +1063,25 @@ mod tests {
                         assert!(
                             ring_ratio >= min_ring,
                             "{palette:?} dark={dark} hc={high_contrast} focus_ring on {surf_name} {ring_ratio:.2} < {min_ring:.1}"
+                        );
+                    }
+
+                    // The selected-row wash must keep the row's label readable and its accent
+                    // icon visible, both at rest and under the pointer.
+                    for (wash_name, wash) in [
+                        ("nav_selected", tok.nav_selected),
+                        ("nav_selected_hover", tok.nav_selected_hover),
+                    ] {
+                        let wash_bg = composite_srgb_over(wash, tok.sidebar_bg);
+                        let label_ratio = contrast_ratio(tok.text_base, wash_bg);
+                        assert!(
+                            label_ratio >= 4.5,
+                            "{palette:?} dark={dark} hc={high_contrast} label on {wash_name} {label_ratio:.2} < 4.5"
+                        );
+                        let icon_ratio = contrast_ratio(tok.accent, wash_bg);
+                        assert!(
+                            icon_ratio >= 3.0,
+                            "{palette:?} dark={dark} hc={high_contrast} accent icon on {wash_name} {icon_ratio:.2} < 3.0"
                         );
                     }
 

@@ -131,12 +131,32 @@ pub fn build_utility_window(s: &AppState, cx: &mut Cx<AppState>, k: &Kit, t: &Th
         );
 
     let thread_list = if recent_threads.is_empty() {
-        el().w_full()
-            .padding(12.0)
-            .radius(8.0)
-            .fill(t.card_bg)
+        // Fills the window's remaining height, so an empty recent list reads as a finished
+        // empty state rather than one line of text above blank space.
+        col()
+            .key("utility-recent-empty")
+            .w_full()
+            .grow(1.0)
+            .min_h(132.0)
+            .items_center()
+            .justify_center()
+            .py(20.0)
+            .gap(6.0)
             .child(
-                text("No recent conversations.")
+                el().size(36.0, 36.0)
+                    .radius(10.0)
+                    .fill(t.accent_soft)
+                    .center()
+                    .child(icon(&icons::MESSAGE, 17.0).color(t.accent))
+                    .a11y_hidden(),
+            )
+            .child(
+                text("No recent conversations")
+                    .font(t.label)
+                    .color(t.text_base),
+            )
+            .child(
+                text("Chats you start will show up here.")
                     .font(t.caption)
                     .color(t.text_muted),
             )

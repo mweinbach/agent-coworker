@@ -4,7 +4,7 @@ use rune::{Align, Cursor, El, ScrollSpec, Side, TextEdit, col, el, icon, row, te
 use rune_kit::{Kit, PopupItem, PopupList};
 
 use crate::actions::{Action, ChatAction, NativeAction, ShellAction};
-use crate::state::AppState;
+use crate::state::{AppState, WindowMode};
 use crate::theme::ThemeTokens;
 
 use super::composer;
@@ -12,6 +12,17 @@ use super::icons;
 use super::model::landing_starter_prompts;
 
 const LANDING_MAX_WIDTH: f32 = 672.0;
+/// Below this width the landing uses its compact layout.
+const LANDING_COMPACT_WIDTH: f32 = 520.0;
+/// Side padding of the compact layout, so its starter chips can share the available width.
+const COMPACT_SIDE_PAD: f32 = 18.0;
+const COMPACT_CHIP_GAP: f32 = 8.0;
+
+/// Whether the landing is shown in a narrow surface such as the Quick Chat window, where the
+/// full-size greeting and starter cards would wrap and run off the bottom.
+fn is_compact(s: &AppState) -> bool {
+    s.window_mode == WindowMode::QuickChat || s.shell_ui.viewport_width < LANDING_COMPACT_WIDTH
+}
 
 /// Renders the new-chat landing experience when no active thread is open.
 pub fn build_landing_view(s: &AppState, k: &Kit, t: &ThemeTokens, overlays: &mut Vec<El>) -> El {
@@ -21,23 +32,24 @@ pub fn build_landing_view(s: &AppState, k: &Kit, t: &ThemeTokens, overlays: &mut
         || s.composer_drafts
             .get(&s.composer_key())
             .is_some_and(|d| !d.attachments.is_empty());
+    let compact = is_compact(s);
 
-    let greeting = build_greeting_header(s, k, t, selected_ws);
+    let greeting = build_greeting_header(s, k, t, selected_ws, compact);
     let target_picker = build_workspace_target_picker(s, k, t, overlays, selected_ws);
     let hero_composer = composer::build_composer(s, k, t, overlays, true);
-    let starters = build_starter_prompts(k, t, has_project_ws, has_draft_input);
+    let starters = build_starter_prompts(k, t, has_project_ws, has_draft_input, compact);
 
     let center_col = col()
         .key("new-chat-landing")
         .w_full()
         .max_w(LANDING_MAX_WIDTH)
         .items_center()
-        .gap(20.0)
+        .gap(if compact { 14.0 } else { 20.0 })
         .child(greeting)
         .child(
             col()
                 .w_full()
-                .gap(10.0)
+                .gap(if compact { 8.0 } else { 10.0 })
                 .child(
                     row()
                         .w_full()
@@ -63,8 +75,8 @@ pub fn build_landing_view(s: &AppState, k: &Kit, t: &ThemeTokens, overlays: &mut
                 .grow(1.0)
                 .min_h(0.0)
                 .items_center()
-                .px(24.0)
-                .py(24.0)
+                .px(if compact { COMPACT_SIDE_PAD } else { 24.0 })
+                .py(if compact { 18.0 } else { 24.0 })
                 .child(rune::el().grow(1.0).min_h(0.0))
                 .child(center_col)
                 .child(rune::el().grow(1.0).min_h(0.0)),
@@ -76,6 +88,7 @@ fn build_greeting_header(
     k: &Kit,
     t: &ThemeTokens,
     selected_ws: Option<&crate::state::WorkspaceRecord>,
+    compact: bool,
 ) -> El {
     let profile_name = selected_ws
         .and_then(|w| w.user_name.as_deref())
@@ -98,7 +111,11 @@ fn build_greeting_header(
         .gap(6.0)
         .child(
             text(heading)
-                .font(rune::TextStyle::new(26.0, 600.0).lh(32.0).tracking(-0.55))
+                .font(if compact {
+                    rune::TextStyle::new(20.0, 600.0).lh(26.0).tracking(-0.35)
+                } else {
+                    rune::TextStyle::new(26.0, 600.0).lh(32.0).tracking(-0.55)
+                })
                 .color(t.text_base),
         )
         .child(text(subtitle).font(k.ty.ui).color(t.text_muted))
@@ -128,7 +145,8 @@ fn build_workspace_target_picker(
         .px(8.0)
         .py(5.0)
         .radius(8.0)
-        .hover(t.hover)
+        .fill(t.hover)
+        .hover(t.pressed)
         .cursor(Cursor::Pointer)
         .help("Select workspace target")
         .on_press(|s: &mut AppState| {
@@ -217,7 +235,15 @@ fn starter_icon(id: &str) -> &'static rune::Icon {
     }
 }
 
-fn build_starter_prompts(k: &Kit, t: &ThemeTokens, has_workspace: bool, hidden: bool) -> El {
+/// The starter prompts as a wrapping grid of cards or, when `compact`, as single-line chips two
+/// to a row that share whatever width a narrow surface has.
+fn build_starter_prompts(
+    k: &Kit,
+    t: &ThemeTokens,
+    has_workspace: bool,
+    hidden: bool,
+    compact: bool,
+) -> El {
     if hidden {
         return el()
             .key("landing-starters-hidden")
@@ -227,51 +253,64 @@ fn build_starter_prompts(k: &Kit, t: &ThemeTokens, has_workspace: bool, hidden: 
             .disabled(true);
     }
     let prompts = landing_starter_prompts(has_workspace);
-    let mut grid = row().w_full().flex_wrap().gap(10.0);
+    let mut cards: Vec<El> = Vec::with_capacity(prompts.len());
 
     for prompt in prompts {
         let prompt_text = prompt.prompt.to_string();
-        let mut card = col()
-            .key(format!("starter:{}", prompt.id))
-            .grow(1.0)
-            .min_w(260.0)
-            .max_w(331.0)
-            .gap(3.0)
-            .px(13.0)
-            .py(10.0)
-            .radius(10.0)
-            .border(1.0, t.border_muted)
+        let title_row = row()
+            .w_full()
+            .items_center()
+            .justify_between()
+            .gap(6.0)
             .child(
                 row()
-                    .w_full()
                     .items_center()
-                    .justify_between()
                     .gap(6.0)
+                    .min_w(0.0)
+                    .grow(1.0)
+                    .child(icon(starter_icon(prompt.id), 13.0).color(t.text_muted))
                     .child(
-                        row()
-                            .items_center()
-                            .gap(6.0)
-                            .min_w(0.0)
-                            .grow(1.0)
-                            .child(icon(starter_icon(prompt.id), 13.0).color(t.text_muted))
-                            .child(
-                                text(prompt.label)
-                                    .font(k.ty.ui_medium)
-                                    .color(t.text_base)
-                                    .truncate(),
-                            ),
-                    )
-                    .child(icon(&icons::ARROW_UP, 12.0).color(t.text_faint)),
+                        text(prompt.label)
+                            .font(k.ty.ui_medium)
+                            .color(t.text_base)
+                            .truncate(),
+                    ),
             )
-            .child(
-                text(prompt.detail)
-                    .font(k.ty.small)
-                    .color(t.text_muted)
-                    .truncate(),
-            );
+            .child(icon(&icons::ARROW_UP, 12.0).color(t.text_faint));
 
-        card = card
-            .hover(t.elevated_bg)
+        let card = if compact {
+            row()
+                .key(format!("starter:{}", prompt.id))
+                .grow(1.0)
+                .min_w(0.0)
+                .h(34.0)
+                .px(10.0)
+                .center_y()
+                .radius(8.0)
+                .child(title_row)
+        } else {
+            col()
+                .key(format!("starter:{}", prompt.id))
+                .grow(1.0)
+                .min_w(260.0)
+                .max_w(331.0)
+                .gap(3.0)
+                .px(13.0)
+                .py(10.0)
+                .radius(10.0)
+                .child(title_row)
+                .child(
+                    text(prompt.detail)
+                        .font(k.ty.small)
+                        .color(t.text_muted)
+                        .truncate(),
+                )
+        };
+
+        let card = card
+            .fill(t.elevated_bg)
+            .border(1.0, t.border_muted)
+            .hover(t.hover)
             .cursor(Cursor::Pointer)
             .help("Insert starter prompt")
             .on_press(move |s: &mut AppState| {
@@ -284,8 +323,19 @@ fn build_starter_prompts(k: &Kit, t: &ThemeTokens, has_workspace: bool, hidden: 
                 }));
             });
 
-        grid = grid.child(card);
+        cards.push(card);
     }
 
-    grid
+    if compact {
+        // Two chips share each row, so they fit any narrow width without measuring it.
+        let mut stack = col().w_full().gap(COMPACT_CHIP_GAP);
+        let mut rest = cards;
+        while !rest.is_empty() {
+            let pair: Vec<El> = rest.drain(..rest.len().min(2)).collect();
+            stack = stack.child(row().w_full().gap(COMPACT_CHIP_GAP).children(pair));
+        }
+        return stack;
+    }
+
+    row().w_full().flex_wrap().gap(10.0).children(cards)
 }

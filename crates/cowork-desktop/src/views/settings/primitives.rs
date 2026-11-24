@@ -397,7 +397,9 @@ pub fn status_pill(label: impl Into<String>, tone: StatusTone, k: &Kit, t: &Them
             t.warning,
         ),
         StatusTone::Danger => (k.alpha(t.danger, 0.14), k.alpha(t.danger, 0.35), t.danger),
-        StatusTone::Neutral => (k.c.layer_02, t.border_muted, t.text_muted),
+        // A wash and a real hairline rather than an elevated fill, so the neutral pill keeps its
+        // outline on white cards as well as on the page.
+        StatusTone::Neutral => (t.hover, t.border, t.text_muted),
     };
     row()
         .px(8.0)

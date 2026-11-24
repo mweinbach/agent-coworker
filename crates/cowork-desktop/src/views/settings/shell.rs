@@ -14,6 +14,7 @@ use crate::theme::ThemeTokens;
 use crate::views::settings::experiments::is_flag_enabled;
 use crate::views::settings::icons;
 use crate::views::settings::primitives::{active_workspace_banner_label, theme_memo_sig};
+use crate::views::shell::helpers::{warm_row, warm_selected};
 
 /// One item in the Settings navigation sidebar.
 #[derive(Clone, Copy)]
@@ -260,8 +261,14 @@ fn nav_pane(
             for item in &group.pages {
                 let page_id = item.id;
                 let is_active = page_id == active_page;
-                let nav_row = SidebarRow::new(item.label)
-                    .icon(item.icon)
+                let nav_row = warm_selected(
+                    warm_row(
+                        SidebarRow::new(item.label),
+                        Some(item.icon),
+                        is_active,
+                        k,
+                        t,
+                    )
                     .height(30.0)
                     .selected(is_active)
                     .on_select(move |s: &mut AppState, tx| {
@@ -270,7 +277,10 @@ fn nav_pane(
                         s.dispatch_tx(Action::Navigate(NavAction::OpenSettings(Some(page_id))), tx);
                     })
                     .build(k)
-                    .key(format!("settings-nav-{}", page_key(page_id)));
+                    .key(format!("settings-nav-{}", page_key(page_id))),
+                    is_active,
+                    t,
+                );
                 sec = sec.row(nav_row);
             }
             sb = sb.section(sec);

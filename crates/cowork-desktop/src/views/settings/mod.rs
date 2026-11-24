@@ -94,11 +94,11 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>, _k: &Kit) -> SubviewOutput {
 
     let layout = build_layout(s, cx, &resolved_k, &t);
 
-    let mut heading = row().items_center().gap(8.0).min_w(0.0).child(
-        text(layout.title)
-            .font(resolved_k.ty.ui_medium)
-            .color(t.text_base),
-    );
+    let mut heading = row()
+        .items_center()
+        .gap(8.0)
+        .min_w(0.0)
+        .child(text(layout.title).font(t.title_sm).color(t.text_base));
     if let Some(badge_label) = layout.workspace_badge.as_deref() {
         heading = heading.child(
             Badge::new(badge_label)

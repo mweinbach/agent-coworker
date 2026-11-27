@@ -255,7 +255,14 @@ pub(crate) fn push_onboarding_overlays(
         .fill(t.popover_bg)
         .token_motion(k.motion.overlay)
         .child(top_bar)
-        .child(step_body)
+        .child(
+            // Keep the step dots and footer buttons visible on short windows; only the body
+            // scrolls once the card runs out of height (840x560 minimum, or zoomed in).
+            el().w_full().shrink().min_h(0.0).scroll(ScrollSpec {
+                stick_bottom: false,
+            })
+            .child(step_body),
+        )
         .child(footer);
 
     let elevated_card = k.elevate(card, &k.elevation.overlay);

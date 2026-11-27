@@ -458,7 +458,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                     .child(
                         row().w_full().justify_end().child(
                             Button::new("Close")
-                                .variant(ButtonVariant::Contrast)
+                                .variant(ButtonVariant::Ghost)
                                 .control_size(ControlSize::Regular)
                                 .on_press(|s: &mut AppState| {
                                     s.settings_ui.usage_estimates_dialog_open = false;

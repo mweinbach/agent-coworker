@@ -718,6 +718,7 @@ fn render_server_row(
                 .child(
                     TextInput::new(current_key_edit)
                         .placeholder("Paste API key...")
+                        .secure()
                         .width(Some(260.0))
                         .on_edit(move |s: &mut AppState| {
                             s.settings_ui

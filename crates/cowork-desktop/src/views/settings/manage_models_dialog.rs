@@ -342,7 +342,7 @@ pub fn push_overlay(
     body = body.child(
         row().w_full().justify_end().child(
             Button::new("Done")
-                .variant(ButtonVariant::Contrast)
+                .variant(ButtonVariant::Ghost)
                 .control_size(ControlSize::Regular)
                 .on_press(|s: &mut AppState| {
                     s.settings_ui.manage_models_provider_id = None;

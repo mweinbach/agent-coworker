@@ -478,7 +478,7 @@ fn build_pane_slot(
         } else {
             slot = slot.fill(k.c.bg_deep);
             if let Some(alpha) = vibrancy {
-                slot = slot.system_material(rune::SystemMaterial::Popover).child(
+                slot = slot.system_material(rune::SystemMaterial::Sidebar).child(
                     el().key("sidebar-vibrancy-tint")
                         .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
                         .motion(width_spring)
@@ -566,7 +566,7 @@ fn build_pane_slot(
         // the exact visible width on every animation frame.
         slot = slot.fill(k.c.bg_deep);
         if let Some(alpha) = vibrancy {
-            slot = slot.system_material(rune::SystemMaterial::Popover).child(
+            slot = slot.system_material(rune::SystemMaterial::Sidebar).child(
                 el().key("sidebar-vibrancy-tint")
                     .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
                     .motion(width_spring)

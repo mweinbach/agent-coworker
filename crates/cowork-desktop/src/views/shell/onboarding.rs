@@ -524,7 +524,7 @@ fn build_workspace_step(
     let subtitle = if !picker_enabled {
         "Connected to the workspace folder Cowork was launched with."
     } else if has_multiple {
-        "Select an existing project folder or add another folder from your Mac."
+        "Select an existing project folder or add another folder from this computer."
     } else {
         "Choose a folder on your machine. This is where Cowork will read and write files."
     };
@@ -1040,7 +1040,7 @@ fn build_expanded_provider_controls(
 
         let mut lm_detail = detail
             .child(
-                text("LM Studio runs models locally on your Mac. Connect it to expose your local models in Cowork.")
+                text("LM Studio runs models locally on your computer. Connect it to expose your local models in Cowork.")
                     .font(t.caption)
                     .color(t.text_muted)
                     .wrap(),
@@ -1876,7 +1876,7 @@ fn push_skip_confirm_dialog(k: &Kit, t: &ThemeTokens, layer: &mut Vec<El>) {
         .child(spacer())
         .child(
             Button::new("Continue setup")
-                .variant(ButtonVariant::Ghost)
+                .variant(ButtonVariant::Contrast)
                 .on_press_tx(|s: &mut AppState, _| {
                     s.shell_ui.onboarding_confirm_discard = false;
                 })
@@ -1885,7 +1885,7 @@ fn push_skip_confirm_dialog(k: &Kit, t: &ThemeTokens, layer: &mut Vec<El>) {
         )
         .child(
             Button::new("Skip for now")
-                .variant(ButtonVariant::Contrast)
+                .variant(ButtonVariant::Ghost)
                 .on_press_tx(|s: &mut AppState, _| {
                     s.shell_ui.onboarding_confirm_discard = false;
                     s.dispatch(Action::Shell(ShellAction::SkipOnboarding));

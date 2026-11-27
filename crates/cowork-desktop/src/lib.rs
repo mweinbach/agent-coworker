@@ -1016,6 +1016,11 @@ pub fn run() {
         .modifier_keys()
         .titlebar(Titlebar::new(main_titlebar_h).traffic_lights(16.0, main_tl_y))
         .keep_running()
+        // ProMotion: cap motion no one is steering (streamed word fades and other ambient
+        // animation) at 60 Hz and reveal-only wake-ups at 30 Hz; input-steered motion keeps the
+        // display's full rate.
+        .ambient_fps(60.0)
+        .reveal_fps(30.0)
         .turn_scope(enter_shared_turn, leave_shared_turn);
 
     let main_handle = app.handle();

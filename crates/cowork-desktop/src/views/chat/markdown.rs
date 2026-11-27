@@ -1452,9 +1452,10 @@ pub fn citation_sources_carousel(
                 .py(8.0)
                 .radius(10.0)
                 .fill(t.card_bg)
-                .hover(t.elevated_bg)
+                .focusable(true)
                 .border(1.0, t.border_muted)
                 .help(source.url.clone());
+            card = k.interactive_with(card, t.elevated_bg, t.pressed);
             if is_allowed_external_url(&open_url) {
                 card = card
                     .cursor(Cursor::Pointer)

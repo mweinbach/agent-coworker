@@ -156,7 +156,7 @@ pub fn build_command_palette(s: &AppState, k: &Kit, t: &ThemeTokens) -> Option<E
         .continuous_corners()
         .fill(t.panel_bg)
         .child(
-            text("↑↓ navigate · Enter run · Esc close")
+            text("↑↓ navigate · Enter run")
                 .font(t.caption)
                 .color(t.text_faint),
         )
@@ -265,18 +265,22 @@ fn palette_row(item: PaletteItem, highlighted: bool, k: &Kit, t: &ThemeTokens) -
         r = r.child(Badge::new("↵").build(k));
     }
 
-    el().key(item.key)
-        .w_full()
-        .px(10.0)
-        .py(7.0)
-        .radius(7.0)
-        .fill(row_bg)
-        .hover(t.hover)
-        .on_press_tx(move |s: &mut AppState, tx| {
-            close_command_palette(s);
-            s.dispatch_tx(act.clone(), tx);
-        })
-        .child(r)
+    k.interactive_with(
+        el().key(item.key)
+            .w_full()
+            .px(10.0)
+            .py(7.0)
+            .radius(7.0)
+            .fill(row_bg)
+            .focusable(true)
+            .on_press_tx(move |s: &mut AppState, tx| {
+                close_command_palette(s);
+                s.dispatch_tx(act.clone(), tx);
+            }),
+        t.hover,
+        t.pressed,
+    )
+    .child(r)
 }
 
 fn matches_query(query: &str, title: &str, subtitle: &str) -> bool {

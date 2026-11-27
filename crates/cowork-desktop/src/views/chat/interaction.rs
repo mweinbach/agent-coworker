@@ -775,7 +775,6 @@ fn build_user_input_card(
                 } else {
                     t.panel_bg
                 })
-                .hover(t.hover)
                 .border(
                     1.0,
                     if is_selected {
@@ -845,6 +844,8 @@ fn build_user_input_card(
             if is_selected {
                 opt_row = opt_row.child(icon(k.glyph.check, 13.0).color(t.accent));
             }
+            // Hover becomes a press while held, and the option is reachable with Tab and a focus ring.
+            opt_row = k.interactive_with(opt_row.focusable(true), t.hover, t.pressed);
             opts_col = opts_col.child(opt_row);
         }
         card = card.child(opts_col);

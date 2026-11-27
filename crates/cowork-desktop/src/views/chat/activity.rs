@@ -207,7 +207,7 @@ fn build_live_group_header(
         .py(8.0)
         .radius(10.0)
         .fill(k.alpha(t.elevated_bg, 0.72))
-        .hover(t.elevated_bg)
+        .focusable(true)
         .border(
             1.0,
             if group.has_pending_approval {
@@ -230,6 +230,7 @@ fn build_live_group_header(
                 .grow(1.0)
                 .min_w(0.0),
         );
+    header = k.interactive_with(header, t.elevated_bg, t.pressed);
 
     if group.has_pending_approval {
         header = header.child(status_pill(k, t, "Needs review", StatusPillTone::Danger));
@@ -301,7 +302,7 @@ fn build_completed_group_header(
         .px(6.0)
         .py(3.0)
         .radius(6.0)
-        .hover(t.hover)
+        .focusable(true)
         .cursor(Cursor::Pointer)
         .role("button")
         .expanded(expanded)
@@ -321,6 +322,7 @@ fn build_completed_group_header(
                 }),
         )
         .child(icon(chevron, 12.0).color(t.text_faint));
+    let trigger = k.interactive_with(trigger, t.hover, t.pressed);
 
     let mut bar = row().w_full().items_center().gap(8.0).child(trigger);
 
@@ -510,7 +512,7 @@ fn build_reasoning_node(
             .py(6.0)
             .radius(8.0)
             .fill(k.alpha(t.elevated_bg, 0.35))
-            .hover(t.elevated_bg)
+            .focusable(true)
             .cursor(Cursor::Pointer)
             .role("button")
             .expanded(is_open)
@@ -530,6 +532,7 @@ fn build_reasoning_node(
                     .truncate()
                     .grow(1.0),
             );
+        let trigger = k.interactive_with(trigger, t.elevated_bg, t.pressed);
 
         let mut sec_col = col().key(sec_key.clone()).w_full().gap(4.0).child(trigger);
         if is_open && !sec.body.trim().is_empty() {
@@ -693,7 +696,7 @@ fn build_tool_cluster_card(
     }
     hdr = hdr.child(icon(chevron, 12.0).color(t.text_faint));
 
-    let mut trigger = col()
+    let trigger = col()
         .w_full()
         .gap(3.0)
         .px(8.0)
@@ -723,6 +726,7 @@ fn build_tool_cluster_card(
             }
         })
         .child(hdr);
+    let mut trigger = k.interactive_with(trigger, t.hover, t.pressed);
 
     if !expanded && !preview_lines.is_empty() {
         for preview in preview_lines {
@@ -809,7 +813,7 @@ fn build_tool_card(
         } else {
             rune::Color::TRANSPARENT
         })
-        .hover(t.hover)
+        .focusable(true)
         .border(
             1.0,
             if attention {
@@ -833,6 +837,7 @@ fn build_tool_card(
                 .font(k.ty.small_medium)
                 .color(t.text_base),
         );
+    hdr = k.interactive_with(hdr, t.hover, t.pressed);
 
     if !display_subtitle.is_empty() {
         hdr = hdr.child(

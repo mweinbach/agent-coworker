@@ -555,24 +555,28 @@ fn build_copy_chip_button(
     let label = if copied { "Copied" } else { "Copy" };
     let fg = if copied { t.success } else { t.text_faint };
 
-    row()
-        .key(copy_key.clone())
-        .items_center()
-        .gap(4.0)
-        .px(6.0)
-        .py(3.0)
-        .radius(6.0)
-        .hover(t.elevated_bg)
-        .cursor(Cursor::Pointer)
-        .role("button")
-        .label(help)
-        .help(help)
-        .on_press_tx(move |s: &mut AppState, tx: &mut Tx| {
-            tx.copy(&payload);
-            s.chat_ui.mark_copied(&copy_key, s.now_secs);
-        })
-        .child(icon(glyph, 12.0).color(fg))
-        .child(text(label).font(k.ty.small_medium).color(fg))
+    k.interactive_with(
+        row()
+            .key(copy_key.clone())
+            .items_center()
+            .gap(4.0)
+            .px(6.0)
+            .py(3.0)
+            .radius(6.0)
+            .focusable(true)
+            .cursor(Cursor::Pointer)
+            .role("button")
+            .label(help)
+            .help(help)
+            .on_press_tx(move |s: &mut AppState, tx: &mut Tx| {
+                tx.copy(&payload);
+                s.chat_ui.mark_copied(&copy_key, s.now_secs);
+            }),
+        t.elevated_bg,
+        t.pressed,
+    )
+    .child(icon(glyph, 12.0).color(fg))
+    .child(text(label).font(k.ty.small_medium).color(fg))
 }
 
 /// Renders active inline citation or mention detail popovers into the shell overlay layer.
@@ -737,14 +741,15 @@ pub fn render_active_feed_popovers(s: &AppState, k: &Kit, t: &ThemeTokens, overl
                     .w_full(),
             );
         if is_allowed_external_url(&url_open) {
-            body = body.hover(t.elevated_bg).cursor(Cursor::Pointer).on_press(
-                move |s: &mut AppState| {
+            body = k
+                .interactive_with(body.focusable(true), t.elevated_bg, t.pressed)
+                .cursor(Cursor::Pointer)
+                .on_press(move |s: &mut AppState| {
                     s.chat_ui.active_citation_popover = None;
                     s.dispatch(Action::Shell(ShellAction::RequestExternalUrl(
                         url_open.clone(),
                     )));
-                },
-            );
+                });
         }
 
         let card = col()

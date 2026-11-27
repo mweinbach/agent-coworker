@@ -652,7 +652,7 @@ fn build_sidebar_search_overlay(s: &AppState, k: &Kit, t: &ThemeTokens) -> Optio
                 .radius(8.0)
                 .gap(10.0)
                 .center_y()
-                .hover(t.hover)
+                .focusable(true)
                 .on_press_tx(move |s: &mut AppState, tx| {
                     s.shell_ui.search_overlay_open = false;
                     s.shell_ui.search_selected = 0;
@@ -681,6 +681,7 @@ fn build_sidebar_search_overlay(s: &AppState, k: &Kit, t: &ThemeTokens) -> Optio
             if selected {
                 row_el = row_el.fill(t.hover).border(1.0, t.border_muted);
             }
+            row_el = k.interactive_with(row_el, t.hover, t.pressed);
             list_children.push(row_el);
         }
     }

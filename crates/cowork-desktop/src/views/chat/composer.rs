@@ -1210,11 +1210,12 @@ fn build_effort_drag_bar(
             let pid_click = provider_id.clone();
             lbl_el =
                 lbl_el
-                    .hover(t.hover)
+                    .focusable(true)
                     .cursor(Cursor::Pointer)
                     .on_press(move |s: &mut AppState| {
                         apply_effort_selection(s, &ck_click, tid_click.as_deref(), &pid_click, val);
                     });
+            lbl_el = k.interactive_with(lbl_el, t.hover, t.pressed);
         }
 
         let positioned = if idx == 0 {
@@ -1470,54 +1471,58 @@ fn build_model_selector(
     let mut rail_items = col().w_full().gap(1.0).padding(6.0);
 
     rail_items = rail_items.child(
-        row()
-            .key("model-rail:all")
-            .w_full()
-            .items_center()
-            .gap(7.0)
-            .px(8.0)
-            .py(6.0)
-            .radius(7.0)
-            .fill(if all_selected {
-                t.pressed
-            } else {
-                Color::TRANSPARENT
-            })
-            .hover(t.hover)
-            .cursor(Cursor::Pointer)
-            .on_press(|s: &mut AppState| {
-                s.chat_ui.model_provider_filter = None;
-                s.chat_ui.model_picker_search.clear();
-            })
-            .child(
-                el().size(18.0, 18.0)
-                    .radius(5.0)
-                    .fill(t.hover)
-                    .center()
-                    .shrink()
-                    .child(icon(&icons::GRID_2X2, 10.0).color(t.text_muted)),
-            )
-            .child(
-                text("All providers")
-                    .font(if all_selected {
-                        k.ty.small_medium
-                    } else {
-                        k.ty.small
-                    })
-                    .color(if all_selected {
-                        t.text_base
-                    } else {
-                        t.text_muted
-                    })
-                    .truncate()
-                    .grow(1.0)
-                    .min_w(0.0),
-            )
-            .child(
-                text(total_models.to_string())
-                    .font(k.ty.text_xsmall)
-                    .color(t.text_faint),
-            ),
+        k.interactive_with(
+            row()
+                .key("model-rail:all")
+                .w_full()
+                .items_center()
+                .gap(7.0)
+                .px(8.0)
+                .py(6.0)
+                .radius(7.0)
+                .fill(if all_selected {
+                    t.pressed
+                } else {
+                    Color::TRANSPARENT
+                })
+                .focusable(true)
+                .cursor(Cursor::Pointer)
+                .on_press(|s: &mut AppState| {
+                    s.chat_ui.model_provider_filter = None;
+                    s.chat_ui.model_picker_search.clear();
+                })
+                .child(
+                    el().size(18.0, 18.0)
+                        .radius(5.0)
+                        .fill(t.hover)
+                        .center()
+                        .shrink()
+                        .child(icon(&icons::GRID_2X2, 10.0).color(t.text_muted)),
+                )
+                .child(
+                    text("All providers")
+                        .font(if all_selected {
+                            k.ty.small_medium
+                        } else {
+                            k.ty.small
+                        })
+                        .color(if all_selected {
+                            t.text_base
+                        } else {
+                            t.text_muted
+                        })
+                        .truncate()
+                        .grow(1.0)
+                        .min_w(0.0),
+                )
+                .child(
+                    text(total_models.to_string())
+                        .font(k.ty.text_xsmall)
+                        .color(t.text_faint),
+                ),
+            t.hover,
+            t.pressed,
+        ),
     );
 
     for g in &groups {
@@ -1528,50 +1533,54 @@ fn build_model_selector(
         let pid_click = pid.clone();
 
         rail_items = rail_items.child(
-            row()
-                .key(format!("model-rail:{pid}"))
-                .w_full()
-                .items_center()
-                .gap(7.0)
-                .px(8.0)
-                .py(6.0)
-                .radius(7.0)
-                .fill(if selected {
-                    t.pressed
-                } else {
-                    Color::TRANSPARENT
-                })
-                .hover(t.hover)
-                .cursor(Cursor::Pointer)
-                .on_press(move |s: &mut AppState| {
-                    s.chat_ui.model_provider_filter = Some(pid_click.clone());
-                    s.chat_ui.model_picker_search.clear();
-                })
-                .child(
-                    el().size(18.0, 18.0)
-                        .radius(5.0)
-                        .fill(t.hover)
-                        .center()
-                        .shrink()
-                        .child(text(mono).font(k.ty.text_xsmall).color(t.text_muted)),
-                )
-                .child(
-                    text(pname)
-                        .font(if selected {
-                            k.ty.small_medium
-                        } else {
-                            k.ty.small
-                        })
-                        .color(if selected { t.text_base } else { t.text_muted })
-                        .truncate()
-                        .grow(1.0)
-                        .min_w(0.0),
-                )
-                .child(
-                    text(g.models.len().to_string())
-                        .font(k.ty.text_xsmall)
-                        .color(t.text_faint),
-                ),
+            k.interactive_with(
+                row()
+                    .key(format!("model-rail:{pid}"))
+                    .w_full()
+                    .items_center()
+                    .gap(7.0)
+                    .px(8.0)
+                    .py(6.0)
+                    .radius(7.0)
+                    .fill(if selected {
+                        t.pressed
+                    } else {
+                        Color::TRANSPARENT
+                    })
+                    .focusable(true)
+                    .cursor(Cursor::Pointer)
+                    .on_press(move |s: &mut AppState| {
+                        s.chat_ui.model_provider_filter = Some(pid_click.clone());
+                        s.chat_ui.model_picker_search.clear();
+                    })
+                    .child(
+                        el().size(18.0, 18.0)
+                            .radius(5.0)
+                            .fill(t.hover)
+                            .center()
+                            .shrink()
+                            .child(text(mono).font(k.ty.text_xsmall).color(t.text_muted)),
+                    )
+                    .child(
+                        text(pname)
+                            .font(if selected {
+                                k.ty.small_medium
+                            } else {
+                                k.ty.small
+                            })
+                            .color(if selected { t.text_base } else { t.text_muted })
+                            .truncate()
+                            .grow(1.0)
+                            .min_w(0.0),
+                    )
+                    .child(
+                        text(g.models.len().to_string())
+                            .font(k.ty.text_xsmall)
+                            .color(t.text_faint),
+                    ),
+                t.hover,
+                t.pressed,
+            ),
         );
     }
 
@@ -1657,7 +1666,7 @@ fn build_model_selector(
                     } else {
                         Color::TRANSPARENT
                     })
-                    .hover(t.hover)
+                    .focusable(true)
                     .cursor(Cursor::Pointer)
                     .on_press(move |s: &mut AppState| {
                         close_model_picker(s);
@@ -1692,6 +1701,7 @@ fn build_model_selector(
                             .opacity(if is_selected { 1.0 } else { 0.0 }),
                     ),
                 );
+                mrow = k.interactive_with(mrow, t.hover, t.pressed);
                 models_list = models_list.child(mrow);
             }
         }

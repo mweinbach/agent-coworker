@@ -145,8 +145,8 @@ fn build_workspace_target_picker(
         .px(8.0)
         .py(5.0)
         .radius(8.0)
-        .fill(t.hover)
-        .hover(t.pressed)
+        .fill(rune::Color::TRANSPARENT)
+        .focusable(true)
         .cursor(Cursor::Pointer)
         .help("Select workspace target")
         .on_press(|s: &mut AppState| {
@@ -161,6 +161,7 @@ fn build_workspace_target_picker(
                 .truncate(),
         )
         .child(icon(k.glyph.chevron_down, 12.0).color(t.text_faint));
+    let trigger = k.interactive_with(trigger, t.hover, t.pressed);
 
     if s.chat_ui.landing_target_open {
         let mut items: Vec<PopupItem> = Vec::new();
@@ -310,7 +311,7 @@ fn build_starter_prompts(
         let card = card
             .fill(t.elevated_bg)
             .border(1.0, t.border_muted)
-            .hover(t.hover)
+            .focusable(true)
             .cursor(Cursor::Pointer)
             .help("Insert starter prompt")
             .on_press(move |s: &mut AppState| {
@@ -322,6 +323,7 @@ fn build_starter_prompts(
                     text: prompt_text.clone(),
                 }));
             });
+        let card = k.interactive_with(card, t.hover, t.pressed);
 
         cards.push(card);
     }

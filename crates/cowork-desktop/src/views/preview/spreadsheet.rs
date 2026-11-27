@@ -506,6 +506,10 @@ fn render_sheet_table(s: &AppState, sheet_idx: usize, sheet: &SpreadsheetSheetDa
     .name(format!("Spreadsheet preview: {}", sheet.name))
     .zebra(true)
     .style(style)
+    // Keep every column at its own width and scroll the header with the rows when they are wider
+    // than the pane, so the columns past the right edge stay reachable; pin the row index.
+    .scroll_wide(true)
+    .frozen_columns(1)
     .column(
         TableColumn::new(ROW_INDEX_COL_ID, "#")
             .width(52.0)
@@ -581,7 +585,6 @@ fn render_sheet_table(s: &AppState, sheet_idx: usize, sheet: &SpreadsheetSheetDa
         .grow(1.0)
         .shrink()
         .min_h(0.0)
-        .scroll_x()
         .child(el().w_full().h_full().min_h(0.0).child(table.build(s, k)))
 }
 

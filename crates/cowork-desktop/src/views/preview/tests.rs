@@ -542,6 +542,88 @@ fn renders_csv_preview_with_raw_toggle() {
 
 #[test]
 fn wide_and_tall_spreadsheet_preserves_sheet_tabs_without_vertical_overflow() {
+    let mut rt = Runtime::new(
+        wide_workbook_state(),
+        render_preview_root,
+        PREVIEW_VIEWPORT,
+        Env::new(true, 2.0),
+    );
+    rt.frame(0.0);
+    let rgba = render_offscreen_rgba(&mut rt, false);
+    maybe_save_snap("spreadsheet-preview-wide-light", &rgba, 2.0);
+
+    let els = rt.elements();
+    let tabs_rect = els
+        .iter()
+        .find(|e| e.key.as_deref() == Some("spreadsheet-sheet-tabs"))
+        .expect("sheet tabs should render on multi-sheet wide/tall workbook")
+        .rect;
+    assert!(
+        tabs_rect[1] + tabs_rect[3] <= PREVIEW_VIEWPORT.1 + 0.5,
+        "sheet tabs must stay inside viewport bottom: {tabs_rect:?}"
+    );
+}
+
+/// A column past the right edge of a wide sheet must be reachable: the table keeps each column
+/// at its own width and scrolls sideways, with the row-index column pinned.
+#[test]
+fn wide_spreadsheet_scrolls_sideways_to_reach_every_column() {
+    let mut rt = Runtime::new(
+        wide_workbook_state(),
+        render_preview_root,
+        PREVIEW_VIEWPORT,
+        Env::new(true, 2.0),
+    );
+    rt.frame(0.0);
+
+    macro_rules! header {
+        ($title:expr) => {
+            rt.elements()
+                .iter()
+                .find(|e| e.text.as_deref() == Some($title))
+                .map(|e| e.rect)
+        };
+    }
+
+    let index_before = header!("#").expect("row index header");
+    let first = header!("C1").expect("first column header");
+    let last = header!("C12").expect("last column header is laid out");
+    assert!(
+        last[0] > first[0] && last[0] >= PREVIEW_VIEWPORT.0,
+        "columns keep their own width past the pane edge: first {first:?}, last {last:?}"
+    );
+
+    // A horizontal wheel gesture over the middle of the table scrolls it toward its last columns.
+    let table = rt
+        .elements()
+        .iter()
+        .find(|e| e.key.as_deref() == Some("spreadsheet-table-scroll-0"))
+        .expect("table viewport")
+        .rect;
+    let (cx, cy) = (table[0] + table[2] / 2.0, table[1] + table[3] / 2.0);
+    rt.pointer_move(cx, cy);
+    rt.wheel_began();
+    rt.wheel_xy(cx, cy, -600.0, 0.0);
+    rt.wheel_ended();
+    for step in 1..=60u32 {
+        rt.frame(f64::from(step) * 0.05);
+    }
+
+    let last_after = header!("C12").expect("last column header after scrolling");
+    let index_after = header!("#").expect("row index header after scrolling");
+    assert!(
+        last_after[0] >= index_after[0] + index_after[2]
+            && last_after[0] + last_after[2] <= PREVIEW_VIEWPORT.0 + 1.0,
+        "last column must scroll fully into view beside the pinned row index: {last_after:?}"
+    );
+    assert!(
+        (index_after[0] - index_before[0]).abs() < 0.5,
+        "row index column stays pinned while the sheet scrolls: {index_before:?} -> {index_after:?}"
+    );
+}
+
+/// A two-sheet workbook with twelve columns and forty rows: wider and taller than the pane.
+fn wide_workbook_state() -> AppState {
     let mut csv = String::from("C1,C2,C3,C4,C5,C6,C7,C8,C9,C10,C11,C12\n");
     for r in 1..=40 {
         csv.push_str(&format!(
@@ -580,27 +662,7 @@ fn wide_and_tall_spreadsheet_preserves_sheet_tabs_without_vertical_overflow() {
         ..Default::default()
     });
     state.sync_preview_ui();
-
-    let mut rt = Runtime::new(
-        state,
-        render_preview_root,
-        PREVIEW_VIEWPORT,
-        Env::new(true, 2.0),
-    );
-    rt.frame(0.0);
-    let rgba = render_offscreen_rgba(&mut rt, false);
-    maybe_save_snap("spreadsheet-preview-wide-light", &rgba, 2.0);
-
-    let els = rt.elements();
-    let tabs_rect = els
-        .iter()
-        .find(|e| e.key.as_deref() == Some("spreadsheet-sheet-tabs"))
-        .expect("sheet tabs should render on multi-sheet wide/tall workbook")
-        .rect;
-    assert!(
-        tabs_rect[1] + tabs_rect[3] <= PREVIEW_VIEWPORT.1 + 0.5,
-        "sheet tabs must stay inside viewport bottom: {tabs_rect:?}"
-    );
+    state
 }
 
 fn escape_xml_text(raw: &str) -> String {

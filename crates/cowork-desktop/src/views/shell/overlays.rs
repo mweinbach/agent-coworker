@@ -696,16 +696,18 @@ fn build_sidebar_search_overlay(s: &AppState, k: &Kit, t: &ThemeTokens) -> Optio
         .child(chips)
         .child(el().w_full().h(1.0).fill(t.border_muted))
         .child(
-            col()
-                .key("search-overlay-results-scroll")
-                .w_full()
-                .max_h(330.0)
-                .scroll(ScrollSpec {
-                    stick_bottom: false,
-                })
-                .padding(6.0)
-                .gap(2.0)
-                .children(list_children),
+            k.scroll_bar(
+                col()
+                    .key("search-overlay-results-scroll")
+                    .w_full()
+                    .max_h(330.0)
+                    .scroll(ScrollSpec {
+                        stick_bottom: false,
+                    })
+                    .padding(6.0)
+                    .gap(2.0)
+                    .children(list_children),
+            ),
         )
         .child(el().w_full().h(1.0).fill(t.border_muted))
         .child(

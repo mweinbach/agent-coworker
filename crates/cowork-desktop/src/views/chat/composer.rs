@@ -1697,15 +1697,17 @@ fn build_model_selector(
         }
     }
 
-    let models_pane = col()
-        .key("composer-model-list")
-        .grow(1.0)
-        .min_w(0.0)
-        .h(MODEL_LIST_HEIGHT)
-        .scroll(ScrollSpec {
-            stick_bottom: false,
-        })
-        .child(models_list);
+    let models_pane = k.scroll_bar(
+        col()
+            .key("composer-model-list")
+            .grow(1.0)
+            .min_w(0.0)
+            .h(MODEL_LIST_HEIGHT)
+            .scroll(ScrollSpec {
+                stick_bottom: false,
+            })
+            .child(models_list),
+    );
 
     let split_body = row()
         .w_full()

@@ -1206,6 +1206,9 @@ fn build_code_preview_box(
                 .scroll(ScrollSpec {
                     stick_bottom: false,
                 })
+                // Fade an edge only while it hides command lines, so a long command never ends in
+                // a half-cut line that looks like the whole command.
+                .scroll_edge_fade(20.0)
                 .child(inner),
         )
 }

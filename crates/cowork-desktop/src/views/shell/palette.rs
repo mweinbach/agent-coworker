@@ -188,16 +188,18 @@ pub fn build_command_palette(s: &AppState, k: &Kit, t: &ThemeTokens) -> Option<E
         )
         .child(el().w_full().h(1.0).fill(t.border_muted))
         .child(
-            col()
-                .key("command-palette-results")
-                .w_full()
-                .max_h(410.0)
-                .scroll(ScrollSpec {
-                    stick_bottom: false,
-                })
-                .padding(8.0)
-                .gap(2.0)
-                .children(list_children),
+            k.scroll_bar(
+                col()
+                    .key("command-palette-results")
+                    .w_full()
+                    .max_h(410.0)
+                    .scroll(ScrollSpec {
+                        stick_bottom: false,
+                    })
+                    .padding(8.0)
+                    .gap(2.0)
+                    .children(list_children),
+            ),
         )
         .child(el().w_full().h(1.0).fill(t.border_muted))
         .child(footer);

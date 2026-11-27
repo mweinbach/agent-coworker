@@ -1137,6 +1137,8 @@ fn build_diff_section_interactive(s: &AppState, k: &Kit, t: &ThemeTokens, tool_i
         },
     )
     .key(format!("diffview:{tool_id}"))
+    // The box has a bounded height: a bar says the diff continues and how far.
+    .scroll_bar(true)
     .build(s, k);
 
     col().w_full().gap(6.0).child(mode_bar).child(

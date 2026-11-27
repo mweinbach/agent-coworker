@@ -7,7 +7,7 @@
 use std::cell::RefCell;
 
 use rune::{Color, TextStyle};
-use rune_kit::{Kit, PaletteSeed};
+use rune_kit::{DialogMetrics, Kit, PaletteSeed, SwitchLook};
 use serde::{Deserialize, Serialize};
 
 /// User theme preference persisted with desktop settings.
@@ -647,7 +647,7 @@ fn tokens_with_accent_uncached(dark: bool, accent_palette: AccentPalette) -> The
             glass_border: srgba(0xff, 0xff, 0xff, 0.12),
             text_base,
             text_muted: srgb(0xa3, 0xa3, 0x9c),
-            text_faint: srgba(0xa3, 0xa3, 0x9c, 0.72),
+            text_faint: srgba(0xa3, 0xa3, 0x9c, 0.85),
             primary_fg: set.accent_on,
             accent: set.accent,
             accent_hover: set.accent_hover,
@@ -706,7 +706,8 @@ fn tokens_with_accent_uncached(dark: bool, accent_palette: AccentPalette) -> The
             glass_border: srgba(0x1f, 0x1f, 0x1c, 0.14),
             text_base,
             text_muted: srgb(0x61, 0x61, 0x5b),
-            text_faint: srgba(0x61, 0x61, 0x5b, 0.72),
+            // Secondary ink stays below muted, but still readable as body text (>= 4.5:1).
+            text_faint: srgba(0x61, 0x61, 0x5b, 0.92),
             primary_fg: set.accent_on,
             accent: set.accent,
             accent_hover: set.accent_hover,
@@ -725,9 +726,11 @@ fn tokens_with_accent_uncached(dark: bool, accent_palette: AccentPalette) -> The
             danger: srgb(0xbb, 0x3e, 0x3e),
             danger_hover: srgb(0xa7, 0x35, 0x35),
             danger_fg: Color::WHITE,
-            success: srgb(0x3a, 0xb6, 0x65),
-            warning: srgb(0xec, 0xaa, 0x0b),
-            info: srgb(0x00, 0x7a, 0xff),
+            // Status inks in light mode must clear 4.5:1 on the panel and on their own tint, so
+            // keep these darker than the dark-mode seeds instead of reusing the vivid accents.
+            success: srgb(0x17, 0x70, 0x3a),
+            warning: srgb(0x8a, 0x5a, 0x00),
+            info: srgb(0x00, 0x5c, 0xc0),
             border: srgba(0x1f, 0x1f, 0x1c, 0.12),
             border_muted: srgba(0x1f, 0x1f, 0x1c, 0.07),
             border_strong: srgba(0x1f, 0x1f, 0x1c, 0.22),
@@ -973,6 +976,16 @@ pub fn build_kit_with_accent(
     kit.radius.md = layout::RADIUS_MD;
     kit.radius.lg = layout::RADIUS_BASE;
     kit.radius.xl = layout::RADIUS_LG;
+    // Kit dialogs share the same corner radius as our own cards and overlays, and switches keep
+    // the flat look with a hairline track border instead of the built-in sheen.
+    kit.metrics.dialog = Some(DialogMetrics {
+        radius: layout::RADIUS_LG,
+        ..DialogMetrics::kit(&kit)
+    });
+    kit.metrics.switch_look = Some(SwitchLook {
+        track_border: 1.0,
+        ..SwitchLook::flat(&kit)
+    });
 
     // Keep surfaces and buttons crisp and flat: reserve soft drop shadows for floating overlays.
     let hairline_ring = rune::Shadow {
@@ -985,7 +998,6 @@ pub fn build_kit_with_accent(
     kit.elevation.button_neutral = vec![hairline_ring];
     kit.elevation.button_contrast = Vec::new();
     kit.elevation.elements = Vec::new();
-    kit.elevation.md = Vec::new();
     kit.elevation.floating = vec![
         rune::Shadow {
             y: 4.0,
@@ -995,6 +1007,9 @@ pub fn build_kit_with_accent(
         },
         hairline_ring,
     ];
+    // Kit menus and popovers float over the page like our own overlays, so give them the same
+    // soft shadow instead of leaving them flush with the content underneath.
+    kit.elevation.md = kit.elevation.floating.clone();
     kit.elevation.overlay = vec![
         rune::Shadow {
             y: 8.0,
@@ -1115,6 +1130,45 @@ mod tests {
                     assert_eq!(kit.c.knob_on, tok.cta_on);
                     assert_eq!(kit.c.border_focus, tok.focus_ring);
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn status_and_secondary_ink_meet_wcag_aa() {
+        for dark in [false, true] {
+            let tok = resolve_tokens_with_accent(dark, false, false, AccentPalette::default());
+
+            // Status text and icons (pills, badges, banners) must stay readable on the panel and
+            // on the wash they paint themselves.
+            for (role, ink) in [
+                ("success", tok.success),
+                ("warning", tok.warning),
+                ("info", tok.info),
+            ] {
+                let ratio = contrast_ratio(ink, tok.panel_bg);
+                assert!(
+                    ratio >= 4.5,
+                    "{role} ink on panel_bg in dark={dark}: {ratio:.2} < 4.5"
+                );
+                for wash in [0.10, 0.14] {
+                    let tinted = composite_srgb_over(ink.alpha(wash), tok.panel_bg);
+                    let r = contrast_ratio(ink, tinted);
+                    assert!(
+                        r >= 4.5,
+                        "{role} ink on its own {wash:.0}% tint in dark={dark}: {r:.2} < 4.5"
+                    );
+                }
+            }
+
+            for (surface_name, surface) in
+                [("panel_bg", tok.panel_bg), ("sidebar_bg", tok.sidebar_bg)]
+            {
+                let r = contrast_ratio(composite_srgb_over(tok.text_faint, surface), surface);
+                assert!(
+                    r >= 4.5,
+                    "text_faint on {surface_name} in dark={dark}: {r:.2} < 4.5"
+                );
             }
         }
     }

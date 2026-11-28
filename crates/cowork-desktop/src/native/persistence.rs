@@ -949,7 +949,28 @@ pub fn core_state_from_document(doc: &Value) -> PersistedDesktopState {
     );
 
     if let Some(arr) = obj.get("workspaces").and_then(Value::as_array) {
-        out.workspaces = arr.iter().filter_map(core_workspace_from_value).collect();
+        let legacy_lmstudio_enabled = obj
+            .get("providerUiState")
+            .and_then(|v| v.get("lmstudio"))
+            .and_then(|v| v.get("enabled"))
+            .and_then(Value::as_bool);
+        out.workspaces = arr
+            .iter()
+            .filter_map(core_workspace_from_value)
+            .map(|mut ws| {
+                if let Some(enabled) = legacy_lmstudio_enabled
+                    && ws
+                        .defaults
+                        .get("lmStudioEnabled")
+                        .and_then(Value::as_bool)
+                        .is_none()
+                    && let Some(defaults) = ws.defaults.as_object_mut()
+                {
+                    defaults.insert("lmStudioEnabled".to_string(), Value::Bool(enabled));
+                }
+                ws
+            })
+            .collect();
     }
 
     let workspace_ids: HashSet<&str> = out.workspaces.iter().map(|ws| ws.id.as_str()).collect();
@@ -3318,6 +3339,55 @@ mod tests {
                 .get("defaultToolOutputOverflowChars")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn migrates_legacy_lmstudio_enabled_into_workspace_defaults_without_overriding_modern_values() {
+        let tmp = tempdir().unwrap();
+        let legacy_ws = tmp.path().join("legacy-ws");
+        let modern_ws = tmp.path().join("modern-ws");
+        fs::create_dir_all(&legacy_ws).unwrap();
+        fs::create_dir_all(&modern_ws).unwrap();
+        let data_dir = tmp.path().join("Cowork");
+        fs::create_dir_all(&data_dir).unwrap();
+        fs::write(
+            data_dir.join("state.json"),
+            serde_json::to_string_pretty(&json!({
+                "version": 2,
+                "providerUiState": {
+                    "lmstudio": { "enabled": false, "hiddenModels": [] }
+                },
+                "workspaces": [
+                    {
+                        "id": "ws-legacy",
+                        "name": "Legacy",
+                        "path": legacy_ws.to_string_lossy(),
+                        "createdAt": "2026-01-01T00:00:00.000Z",
+                        "lastOpenedAt": "2026-01-01T00:00:00.000Z"
+                    },
+                    {
+                        "id": "ws-modern",
+                        "name": "Modern",
+                        "path": modern_ws.to_string_lossy(),
+                        "createdAt": "2026-01-01T00:00:00.000Z",
+                        "lastOpenedAt": "2026-01-01T00:00:00.000Z",
+                        "lmStudioEnabled": true
+                    }
+                ],
+                "threads": []
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let service = PersistenceService::new(data_dir, None, true, None);
+        let loaded = service.load_core_state().unwrap();
+        assert_eq!(loaded.workspaces[0].defaults["lmStudioEnabled"], false);
+        assert_eq!(loaded.workspaces[1].defaults["lmStudioEnabled"], true);
+
+        let saved = service.merge_and_save_core_snapshot(&loaded).unwrap();
+        assert_eq!(saved["workspaces"][0]["lmStudioEnabled"], false);
+        assert_eq!(saved["workspaces"][1]["lmStudioEnabled"], true);
     }
 
     #[test]

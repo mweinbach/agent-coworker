@@ -427,8 +427,10 @@ fn classify_native_tool_kind(
     }
 }
 
-/// Joins `raw` onto `base_dir` and normalizes `.`/`..` lexically WITHOUT trimming leading or
-/// trailing whitespace so exact Unix filenames such as `"credential-link "` are preserved.
+/// Joins `raw` onto `base_dir` WITHOUT trimming leading or trailing whitespace so exact Unix
+/// filenames such as `"credential-link "` are preserved. The joined spelling keeps `.` and
+/// `..` components intact: canonical validation must resolve symlinks before parent components,
+/// exactly as the kernel does, rather than collapsing `symlink/..` away lexically first.
 fn exact_lexical_path(raw: &str, base_dir: &Path) -> Result<PathBuf, String> {
     if raw.is_empty() {
         return Err("Native tool path must not be empty.".to_owned());
@@ -437,12 +439,11 @@ fn exact_lexical_path(raw: &str, base_dir: &Path) -> Result<PathBuf, String> {
         return Err("Native tool path contains a NUL byte.".to_owned());
     }
     let candidate = Path::new(raw);
-    let joined = if candidate.is_absolute() {
+    Ok(if candidate.is_absolute() {
         candidate.to_path_buf()
     } else {
         base_dir.join(candidate)
-    };
-    Ok(normalize_lexical_path(&joined))
+    })
 }
 
 /// Resolves a path from a native tool against `base_dir`, expanding leading `~` against
@@ -456,10 +457,10 @@ fn resolve_native_tool_path(raw: &str, base_dir: &Path, homedir: &Path) -> Resul
         return Err("Native tool path contains a NUL byte.".to_owned());
     }
     if raw == "~" {
-        return Ok(normalize_lexical_path(homedir));
+        return Ok(homedir.to_path_buf());
     }
     if let Some(rest) = raw.strip_prefix("~/").or_else(|| raw.strip_prefix("~\\")) {
-        return Ok(normalize_lexical_path(&homedir.join(rest)));
+        return Ok(homedir.join(rest));
     }
     if raw.starts_with('~') {
         return Err(format!("Ambiguous tilde user path is blocked: {raw}"));
@@ -1760,9 +1761,21 @@ fn glob_name_matches(pattern: &str, name: &str) -> bool {
             si += 1;
         } else if pi < p.len() && p[pi] == '[' {
             // Treat character classes `[...]` conservatively as matching any single char so
-            // glob checks never under-block symlink matches.
-            if let Some(close) = p[pi + 1..].iter().position(|&c| c == ']') {
-                pi += close + 2;
+            // glob checks never under-block symlink matches. Bash allows `]` as a class member
+            // when it is first (after an optional negation), so scan past that leading `]` before
+            // looking for the class terminator.
+            let mut close = pi + 1;
+            if close < p.len() && matches!(p[close], '!' | '^') {
+                close += 1;
+            }
+            if close < p.len() && p[close] == ']' {
+                close += 1;
+            }
+            while close < p.len() && p[close] != ']' {
+                close += 1;
+            }
+            if close < p.len() {
+                pi = close + 1;
                 si += 1;
             } else {
                 pi += 1;

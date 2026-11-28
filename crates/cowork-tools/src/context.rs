@@ -459,11 +459,8 @@ pub fn normalize_lexical_path(path: &Path) -> PathBuf {
     out
 }
 
-/// Canonicalize existing ancestor + join remaining leaf components so symlinks
-/// (like `/tmp` -> `/private/tmp` on macOS) cannot bypass boundary checks.
-pub fn canonicalize_with_missing_tail(path: &Path) -> PathBuf {
-    let normalized = normalize_lexical_path(path);
-    let mut cursor = normalized.as_path();
+fn resolve_existing_ancestor(path: &Path) -> PathBuf {
+    let mut cursor = path;
     let mut tail = Vec::new();
     loop {
         if let Ok(canon) = fs::canonicalize(cursor) {
@@ -478,15 +475,38 @@ pub fn canonicalize_with_missing_tail(path: &Path) -> PathBuf {
         }
         match cursor.parent() {
             Some(parent) if !parent.as_os_str().is_empty() => cursor = parent,
-            _ => return normalized,
+            _ => return path.to_path_buf(),
         }
     }
 }
 
-/// Joins a model-supplied path onto `working_directory` and normalizes `.`/`..` lexically,
-/// WITHOUT resolving symlinks. Read checks take this form so the credential deny can match
-/// the path as the model spelled it (e.g. `.cowork/auth/x` whose file is a symlink elsewhere)
-/// as well as its canonical target; `assert_read_path_allowed` returns the canonical path.
+/// Canonicalize the existing ancestor and join the remaining leaf components so symlinks
+/// (like `/tmp` -> `/private/tmp` on macOS) cannot bypass boundary checks. Parent components
+/// are resolved against the physical directory the kernel would be in at that point: for
+/// `link/../file`, `link` is resolved before `..` is applied rather than collapsed away
+/// lexically first.
+pub fn canonicalize_with_missing_tail(path: &Path) -> PathBuf {
+    let mut physical = PathBuf::new();
+    for comp in path.components() {
+        match comp {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if let Ok(canon) = fs::canonicalize(&physical) {
+                    physical = canon;
+                }
+                physical.pop();
+            }
+            other => physical.push(other.as_os_str()),
+        }
+    }
+    resolve_existing_ancestor(&physical)
+}
+
+/// Joins a model-supplied path onto `working_directory` without resolving symlinks. The
+/// spelling keeps `.` and `..` components intact so `assert_read_path_allowed` /
+/// `assert_write_path_allowed` can resolve symlinked directories before parent components in
+/// the same order as the filesystem; their lexical gate still performs the purely lexical
+/// first-pass normalization before any filesystem access.
 pub fn lexical_tool_path(raw: &str, working_directory: &Path) -> ToolResult<PathBuf> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -495,20 +515,19 @@ pub fn lexical_tool_path(raw: &str, working_directory: &Path) -> ToolResult<Path
         ));
     }
     let candidate = Path::new(trimmed);
-    let joined = if candidate.is_absolute() {
+    Ok(if candidate.is_absolute() {
         candidate.to_path_buf()
     } else {
         working_directory.join(candidate)
-    };
-    Ok(normalize_lexical_path(&joined))
+    })
 }
 
-/// Resolves a model-supplied path against `working_directory` purely lexically (TS
-/// `path.resolve` parity). It deliberately does NOT touch the filesystem: canonicalizing an
-/// unvetted path can itself leak (on Windows, `\\host\share\x` makes the OS open SMB/WebDAV
-/// to `host` and send the user's NTLM response; on macOS `/net/<host>` triggers an automount).
-/// `assert_write_path_allowed` / `assert_read_path_allowed` gate the path lexically against
-/// the allowed roots first and only then resolve symlinks and re-check the canonical target.
+/// Resolves a model-supplied path against `working_directory` without touching the filesystem:
+/// canonicalizing an unvetted path can itself leak (on Windows, `\\host\share\x` makes the OS
+/// open SMB/WebDAV to `host` and send the user's NTLM response; on macOS `/net/<host>` triggers
+/// an automount). `assert_write_path_allowed` / `assert_read_path_allowed` gate the path
+/// lexically against the allowed roots first and only then resolve symlinks and re-check the
+/// canonical target.
 pub fn resolve_tool_path(raw: &str, working_directory: &Path) -> ToolResult<PathBuf> {
     lexical_tool_path(raw, working_directory)
 }
@@ -1075,7 +1094,7 @@ fn assert_read_path_allowed_with(
     })?;
 
     // 2. Canonical re-checks (symlink escapes, symlinked credential dirs).
-    let resolved = canonicalize(&lexical);
+    let resolved = canonicalize(path);
     if in_credential_root(&resolved, &credential_forms) {
         return Err(ToolError::PathDenied(format!(
             "Access to protected credential path is blocked: {}",
@@ -1226,7 +1245,7 @@ fn assert_write_path_allowed_impl(
     }
 
     // 2. Canonical re-checks (symlink escapes, protected metadata, credential dirs).
-    let resolved = canonicalize(&lexical);
+    let resolved = canonicalize(path);
     if in_credential_root(&resolved, &credential_forms) {
         return Err(ToolError::PathDenied(format!(
             "Write access to protected credential path is blocked: {}",

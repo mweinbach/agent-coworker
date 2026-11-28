@@ -1166,6 +1166,10 @@ async fn claude_native_bash_authorizes_relative_symlink_and_glob_operands() {
 
         std::fs::create_dir_all(h.ws.join("data/nested")).unwrap();
         std::fs::write(h.ws.join("data/ok.txt"), "safe\n").unwrap();
+        std::fs::create_dir_all(h.ws.join("nested/dir")).unwrap();
+        std::os::unix::fs::symlink(h.ws.join("nested/dir"), h.ws.join("safe")).unwrap();
+        std::os::unix::fs::symlink(&cred_file, h.ws.join("nested/credential-link")).unwrap();
+        std::os::unix::fs::symlink(&cred_file, h.ws.join("credential-a")).unwrap();
         std::os::unix::fs::symlink(&cred_file, h.ws.join("credential-link")).unwrap();
         std::os::unix::fs::symlink(&cred_file, h.ws.join("credential-link ")).unwrap();
         std::os::unix::fs::symlink(&cred_file, h.ws.join(" credential-link")).unwrap();
@@ -1182,6 +1186,8 @@ async fn claude_native_bash_authorizes_relative_symlink_and_glob_operands() {
             "cat ' credential-link'",
             "cat -- -credential-link",
             "cat ./credential-link",
+            "cat safe/../credential-link",
+            "cat credential-[]a]",
             "cat src/secret-link",
             "cd src && cat secret-link",
             "cat cred*",
@@ -1216,6 +1222,14 @@ async fn claude_native_bash_authorizes_relative_symlink_and_glob_operands() {
             )
             .await,
             "yolo={yolo}: exact filename with trailing space must be authorized on Read"
+        );
+        assert!(
+            !h.decide_silently(
+                CLAUDE_TOOL,
+                claude_tool("Read", json!({ "file_path": "safe/../credential-link" }))
+            )
+            .await,
+            "yolo={yolo}: parent traversal through a symlinked directory must be denied on Read"
         );
 
         // Benign relative workspace commands (including safe directory-component globs) still pass.

@@ -35,6 +35,9 @@ use uuid::Uuid;
 use crate::interactions::{
     HarnessEventSink, InteractionManager, ModelCallOutcome, ModelCallRecord,
 };
+use crate::native_tool_approval::{
+    is_native_runtime_tool_approval, validate_native_runtime_approval,
+};
 use crate::steer::{
     STEER_REJECTED_INTERRUPTED, STEER_REJECTED_MAX_STEPS, STEER_REJECTED_TURN_ENDED,
     SteerCoordinator,
@@ -717,7 +720,10 @@ impl TurnStepRunner {
             //
             // The Codex app-server runs a whole agentic loop per step and TS never capped it at the
             // turn level (only its startup RPCs time out), so it gets no step deadline here.
-            let exempt_from_step_budget = self.cfg.provider == ProviderName::CodexCli;
+            let exempt_from_step_budget = matches!(
+                self.cfg.provider,
+                ProviderName::CodexCli | ProviderName::ClaudeSdk | ProviderName::AntigravityAcp
+            );
             let policy = match step_request_policy(&self.cfg, exempt_from_step_budget) {
                 Ok(policy) => policy,
                 Err(message) => {
@@ -1472,7 +1478,7 @@ fn record_steer_message<F>(
             annotations: Vec::new(),
         },
     );
-    let mut msg = new_user_text_message(&entry.text);
+    let mut msg = new_user_text_message(entry.text);
     if !entry.content.is_empty() {
         msg.content = entry.content;
     }
@@ -1714,12 +1720,12 @@ impl PartialStepOutput {
     }
 }
 
-fn new_user_text_message(text: &str) -> CanonicalMessage {
+pub(crate) fn new_user_text_message(text: impl Into<String>) -> CanonicalMessage {
     CanonicalMessage {
         id: Uuid::new_v4().to_string(),
         role: MessageRole::User,
         content: vec![ContentBlock::Text {
-            text: text.to_owned(),
+            text: text.into(),
             phase: None,
             citations: Vec::new(),
             provider_meta: ProviderOpaqueMeta::default(),
@@ -2068,6 +2074,41 @@ impl DynamicToolHandler for CodexDynamicBridge {
     }
 
     async fn request_approval(&self, method: &str, params: &Value) -> bool {
+        if is_native_runtime_tool_approval(method) {
+            let prompt =
+                match validate_native_runtime_approval(method, params, &self.tool_ctx).await {
+                    Ok(prompt) => prompt,
+                    Err(reason) => {
+                        tracing::warn!(
+                            method,
+                            %reason,
+                            "[native-runtime] Native tool approval declined"
+                        );
+                        return false;
+                    }
+                };
+            let approved = self.tool_ctx.yolo
+                || self
+                    .interactions
+                    .approve_command(prompt)
+                    .await
+                    .unwrap_or(false);
+            if !approved {
+                return false;
+            }
+            // Re-validate after the wait to prevent TOCTOU symlink or task-lock races.
+            if let Err(reason) =
+                validate_native_runtime_approval(method, params, &self.tool_ctx).await
+            {
+                tracing::warn!(
+                    method,
+                    %reason,
+                    "[native-runtime] Native tool approval declined after wait"
+                );
+                return false;
+            }
+            return true;
+        }
         let is_file_change = is_codex_file_change_approval(method);
         // TS `handleServerRequest`: the task-mutation lock (`assertCanMutate`) and hard-floor
         // checks run before both YOLO and interactive acceptance, so a locked source chat or a
@@ -3031,12 +3072,81 @@ mod tests {
             .map(|(i, _)| i)
             .collect();
         assert_eq!(steer_msgs.len(), 1, "steer recorded exactly once");
+        let steer_msg = &outcome.messages[steer_msgs[0]];
+        assert_eq!(steer_msg.role, MessageRole::User);
+        assert!(
+            Uuid::parse_str(&steer_msg.id).is_ok(),
+            "steer id must be a UUID"
+        );
+        assert!(
+            chrono::DateTime::parse_from_rfc3339(&steer_msg.created_at).is_ok(),
+            "steer created_at must be RFC 3339"
+        );
+        assert_eq!(steer_msg.phase, None);
+        assert_eq!(steer_msg.provider, None);
+        assert_eq!(steer_msg.api, None);
+        assert_eq!(steer_msg.model, None);
+        assert_eq!(steer_msg.stop_reason, None);
+        assert!(steer_msg.provider_meta.is_empty());
+        assert_eq!(steer_msg.content.len(), 1);
+        match &steer_msg.content[0] {
+            ContentBlock::Text {
+                text,
+                phase,
+                citations,
+                provider_meta,
+            } => {
+                assert_eq!(text, "NATIVE-STEER");
+                assert_eq!(*phase, None);
+                assert!(citations.is_empty());
+                assert!(provider_meta.is_empty());
+            }
+            other => panic!("expected text block for steer, got {other:?}"),
+        }
         // Recorded ahead of the step's assistant output.
         assert_eq!(
             outcome.messages[steer_msgs[0] + 1].role,
             MessageRole::Assistant
         );
         assert!(!steer.has_pending());
+    }
+
+    #[test]
+    fn new_user_text_message_moves_owned_string_without_reallocation_and_preserves_shape() {
+        let owned = format!("Parent briefing:\n{}", "context ".repeat(16));
+        let original_ptr = owned.as_ptr();
+        let original_len = owned.len();
+
+        let msg = new_user_text_message(owned);
+        let second = new_user_text_message("borrowed");
+
+        assert_eq!(msg.role, MessageRole::User);
+        assert!(Uuid::parse_str(&msg.id).is_ok());
+        assert!(Uuid::parse_str(&second.id).is_ok());
+        assert_ne!(msg.id, second.id);
+        assert!(chrono::DateTime::parse_from_rfc3339(&msg.created_at).is_ok());
+        assert_eq!(msg.phase, None);
+        assert_eq!(msg.provider, None);
+        assert_eq!(msg.api, None);
+        assert_eq!(msg.model, None);
+        assert_eq!(msg.stop_reason, None);
+        assert!(msg.provider_meta.is_empty());
+        assert_eq!(msg.content.len(), 1);
+        match &msg.content[0] {
+            ContentBlock::Text {
+                text,
+                phase,
+                citations,
+                provider_meta,
+            } => {
+                assert_eq!(text.as_ptr(), original_ptr);
+                assert_eq!(text.len(), original_len);
+                assert_eq!(*phase, None);
+                assert!(citations.is_empty());
+                assert!(provider_meta.is_empty());
+            }
+            other => panic!("expected text block, got {other:?}"),
+        }
     }
 
     /// Simulates the native Codex turn invoking deferred meta-tools through the dynamic bridge.

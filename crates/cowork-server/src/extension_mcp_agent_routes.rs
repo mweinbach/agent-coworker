@@ -53,9 +53,8 @@ use crate::jsonrpc_turn::{
 use crate::registry::{LiveSession, ServerRuntimeState, overlay_session_provider_options};
 
 /// Points a turn's tool env (`HOME`, `COWORK_HOME_OVERRIDE`) at the user home. Both name the
-/// home, not the Cowork dir: consumers such as Windows sandbox detection
-/// (`windows_sandbox_home`) and `resolve_home_dir` append `.cowork` themselves, so passing
-/// `~/.cowork` would make Bash look for sandbox setup under `~/.cowork/.cowork`.
+/// home, not the Cowork dir: consumers such as `windows_sandbox_home` and `resolve_home_dir`
+/// append `.cowork` themselves, so passing `~/.cowork` would resolve `~/.cowork/.cowork`.
 pub(crate) fn insert_tool_home_env(env: &mut HashMap<String, String>, homedir: &Path) {
     let home = homedir.to_string_lossy().into_owned();
     env.insert("HOME".to_owned(), home.clone());
@@ -289,17 +288,45 @@ impl ChildTurnExecutor for ServerChildTurnExecutor {
             }
             merged_provider_opts.insert(provider_key, Value::Object(section));
         }
-        if let Some(ref effort) = input.reasoning_effort
-            && matches!(
-                input.provider,
-                ProviderName::Openai | ProviderName::CodexCli
-            )
-        {
+        if let Some(ref effort) = input.reasoning_effort {
             let sub = merged_provider_opts
                 .entry(input.provider.as_str().to_owned())
                 .or_insert_with(|| Value::Object(Map::new()));
             if let Some(sub_map) = sub.as_object_mut() {
-                sub_map.insert("reasoningEffort".to_owned(), Value::String(effort.clone()));
+                match input.provider {
+                    ProviderName::Google => {
+                        let tc = sub_map
+                            .entry("thinkingConfig".to_owned())
+                            .or_insert_with(|| Value::Object(Map::new()));
+                        if let Some(tc_map) = tc.as_object_mut() {
+                            if effort.eq_ignore_ascii_case("dynamic") {
+                                tc_map.remove("thinkingLevel");
+                            } else {
+                                tc_map.insert(
+                                    "thinkingLevel".to_owned(),
+                                    Value::String(effort.clone()),
+                                );
+                            }
+                        }
+                    }
+                    ProviderName::Anthropic => {
+                        sub_map.insert("effort".to_owned(), Value::String(effort.clone()));
+                    }
+                    ProviderName::Openai
+                    | ProviderName::CodexCli
+                    | ProviderName::ClaudeSdk
+                    | ProviderName::AntigravityAcp
+                    | ProviderName::Bedrock
+                    | ProviderName::Lmstudio
+                    | ProviderName::Fireworks
+                    | ProviderName::Firepass
+                    | ProviderName::Together
+                    | ProviderName::OpencodeGo
+                    | ProviderName::OpencodeZen => {
+                        sub_map.insert("reasoningEffort".to_owned(), Value::String(effort.clone()));
+                    }
+                    _ => {}
+                }
             }
         }
         // The merged options are the parent's (workspace + session override), so routing a
@@ -339,7 +366,11 @@ impl ChildTurnExecutor for ServerChildTurnExecutor {
         let mut lmstudio_prepare = None;
         let base_url = match input.provider {
             ProviderName::Lmstudio => {
-                let lms = resolve_lmstudio_options(&runtime.env, Some(&merged_provider_opts), None);
+                let lms = resolve_lmstudio_options(
+                    &runtime.env,
+                    Some(&merged_provider_opts),
+                    api_key.as_deref(),
+                );
                 let url = lms.inference_base_url.clone();
                 lmstudio_prepare = Some(lms);
                 Some(url)

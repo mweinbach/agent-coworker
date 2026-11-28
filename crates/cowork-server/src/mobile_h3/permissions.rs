@@ -65,6 +65,7 @@ const ALWAYS_ALLOWED_H3_RPC_METHODS: &[&str] = &[
     "cowork/provider/status/refresh",
     "cowork/provider/capabilities/check",
     "cowork/provider/codexAppServer/status",
+    "cowork/provider/runtime/status",
     "cowork/runtime/libreoffice/check",
     "cowork/agentProfiles/catalog/read",
     "cowork/skills/catalog/read",
@@ -236,6 +237,7 @@ pub fn get_required_h3_permissions(message: &JsonRpcLiteClientMessage) -> Vec<Mo
         method,
         "cowork/provider/lmstudio/local/start"
             | "cowork/provider/codexAppServer/update"
+            | "cowork/provider/runtime/update"
             | "cowork/skills/improvement/run"
             | "cowork/skills/improvement/restore"
     ) {
@@ -868,6 +870,7 @@ mod tests {
         for method in [
             "cowork/provider/lmstudio/local/start",
             "cowork/provider/codexAppServer/update",
+            "cowork/provider/runtime/update",
             "cowork/skills/improvement/run",
             "cowork/skills/improvement/restore",
         ] {
@@ -897,6 +900,7 @@ mod tests {
             vec![WorkspaceSettings]
         );
         assert!(required("cowork/provider/codexAppServer/status").is_empty());
+        assert!(required("cowork/provider/runtime/status").is_empty());
     }
 
     #[test]

@@ -11,7 +11,7 @@ use serde_json::Value;
 /// Canonical minified JSON Schema bundle for the Cowork WebSocket JSON-RPC-lite wire protocol.
 const CANONICAL_WS_JSONRPC_SCHEMA_JSON: &str = include_str!("ws_jsonrpc_schema.json");
 
-/// All 163 client-to-server JSON-RPC-lite request/handshake methods across the 21 protocol namespaces.
+/// All 165 client-to-server JSON-RPC-lite request/handshake methods across the 21 protocol namespaces.
 pub const REQUEST_METHODS: &[&str] = &[
     "initialize",
     "initialized",
@@ -59,6 +59,8 @@ pub const REQUEST_METHODS: &[&str] = &[
     "cowork/provider/capabilities/check",
     "cowork/provider/codexAppServer/status",
     "cowork/provider/codexAppServer/update",
+    "cowork/provider/runtime/status",
+    "cowork/provider/runtime/update",
     "cowork/provider/lmstudio/local/status",
     "cowork/provider/lmstudio/local/start",
     "cowork/provider/auth/authorize",
@@ -178,7 +180,7 @@ pub const REQUEST_METHODS: &[&str] = &[
     "task/retry",
 ];
 
-/// All 162 server-to-client JSON-RPC-lite result schemas (every request method except `initialized`).
+/// All 164 server-to-client JSON-RPC-lite result schemas (every request method except `initialized`).
 pub const RESULT_METHODS: &[&str] = &[
     "initialize",
     "thread/start",
@@ -225,6 +227,8 @@ pub const RESULT_METHODS: &[&str] = &[
     "cowork/provider/capabilities/check",
     "cowork/provider/codexAppServer/status",
     "cowork/provider/codexAppServer/update",
+    "cowork/provider/runtime/status",
+    "cowork/provider/runtime/update",
     "cowork/provider/lmstudio/local/status",
     "cowork/provider/lmstudio/local/start",
     "cowork/provider/auth/authorize",

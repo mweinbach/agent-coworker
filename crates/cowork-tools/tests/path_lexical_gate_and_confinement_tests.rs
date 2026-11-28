@@ -273,9 +273,10 @@ fn resolve_tool_path_is_lexical_and_the_write_check_returns_the_canonical_target
     fs::create_dir_all(ws.join("real")).unwrap();
     std::os::unix::fs::symlink(ws.join("real"), ws.join("link")).unwrap();
 
-    // No symlink resolution before the containment check.
+    // No symlink resolution or parent-component collapsing before the containment check:
+    // authorization must see `link` before `..`, in the same order as the filesystem.
     let lexical = resolve_tool_path("link/./x/../a.txt", &ws).unwrap();
-    assert_eq!(lexical, ws.join("link").join("a.txt"));
+    assert_eq!(lexical, ws.join("link").join("./x/../a.txt"));
     assert_eq!(
         assert_write_path_allowed(&lexical, &ctx).unwrap(),
         ws.join("real").join("a.txt")

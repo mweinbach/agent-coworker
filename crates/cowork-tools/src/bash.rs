@@ -164,13 +164,17 @@ impl BuiltinTool for BashTool {
         };
         // Oversized Windows commands ship as a `-File` temp script shared by every attempt
         // (including an approved escalation retry); the guard deletes it when this call returns.
-        let _temp_script = materialize_temp_script(&plan).map_err(|err| {
+        let temp_script = materialize_temp_script(&plan).map_err(|err| {
             ToolError::Execution(format!("Failed to write the shell temp script: {err}"))
         })?;
         let is_scoped_child = ctx.target_paths.as_ref().is_some_and(|t| !t.is_empty());
 
         let runner = SandboxRunner::default();
         let credential_roots = protected_credential_roots(ctx);
+        let mut read_allowed_roots = ctx.read_roots.clone();
+        if let Some(script) = &temp_script {
+            read_allowed_roots.push(script.path().to_path_buf());
+        }
         let build_req = |pol: SandboxPolicy| SandboxExecutionRequest {
             command: SandboxCommand::new(shell.program.clone(), shell.args.clone()),
             policy: pol,
@@ -185,6 +189,7 @@ impl BuiltinTool for BashTool {
             extra_env: std::collections::HashMap::new(),
             capabilities_override: None,
             sandbox_exec_path: None,
+            read_allowed_roots: read_allowed_roots.clone(),
             // Same credential set the read/grep/glob tools deny, enforced by the OS sandbox so a
             // sandboxed `cat ~/.ssh/id_rsa` cannot bypass the file-tool deny.
             read_denied_roots: credential_roots.clone(),
@@ -324,7 +329,7 @@ fn take_lock_error(slot: &Mutex<Option<ToolError>>) -> Option<ToolError> {
 /// Everything else was auto-approved (the OS sandbox is the confinement boundary), so this
 /// keeps prompt parity without prompting for routine commands like `ls` or `cargo test`.
 /// Lookahead-based TS patterns are widened to lookahead-free forms (a false prompt is cheap).
-fn matches_ts_approval_patterns(command: &str, platform: &str) -> bool {
+pub fn matches_ts_approval_patterns(command: &str, platform: &str) -> bool {
     static SHARED_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
     static POWERSHELL_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
     let trimmed = command.trim();

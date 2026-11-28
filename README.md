@@ -21,7 +21,7 @@ It is built for everyday computer work, not just chat. Open a workspace, pick yo
 
 ### Desktop App
 
-The Electron desktop app is the easiest way to use Cowork day to day.
+The native Rust desktop app ([Rune](https://github.com/anomalyco/rune), `crates/cowork-desktop/`) is the easiest way to use Cowork day to day.
 
 It includes:
 
@@ -29,29 +29,37 @@ It includes:
 - guided onboarding for first setup
 - provider connection flows and model selection
 - chat threads with streaming markdown and resumable history
-- quick chat from the menu bar or system tray
+- quick chat and utility panels from the menu bar or system tray
 - skills and plugin management
 - MCP server setup, validation, auth, and enable/disable controls
 - remote access settings for phone pairing
 - settings for privacy, telemetry, updates, defaults, and developer options
 
-Run the desktop app:
+Run the desktop app directly with Cargo (no Bun or Node install required):
+
+```bash
+cargo build -p cowork-server --bin cowork-server
+cargo run -p cowork-desktop --bin cowork-desktop
+```
+
+Or run via the root Bun shortcut:
 
 ```bash
 bun run start
 ```
 
-Run the one-time demo tour for a walkthrough without clearing your real state:
-
-```bash
-bun run desktop:demo
-```
-
-`desktop:demo` launches the normal desktop app with `COWORK_DEMO_MODE=1`, which opens the existing onboarding tour for that launch.
+Existing users on supported packaged legacy Electron releases (macOS arm64/x64 and Windows x64/arm64) transition in place through their normal **Restart and Install** update action. Subsequent updates are delivered by Rune's Minisign-signed native updater feed (`latest.json`), while preserving local workspaces, auth, and chat history. See [crates/cowork-desktop/README.md](./crates/cowork-desktop/README.md) for packaging and release bridge details.
 
 ### CLI
 
 The CLI is a lighter interface for terminal-first work. It connects to the same server runtime and supports provider setup, model switching, session management, and workspace control.
+
+```bash
+cargo run -p cowork-cli --bin cowork
+cargo run -p cowork-cli --bin cowork -- --dir /path/to/project
+```
+
+Or via Bun:
 
 ```bash
 bun run cli
@@ -93,11 +101,16 @@ External services are contacted only through the providers, tools, MCP servers, 
 
 ### 1. Install
 
-Prerequisites: [Bun](https://bun.sh) and [Rust](https://rustup.rs) (`rustc` / `cargo`, edition 2024)
+Prerequisites:
+
+- [Rust](https://rustup.rs) (`rustc` / `cargo`, edition 2024) — sufficient to build and launch the native desktop app, CLI REPL, and `cowork-server` with no JavaScript install
+- [Bun](https://bun.sh) — optional for native startup; required for Expo mobile, packaging scripts, protocol/docs checks, and TypeScript client/black-box tests
 
 ```bash
 git clone https://github.com/mweinbach/agent-coworker
 cd agent-coworker
+
+# Optional (mobile, packaging scripts, TS tests, docs checks):
 bun install
 ```
 
@@ -109,7 +122,7 @@ You can save provider auth from the desktop UI, use the CLI `/connect` flow, or 
 
 ```bash
 export OPENAI_API_KEY=...
-bun run cli
+cargo run -p cowork-cli --bin cowork
 ```
 
 Then, inside the REPL:
@@ -141,33 +154,35 @@ Saved provider credentials live under `~/.cowork/auth/connections.json`.
 
 ### 3. Start Working
 
-Desktop:
+Native desktop (Cargo only — no JS required):
+
+```bash
+cargo build -p cowork-server --bin cowork-server
+cargo run -p cowork-desktop --bin cowork-desktop
+```
+
+Or via Bun:
 
 ```bash
 bun run start
 ```
 
-Browser development:
-
-```bash
-bun run desktop:web
-```
-
-`desktop:web` and `bun run setup:runtime` build only `cowork-server` with Cargo (a no-op when it is already fresh), so they never launch a binary older than your checkout. Without a Rust toolchain they fall back to a staged desktop server or a release/debug server from `CARGO_TARGET_DIR` (default: `target`). To launch a specific binary, set `COWORK_DESKTOP_SIDECAR_PATH` for web development or `COWORK_SETUP_RUNTIME_SERVER_BIN` for runtime setup.
-
 CLI:
 
 ```bash
-bun run cli -- --dir /path/to/project
+cargo run -p cowork-cli --bin cowork -- --dir /path/to/project
+# or: bun run cli -- --dir /path/to/project
 ```
 
 Server only:
 
 ```bash
-bun run serve
-bun run serve -- --dir /path/to/project
-bun run serve -- --json
+cargo run -p cowork-server --bin cowork-server -- --dir /path/to/project
+# or: bun run serve -- --dir /path/to/project
+# or: bun run serve -- --json
 ```
+
+`bun run setup:runtime` builds `cowork-server` with Cargo when available (falling back to a staged or prebuilt server binary in `CARGO_TARGET_DIR`, or `COWORK_SETUP_RUNTIME_SERVER_BIN`).
 
 Loopback JSON-RPC for native clients (`POST /rpc`):
 
@@ -176,7 +191,7 @@ bun run dev:rpc
 bun run dev:rpc -- --dir /path/to/project
 ```
 
-Then point the native app at the printed `COWORK_RPC_URL` (default `http://127.0.0.1:7337/rpc`).
+Then point a client at the printed `COWORK_RPC_URL` (default `http://127.0.0.1:7337/rpc`).
 
 ## Everyday Features
 
@@ -263,10 +278,10 @@ cargo test --workspace      # run all Rust crate unit and integration tests
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all -- --check
 bun run test                # run all TS/client/black-box tests through the project runner
-bun run typecheck           # typecheck root, harness, and desktop
+bun run typecheck           # typecheck root and packages/harness
 bun run docs:check          # verify docs/protocol consistency against Rust's exported manifest
-bun run start               # run Electron desktop app in dev mode
-bun run desktop:demo        # run desktop app with onboarding demo mode
+bun run start               # build sidecar and run native Rune desktop app
+bun run desktop:rune        # alias for bun run start
 bun run cli                 # run the Rust CLI REPL via cargo
 bun run harness:run         # run harness scenarios against cowork-server in report-only mode
 ```
@@ -286,13 +301,13 @@ Repository map:
 | --- | --- |
 | `crates/cowork-server/` | WebSocket server, JSON-RPC routes, session orchestration, mobile TLS |
 | `crates/cowork-cli/` | CLI REPL and command parsing |
+| `crates/cowork-desktop/` | Native Rust desktop app built on Rune (see `crates/cowork-desktop/README.md`) |
 | `crates/cowork-providers/` | Provider catalog, auth, and model wire adapters |
 | `crates/cowork-tools/` | Built-in server-side tools |
 | `crates/cowork-harness/` | Agent turn loop, subagents, workflows, and session runtime |
 | `crates/cowork-mcp/` | MCP config, auth, and client lifecycle |
 | `crates/cowork-harness/src/extensions/` | Skill, plugin, and marketplace discovery |
-| `src/` | Shared TypeScript client contracts, model catalog, cost formatting, and desktop platform helpers |
-| `apps/desktop/` | Electron desktop app |
+| `src/` | Shared TypeScript client contracts, model catalog, cost formatting, and platform/packaging helpers |
 | `apps/mobile/` | Optional Expo mobile app |
 | `packages/harness/` | Developer harness scripts and validation |
 | `config/` | Built-in defaults and provider model configs |
@@ -309,6 +324,7 @@ More docs:
 - [docs/workspace-context.md](./docs/workspace-context.md)
 - [docs/harness/index.md](./docs/harness/index.md)
 - [docs/harness/config.md](./docs/harness/config.md)
+- [crates/cowork-desktop/README.md](./crates/cowork-desktop/README.md)
 
 ## Status
 

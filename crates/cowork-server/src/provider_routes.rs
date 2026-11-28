@@ -18,11 +18,20 @@ use cowork_protocol::{
     ProviderCodexAppServerUpdateParams, ProviderCustomModelAddParams,
     ProviderCustomModelDeleteParams, ProviderLmStudioLocalStartParams,
     ProviderLmStudioLocalStatusParams, ProviderModelResetEnabledParams,
-    ProviderModelSetEnabledParams, ProviderStatusRefreshParams, error_codes,
+    ProviderModelSetEnabledParams, ProviderRuntimeStatusParams, ProviderRuntimeUpdateParams,
+    ProviderStatusRefreshParams, error_codes,
 };
 use cowork_providers::CatalogBuildOptions;
+use cowork_providers::antigravity_acp::{
+    AntigravityAcpInstallOptions, antigravity_acp_override_configured,
+    resolve_antigravity_acp_status, update_managed_antigravity_acp,
+};
 use cowork_providers::chat_completions::lmstudio::{
     LmStudioLocalService, is_loopback_lmstudio_url, resolve_lmstudio_options,
+};
+use cowork_providers::claude_sdk::{
+    ClaudeSdkInstallOptions, claude_sdk_override_configured, resolve_claude_sdk_status,
+    update_managed_claude_sdk,
 };
 use cowork_providers::codex_app_server::{
     CodexAppServerClient, CodexNotification, CodexRuntimeInstallOptions,
@@ -125,15 +134,7 @@ impl ServerRuntimeState {
             .and_then(|cfg| cfg.provider_options);
         let mut base_url_overrides = HashMap::new();
         for &provider in &ProviderName::ALL {
-            let env_key = match provider {
-                ProviderName::Google => "GEMINI_BASE_URL".to_owned(),
-                ProviderName::Bedrock => "AWS_BEDROCK_ENDPOINT_URL".to_owned(),
-                ProviderName::Lmstudio => "LM_STUDIO_BASE_URL".to_owned(),
-                other => format!(
-                    "{}_BASE_URL",
-                    other.as_str().to_ascii_uppercase().replace('-', "_")
-                ),
-            };
+            let env_key = cowork_providers::provider_base_url_env_key(provider);
             if let Some(po_url) = provider_options
                 .as_ref()
                 .and_then(|po| po.get(provider.as_str()))
@@ -457,6 +458,127 @@ impl ServerRuntimeState {
         Ok(json!({ "status": status }))
     }
 
+    pub fn handle_provider_runtime_status(
+        &self,
+        params: &ProviderRuntimeStatusParams,
+    ) -> Result<Value, JsonRpcLiteError> {
+        let _cwd = self
+            .resolve_workspace_path(params.cwd.as_deref(), "cowork/provider/runtime/status")
+            .map_err(|m| JsonRpcLiteError::new(error_codes::INVALID_PARAMS, m))?;
+        let provider = parse_provider_param(&params.provider)?;
+        let paths = get_ai_coworker_paths(Some(&self.homedir), &self.env);
+        let status = match provider {
+            ProviderName::CodexCli => {
+                serde_json::to_value(resolve_codex_app_server_status(&paths.root_dir, &self.env))
+                    .map_err(|e| {
+                        JsonRpcLiteError::new(error_codes::INTERNAL_ERROR, e.to_string())
+                    })?
+            }
+            ProviderName::ClaudeSdk => {
+                serde_json::to_value(resolve_claude_sdk_status(&paths.root_dir, &self.env))
+                    .map_err(|e| {
+                        JsonRpcLiteError::new(error_codes::INTERNAL_ERROR, e.to_string())
+                    })?
+            }
+            ProviderName::AntigravityAcp => {
+                serde_json::to_value(resolve_antigravity_acp_status(&paths.root_dir, &self.env))
+                    .map_err(|e| {
+                        JsonRpcLiteError::new(error_codes::INTERNAL_ERROR, e.to_string())
+                    })?
+            }
+            other => {
+                return Err(JsonRpcLiteError::new(
+                    error_codes::INVALID_PARAMS,
+                    format!(
+                        "Provider '{}' does not use a Cowork-managed downloadable runtime.",
+                        other.as_str()
+                    ),
+                ));
+            }
+        };
+        Ok(json!({
+            "provider": provider.as_str(),
+            "status": status,
+        }))
+    }
+
+    pub async fn handle_provider_runtime_update(
+        &self,
+        params: &ProviderRuntimeUpdateParams,
+    ) -> Result<Value, JsonRpcLiteError> {
+        let _cwd = self
+            .resolve_workspace_path(params.cwd.as_deref(), "cowork/provider/runtime/update")
+            .map_err(|m| JsonRpcLiteError::new(error_codes::INVALID_PARAMS, m))?;
+        let provider = parse_provider_param(&params.provider)?;
+        let force = params.force.unwrap_or(false);
+        let paths = get_ai_coworker_paths(Some(&self.homedir), &self.env);
+        let status = match provider {
+            ProviderName::CodexCli => {
+                let codex_home = resolve_codex_home(&paths.root_dir);
+                self.codex_pool.close_for_home(&codex_home).await;
+                let st = if codex_app_server_override_configured(&self.env) {
+                    resolve_codex_app_server_status(&paths.root_dir, &self.env)
+                } else {
+                    update_managed_codex_app_server(
+                        &paths.root_dir,
+                        force,
+                        &CodexRuntimeInstallOptions::from_env(&self.env),
+                    )
+                    .await
+                    .map_err(|m| JsonRpcLiteError::new(error_codes::INTERNAL_ERROR, m))?
+                };
+                serde_json::to_value(st).map_err(|e| {
+                    JsonRpcLiteError::new(error_codes::INTERNAL_ERROR, e.to_string())
+                })?
+            }
+            ProviderName::ClaudeSdk => {
+                let st = if claude_sdk_override_configured(&self.env) {
+                    resolve_claude_sdk_status(&paths.root_dir, &self.env)
+                } else {
+                    update_managed_claude_sdk(
+                        &paths.root_dir,
+                        force,
+                        &ClaudeSdkInstallOptions::from_env(&self.env),
+                    )
+                    .await
+                    .map_err(|m| JsonRpcLiteError::new(error_codes::INTERNAL_ERROR, m))?
+                };
+                serde_json::to_value(st).map_err(|e| {
+                    JsonRpcLiteError::new(error_codes::INTERNAL_ERROR, e.to_string())
+                })?
+            }
+            ProviderName::AntigravityAcp => {
+                let st = if antigravity_acp_override_configured(&self.env) {
+                    resolve_antigravity_acp_status(&paths.root_dir, &self.env)
+                } else {
+                    update_managed_antigravity_acp(
+                        &paths.root_dir,
+                        force,
+                        &AntigravityAcpInstallOptions::from_env(&self.env),
+                    )
+                    .await
+                    .map_err(|m| JsonRpcLiteError::new(error_codes::INTERNAL_ERROR, m))?
+                };
+                serde_json::to_value(st).map_err(|e| {
+                    JsonRpcLiteError::new(error_codes::INTERNAL_ERROR, e.to_string())
+                })?
+            }
+            other => {
+                return Err(JsonRpcLiteError::new(
+                    error_codes::INVALID_PARAMS,
+                    format!(
+                        "Provider '{}' does not use a Cowork-managed downloadable runtime.",
+                        other.as_str()
+                    ),
+                ));
+            }
+        };
+        Ok(json!({
+            "provider": provider.as_str(),
+            "status": status,
+        }))
+    }
+
     pub async fn handle_lmstudio_local_status(
         &self,
         params: &ProviderLmStudioLocalStatusParams,
@@ -468,13 +590,35 @@ impl ServerRuntimeState {
             )
             .map_err(|m| JsonRpcLiteError::new(error_codes::INVALID_PARAMS, m))?;
         let opts = self.catalog_build_options(&cwd, false);
+        let configured_lms =
+            resolve_lmstudio_options(&self.env, opts.provider_options.as_ref(), None);
+        let requested_base_url = params
+            .base_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        let client_overrode_base_url = requested_base_url.is_some_and(|raw| {
+            cowork_config::normalize_lmstudio_base_url(Some(raw)) != configured_lms.base_url
+        });
+        // SECURITY BOUNDARY: never send saved LM Studio credentials to an unconfigured
+        // client-chosen `baseUrl`.
+        let saved_key = if client_overrode_base_url {
+            None
+        } else {
+            let paths = get_ai_coworker_paths(Some(&self.homedir), &self.env);
+            read_connection_store(&paths)
+                .await
+                .ok()
+                .and_then(|store| store.provider_api_key(ProviderName::Lmstudio))
+        };
         let svc = LmStudioLocalService::new();
         let status = svc
-            .get_status(
+            .get_status_with_key(
                 &self.homedir,
                 &self.env,
                 opts.provider_options.as_ref(),
-                params.base_url.as_deref(),
+                requested_base_url,
+                saved_key.as_deref(),
             )
             .await;
         Ok(json!({ "status": status }))
@@ -500,14 +644,14 @@ impl ServerRuntimeState {
         }
 
         let opts = self.catalog_build_options(&cwd, false);
-        let resolved_lms =
+        let configured_lms =
             resolve_lmstudio_options(&self.env, opts.provider_options.as_ref(), None);
-        let target_base_url = params
+        let requested_base_url = params
             .base_url
             .as_deref()
             .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .unwrap_or(&resolved_lms.base_url);
+            .filter(|s| !s.is_empty());
+        let target_base_url = requested_base_url.unwrap_or(&configured_lms.base_url);
 
         if !is_loopback_lmstudio_url(target_base_url) {
             return Err(JsonRpcLiteError::new(
@@ -516,13 +660,30 @@ impl ServerRuntimeState {
             ));
         }
 
+        let client_overrode_base_url = requested_base_url.is_some_and(|raw| {
+            cowork_config::normalize_lmstudio_base_url(Some(raw)) != configured_lms.base_url
+        });
+        // SECURITY BOUNDARY: never send saved LM Studio credentials to an unconfigured
+        // client-chosen `baseUrl`.
+        let saved_key = if client_overrode_base_url {
+            None
+        } else {
+            let paths = get_ai_coworker_paths(Some(&self.homedir), &self.env);
+            read_connection_store(&paths)
+                .await
+                .ok()
+                .and_then(|store| store.provider_api_key(ProviderName::Lmstudio))
+        };
+
         let svc = LmStudioLocalService::new();
         let status = svc
-            .start_local(
+            .start_local_with_key(
                 &self.homedir,
                 &self.env,
+                opts.provider_options.as_ref(),
                 Some(target_base_url),
                 params.timeout_ms,
+                saved_key.as_deref(),
             )
             .await
             .map_err(|m| JsonRpcLiteError::new(error_codes::INVALID_REQUEST, m))?;

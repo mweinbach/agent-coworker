@@ -1,0 +1,13 @@
+{
+  "id": "gemini-3.8-flash",
+  "provider": "antigravity-acp",
+  "displayName": "Gemini 3.8 Flash (Antigravity)",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": true,
+  "promptTemplate": "system-models/gemini-3.5-flash.md",
+  "providerOptionsDefaults": {
+    "reasoningEffort": "medium"
+  },
+  "supportedReasoningEfforts": ["low", "medium", "high"],
+  "isDefault": false
+}

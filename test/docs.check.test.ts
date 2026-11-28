@@ -241,7 +241,7 @@ describe("docs checker parity", () => {
     expect(
       resolveDocReferencePath(
         cwd,
-        "apps/desktop/AGENTS.md",
+        "crates/cowork-desktop/README.md",
         "../../agent_docs/desktop-ui.md",
         "inline",
       ),
@@ -277,8 +277,7 @@ describe("docs checker parity", () => {
       "CLAUDE.md",
       "GEMINI.md",
       "CONTRIBUTING.md",
-      "apps/desktop/AGENTS.md",
-      "apps/desktop/README.md",
+      "crates/cowork-desktop/README.md",
       ...agentDocFiles,
       ...harnessDocFiles,
       ...activeDocsDirFiles,

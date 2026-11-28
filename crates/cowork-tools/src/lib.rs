@@ -27,7 +27,7 @@ pub use agent_tools::{
     SpawnAgentTool, VALID_AGENT_ROLES, VALID_CONTEXT_MODES, WaitForAgentTool, all_subagent_tools,
     resolve_context_mode_and_briefing, validate_and_resolve_target_paths,
 };
-pub use bash::BashTool;
+pub use bash::{BashTool, matches_ts_approval_patterns};
 pub use catalog::{
     DeferredToolCatalog, MAX_PARALLEL_READ_BATCH, ParallelTestHook, ToolBatchCall, ToolBatchResult,
     ToolMap, ToolSearchResult, create_builtin_tools, execute_tool_batch,
@@ -83,7 +83,7 @@ pub use text_codec::{
 pub use thread_tools::ThreadManagementTool;
 pub use web::{
     WebFetchTool, WebSearchTool, html_to_clean_markdown, is_blocked_hostname, is_blocked_ip,
-    wrap_untrusted_web_content,
+    resolve_and_validate_url_target, wrap_untrusted_web_content,
 };
 pub use workflow::{
     WORKFLOW_TOOL_DESCRIPTION, WorkflowTool,

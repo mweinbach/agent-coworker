@@ -10,7 +10,7 @@ import {
   useState,
 } from "react";
 import { createRoot } from "react-dom/client";
-import { setupJsdom } from "../apps/desktop/test/jsdomHarness";
+import { setupJsdom } from "./helpers/jsdomHarness";
 
 type CameraPermission = { granted: boolean; canAskAgain: boolean };
 let cameraPermission: CameraPermission = { granted: false, canAskAgain: true };

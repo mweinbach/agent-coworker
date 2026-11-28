@@ -9,28 +9,28 @@ Load this file when reviewing diffs. Apply these rules only when the changed cod
 
 ## Authority boundaries
 
-- Search for privileged tools, task/thread operations, filesystem access, or Electron IPC whose authorization is enforced only by a UI/client check or after dispatch. Enforce least privilege at the server, tool factory, route, or IPC boundary before the operation executes, and add a regression covering the disallowed session or sender as well as the allowed path.
-  - Where to look: `crates/cowork-tools/src/catalog.rs` (`create_builtin_tools` gating), `crates/cowork-server/src/`, `apps/desktop/electron/ipc.ts`
+- Search for privileged tools, task/thread operations, filesystem access, or native desktop host operations whose authorization is enforced only by a UI check or after dispatch. Enforce least privilege at the server, tool factory, route, or native boundary before the operation executes, and add a regression covering the disallowed session or caller as well as the allowed path.
+  - Where to look: `crates/cowork-tools/src/catalog.rs` (`create_builtin_tools` gating), `crates/cowork-server/src/`, `crates/cowork-desktop/src/native/security.rs`, `crates/cowork-desktop/src/native/path_boundary.rs`
   - Related: `repo-contracts.md` → Thread-tool and H3 permissions
 
 ## Harness-owned behavior
 
 - Search for product behavior implemented only in a desktop or mobile client when the capability must also work from the CLI or another UI. Put state, policy, persistence, and agent behavior in the harness/server, expose it through typed JSON-RPC, and keep each UI as a thin adapter. Pure presentation and platform-native window behavior may remain client-specific.
-  - Where to look: logic creeping into `apps/desktop/src/app/store.ts` or `apps/mobile/` that has no JSON-RPC counterpart in `crates/cowork-server/src/`
+  - Where to look: logic creeping into `crates/cowork-desktop/src/state.rs` or `apps/mobile/` that has no JSON-RPC counterpart in `crates/cowork-server/src/`
 
-## Privileged IPC (desktop)
+## Native host boundaries (desktop)
 
-- Search for a renderer capability that bypasses the typed preload bridge, or an IPC contract changed in only part of the call chain. Keep the channel and payload types, preload exposure, main-process handler, and renderer wrapper in sync. Validate the sender and inputs in the main process; never expose an unrestricted Node or filesystem primitive to the renderer.
-  - Where to look (all four must change together): `apps/desktop/src/lib/desktopApi.ts` → `apps/desktop/electron/preload.ts` → `apps/desktop/electron/ipc.ts` → `apps/desktop/src/lib/desktopCommands.ts`
+- Search for UI actions that bypass path confinement, shell-launch validation, or workspace root authorization in the native desktop layer. Validate inputs and filesystem roots inside `crates/cowork-desktop/src/native/` before performing host operations.
+  - Where to look: `crates/cowork-desktop/src/native/security.rs`, `crates/cowork-desktop/src/native/path_boundary.rs`, `crates/cowork-desktop/src/native/explorer.rs`, `crates/cowork-desktop/src/native/shell_ops.rs`
 
 ## Workspace persistence (desktop)
 
 - Search for new, renamed, or cleared workspace fields that do not round-trip through persistence sanitization and migration. Preserve explicit clear/inherit semantics, mutate the same workspace class the control renders, and add save/reload coverage so a setting cannot appear to work and then silently disappear after restart.
-  - Where to look: `apps/desktop/electron/services/persistence.ts` (`sanitizeWorkspaces`)
+  - Where to look: `crates/cowork-desktop/src/native/persistence.rs`, `crates/cowork-server/src/desktop_state_normalize.rs`
   - Related: `repo-contracts.md` → Workspace settings, Three-tier inherit semantics
 
 ## Optimistic message identity (desktop)
 
 - Search for chat send, retry, steer, replay, or projection changes that drop or regenerate `clientMessageId`. Preserve the originating ID through JSON-RPC, server events, projected user items, retries, and reconciliation so an accepted send cannot render duplicate user messages.
-  - Where to look: `crates/cowork-server/src/jsonrpc_turn.rs`, `crates/cowork-inference/src/projector.rs`, `crates/cowork-protocol/src/projector.rs`, `apps/desktop/src/app/store.ts`
+  - Where to look: `crates/cowork-server/src/jsonrpc_turn.rs`, `crates/cowork-inference/src/projector.rs`, `crates/cowork-protocol/src/projector.rs`, `crates/cowork-desktop/src/state.rs`
   - Related: `repo-contracts.md` → Optimistic chat sends, JSON-RPC projector

@@ -11,7 +11,7 @@ Agent-coworker follows a **WebSocket-first** architecture where the server manag
 │                         Clients                                  │
 │  ┌─────────┐  ┌─────────┐  ┌─────────────────────┐             │
 │  │   CLI   │  │ Desktop │  │ Custom Client       │             │
-│  │  REPL   │  │(Electron)│ │ (WebSocket)         │             │
+│  │  REPL   │  │ (Rune)  │  │ (WebSocket / Mobile)│             │
 │  └────┬────┘  └────┬────┘  └──────────┬──────────┘             │
 └───────┼────────────┼──────────────────┼────────────────────────┘
         │            │                  │
@@ -174,11 +174,11 @@ OpenTelemetry + Langfuse integration for production monitoring:
 
 ## Clients
 
-### Desktop (`apps/desktop/`)
+### Desktop (`crates/cowork-desktop/`)
 
-Electron + React wrapper (primary client):
+Native Rust desktop app built on Rune (primary client):
 
-- Native menus and dialogs
+- Native menus, window chrome, and OS dialogs
 - Desktop notifications
 - Per-workspace server processes
 - Persistent workspace/thread state

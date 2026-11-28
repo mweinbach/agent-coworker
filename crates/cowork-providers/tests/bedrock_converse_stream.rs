@@ -578,7 +578,10 @@ async fn resolves_cowork_home_fallback_and_nested_provider_options_across_transp
         &nested_opts,
     );
     assert_eq!(body["inferenceConfig"]["maxTokens"], json!(4096));
-    assert_eq!(body["inferenceConfig"]["temperature"], json!(0.8));
+    assert!(
+        body["inferenceConfig"].get("temperature").is_none(),
+        "Bedrock forbids temperature when Claude thinking is enabled"
+    );
     assert_eq!(
         body["additionalModelRequestFields"]["thinking"],
         json!({ "type": "adaptive" })
@@ -586,6 +589,12 @@ async fn resolves_cowork_home_fallback_and_nested_provider_options_across_transp
     assert_eq!(
         body["additionalModelRequestFields"]["output_config"]["effort"],
         json!("high")
+    );
+    let non_thinking_body =
+        build_converse_request_body("amazon.nova-lite-v1:0", "System", &[], &[], &nested_opts);
+    assert_eq!(
+        non_thinking_body["inferenceConfig"]["temperature"],
+        json!(0.8)
     );
 
     // 2. Chat Completions nested `provider_options.<provider>` precedence + top-level fallback

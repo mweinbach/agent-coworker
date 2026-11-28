@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { MODEL_REGISTRY_PROVIDER_NAMES } from "../src/generated/providerSpecs";
 import {
   defaultSupportedModel,
   describeModelProviderMismatch,
@@ -20,20 +21,7 @@ function repoRoot(): string {
 
 describe("model registry invariants", () => {
   test("every provider has a default supported model", () => {
-    for (const provider of [
-      "google",
-      "openai",
-      "anthropic",
-      "bedrock",
-      "baseten",
-      "together",
-      "fireworks",
-      "firepass",
-      "nvidia",
-      "opencode-go",
-      "opencode-zen",
-      "codex-cli",
-    ] as ProviderName[]) {
+    for (const provider of MODEL_REGISTRY_PROVIDER_NAMES) {
       const models = listSupportedModels(provider);
       expect(models.length).toBeGreaterThan(0);
       expect(defaultSupportedModel(provider).provider).toBe(provider);
@@ -89,7 +77,8 @@ describe("model registry invariants", () => {
     for (const model of MODEL_REGISTRY_ENTRIES) {
       const efforts = model.supportedReasoningEfforts;
       if (!efforts) continue;
-      const defaultEffort = model.providerOptionsDefaults.reasoningEffort;
+      const defaultEffort =
+        model.providerOptionsDefaults.reasoningEffort ?? model.providerOptionsDefaults.effort;
       expect(
         typeof defaultEffort === "string" &&
           efforts.includes(defaultEffort as (typeof efforts)[number]),
@@ -144,20 +133,7 @@ describe("model registry invariants", () => {
       seenDefaults.set(model.provider, (seenDefaults.get(model.provider) ?? 0) + 1);
     }
 
-    for (const provider of [
-      "google",
-      "openai",
-      "anthropic",
-      "bedrock",
-      "baseten",
-      "together",
-      "fireworks",
-      "firepass",
-      "nvidia",
-      "opencode-go",
-      "opencode-zen",
-      "codex-cli",
-    ] as ProviderName[]) {
+    for (const provider of MODEL_REGISTRY_PROVIDER_NAMES) {
       expect(seenDefaults.get(provider)).toBe(1);
     }
   });

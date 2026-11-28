@@ -126,7 +126,7 @@ async fn race_with_cancel<T>(
     }
 }
 
-async fn resolve_and_validate_url_target(
+pub async fn resolve_and_validate_url_target(
     url: &Url,
     dns_override: Option<&DnsOverrideFn>,
 ) -> ToolResult<(String, SocketAddr)> {

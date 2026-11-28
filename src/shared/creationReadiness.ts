@@ -68,12 +68,3 @@ export const creationPreflightResultSchema = z
     checks: z.array(creationReadinessCheckSchema),
   })
   .strict();
-
-export type CreationRepairAction = z.infer<typeof creationRepairActionSchema>;
-type CreationReadinessCheck = z.infer<typeof creationReadinessCheckSchema>;
-export type CreationPreflightParams = z.infer<typeof creationPreflightParamsSchema>;
-export type CreationPreflightResult = z.infer<typeof creationPreflightResultSchema>;
-
-export const jsonRpcCreationResultSchemas = {
-  "cowork/creation/preflight": creationPreflightResultSchema,
-} as const;

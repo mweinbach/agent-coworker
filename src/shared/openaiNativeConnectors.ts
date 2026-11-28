@@ -2,7 +2,7 @@ import { z } from "zod";
 
 const OPENAI_NATIVE_CONNECTORS_EVENT_TYPE = "openai_native_connectors" as const;
 
-export type OpenAiNativeConnector = {
+type OpenAiNativeConnector = {
   id: string;
   name: string;
   description?: string;

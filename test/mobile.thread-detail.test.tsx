@@ -2,7 +2,7 @@ import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import path from "node:path";
 import { act, createElement, forwardRef } from "react";
 import { createRoot } from "react-dom/client";
-import { setupJsdom } from "../apps/desktop/test/jsdomHarness";
+import { setupJsdom } from "./helpers/jsdomHarness";
 
 if (typeof globalThis.requestAnimationFrame === "undefined") {
   (globalThis as any).requestAnimationFrame = (cb: FrameRequestCallback) =>

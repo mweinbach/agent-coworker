@@ -55,31 +55,6 @@ export type WorkflowProgressPayload = {
   outcome?: WorkflowRunOutcome;
 };
 
-/** Keep all active runs plus this many most-recent terminal runs per session. */
-export const MAX_RETAINED_TERMINAL_WORKFLOW_RUNS = 20;
-
-export function upsertRetainedWorkflowRun(
-  runs: readonly WorkflowProgressPayload[],
-  progress: WorkflowProgressPayload,
-): WorkflowProgressPayload[] {
-  const existingIndex = runs.findIndex((run) => run.runId === progress.runId);
-  const next =
-    existingIndex >= 0
-      ? runs.map((run, index) => (index === existingIndex ? progress : run))
-      : [...runs, progress];
-  let terminalToDrop = Math.max(
-    0,
-    next.filter((run) => run.outcome !== undefined).length - MAX_RETAINED_TERMINAL_WORKFLOW_RUNS,
-  );
-  if (terminalToDrop === 0) return next;
-  return next.filter((run) => {
-    if (run.outcome === undefined) return true;
-    if (terminalToDrop <= 0) return true;
-    terminalToDrop -= 1;
-    return false;
-  });
-}
-
 const workflowProgressAgentSchema = z
   .object({
     index: z.number().int().min(0),

@@ -5,6 +5,7 @@ import { AppButton } from "@/components/ui/app-button";
 import { Screen } from "@/components/ui/screen";
 import { SectionCard } from "@/components/ui/section-card";
 import { StatusPill } from "@/components/ui/status-pill";
+import { PROVIDER_SPECS } from "@/cowork-shared/providerSpecs";
 import {
   minimumTouchTarget,
   useAccessibilityAnnouncement,
@@ -101,7 +102,15 @@ function SectionLabel({ children }: { children: string }) {
 
 export default function ProvidersScreen() {
   const theme = useAppTheme();
-  const catalog = useProviderStore((s) => s.catalog);
+  const rawCatalog = useProviderStore((s) => s.catalog);
+  const catalog = useMemo(
+    () =>
+      rawCatalog.filter((provider) => {
+        const spec = PROVIDER_SPECS[provider.id as keyof typeof PROVIDER_SPECS];
+        return spec ? spec.userFacing : true;
+      }),
+    [rawCatalog],
+  );
   const authMethodsByProvider = useProviderStore((s) => s.authMethodsByProvider);
   const statusByProvider = useProviderStore((s) => s.statusByProvider);
   const loading = useProviderStore((s) => s.loading);
@@ -109,6 +118,7 @@ export default function ProvidersScreen() {
   const refresh = useProviderStore((s) => s.refresh);
   const selectDefaultModel = useProviderStore((s) => s.selectDefaultModel);
   const setApiKey = useProviderStore((s) => s.setApiKey);
+  const setConfig = useProviderStore((s) => s.setConfig);
   const authorize = useProviderStore((s) => s.authorize);
   const callback = useProviderStore((s) => s.callback);
   const logout = useProviderStore((s) => s.logout);
@@ -120,6 +130,7 @@ export default function ProvidersScreen() {
   const isConnected = usePairingStore((s) => isWorkspaceConnectionReady(s.connectionState));
   const [expandedProvider, setExpandedProvider] = useState<string | null>(null);
   const [apiKeyDrafts, setApiKeyDrafts] = useState<Record<string, string>>({});
+  const [configFieldDrafts, setConfigFieldDrafts] = useState<Record<string, string>>({});
   const [oauthCodeDrafts, setOauthCodeDrafts] = useState<Record<string, string>>({});
   const [authRequestsInFlight, setAuthRequestsInFlight] = useState<Record<string, boolean>>({});
   useAccessibilityAnnouncement(error ?? lastAuthResult?.message ?? null);
@@ -224,7 +235,13 @@ export default function ProvidersScreen() {
         const isExpanded = expandedProvider === provider.id;
         const authMethods = authMethodsByProvider[provider.id] ?? [];
         const status = statusByProvider[provider.id];
-        const apiKeyMethods = authMethods.filter((method) => method.type === "api");
+        const apiKeyMethods = authMethods.filter(
+          (method) => method.type === "api" && (!method.fields || method.fields.length === 0),
+        );
+        const structuredConfigMethods = authMethods.filter(
+          (method) =>
+            method.type === "api" && Array.isArray(method.fields) && method.fields.length > 0,
+        );
         const oauthMethods = authMethods.filter((method) => method.type === "oauth");
         const statusTone = providerTone(status?.mode, status?.authorized);
         const statusLabel = providerLabel(status?.mode, status?.authorized);
@@ -404,6 +421,99 @@ export default function ProvidersScreen() {
                   );
                 })}
 
+                {structuredConfigMethods.map((method) => {
+                  const methodKey = `${provider.id}:${method.id}`;
+                  const savingCfg = authRequestsInFlight[methodKey] === true;
+                  const fields = method.fields ?? [];
+                  const missingRequired = fields.some(
+                    (field) =>
+                      field.required && !configFieldDrafts[`${methodKey}:${field.id}`]?.trim(),
+                  );
+                  return (
+                    <View key={method.id} style={{ gap: 8 }}>
+                      <Text
+                        style={{
+                          color: theme.textTertiary,
+                          fontSize: 11,
+                          fontWeight: "600",
+                          textTransform: "uppercase",
+                        }}
+                      >
+                        {method.label}
+                      </Text>
+                      {fields.map((field) => {
+                        const fk = `${methodKey}:${field.id}`;
+                        const savedMask = status?.savedFieldMasks?.[field.id];
+                        return (
+                          <TextInput
+                            key={field.id}
+                            accessibilityLabel={`${provider.name} ${method.label} ${field.label}`}
+                            value={configFieldDrafts[fk] ?? ""}
+                            onChangeText={(value) => {
+                              setConfigFieldDrafts((state) => ({ ...state, [fk]: value }));
+                            }}
+                            placeholder={
+                              savedMask
+                                ? `${field.label} (saved: ${savedMask})`
+                                : (field.placeholder ?? field.label)
+                            }
+                            placeholderTextColor={theme.textTertiary}
+                            secureTextEntry={field.secret === true || field.kind === "password"}
+                            autoCapitalize="none"
+                            autoCorrect={false}
+                            style={{
+                              minHeight: minimumTouchTarget(),
+                              borderRadius: 14,
+                              borderWidth: 1,
+                              borderColor: theme.border,
+                              backgroundColor: theme.surfaceMuted,
+                              color: theme.text,
+                              paddingHorizontal: 12,
+                              paddingVertical: 10,
+                              fontSize: 14,
+                            }}
+                          />
+                        );
+                      })}
+                      <Pressable
+                        accessibilityLabel={`Save ${provider.name} ${method.label}`}
+                        accessibilityRole="button"
+                        accessibilityState={{
+                          busy: savingCfg,
+                          disabled: savingCfg || missingRequired,
+                        }}
+                        disabled={savingCfg || missingRequired}
+                        onPress={() => {
+                          if (savingCfg || missingRequired) return;
+                          const values: Record<string, string> = {};
+                          for (const field of fields) {
+                            const raw = configFieldDrafts[`${methodKey}:${field.id}`]?.trim();
+                            if (raw) values[field.id] = raw;
+                          }
+                          setAuthRequestsInFlight((state) => ({ ...state, [methodKey]: true }));
+                          void setConfig(provider.id, method.id, values).finally(() => {
+                            setAuthRequestsInFlight((state) => ({ ...state, [methodKey]: false }));
+                          });
+                        }}
+                        style={({ pressed }) => ({
+                          minHeight: minimumTouchTarget(),
+                          justifyContent: "center",
+                          alignSelf: "flex-start",
+                          borderRadius: 999,
+                          backgroundColor: pressed ? theme.accent : theme.primary,
+                          opacity: savingCfg || missingRequired ? 0.5 : 1,
+                          paddingHorizontal: 14,
+                          paddingVertical: 9,
+                        })}
+                      >
+                        <Text style={{ color: theme.primaryText, fontWeight: "700", fontSize: 13 }}>
+                          {savingCfg ? "Saving…" : "Save credentials"}
+                        </Text>
+                      </Pressable>
+                    </View>
+                  );
+                })}
+
                 {oauthMethods.map((method) => {
                   const codeKey = `${provider.id}:${method.id}`;
                   const completingSignIn = authRequestsInFlight[codeKey] === true;
@@ -496,28 +606,30 @@ export default function ProvidersScreen() {
                               {lastAuthChallenge.url}
                             </Text>
                           ) : null}
-                          <TextInput
-                            accessibilityLabel={`${provider.name} authorization code`}
-                            value={oauthCodeDrafts[codeKey] ?? ""}
-                            onChangeText={(value) => {
-                              setOauthCodeDrafts((state) => ({ ...state, [codeKey]: value }));
-                            }}
-                            placeholder="Paste code if prompted"
-                            placeholderTextColor={theme.textTertiary}
-                            autoCapitalize="none"
-                            autoCorrect={false}
-                            style={{
-                              minHeight: minimumTouchTarget(),
-                              borderRadius: 14,
-                              borderWidth: 1,
-                              borderColor: theme.border,
-                              backgroundColor: theme.surfaceMuted,
-                              color: theme.text,
-                              paddingHorizontal: 12,
-                              paddingVertical: 10,
-                              fontSize: 14,
-                            }}
-                          />
+                          {method.oauthMode !== "auto" ? (
+                            <TextInput
+                              accessibilityLabel={`${provider.name} authorization code`}
+                              value={oauthCodeDrafts[codeKey] ?? ""}
+                              onChangeText={(value) => {
+                                setOauthCodeDrafts((state) => ({ ...state, [codeKey]: value }));
+                              }}
+                              placeholder="Paste code if prompted"
+                              placeholderTextColor={theme.textTertiary}
+                              autoCapitalize="none"
+                              autoCorrect={false}
+                              style={{
+                                minHeight: minimumTouchTarget(),
+                                borderRadius: 14,
+                                borderWidth: 1,
+                                borderColor: theme.border,
+                                backgroundColor: theme.surfaceMuted,
+                                color: theme.text,
+                                paddingHorizontal: 12,
+                                paddingVertical: 10,
+                                fontSize: 14,
+                              }}
+                            />
+                          ) : null}
                           <Pressable
                             accessibilityLabel={`Complete ${provider.name} sign-in`}
                             accessibilityRole="button"
@@ -528,7 +640,8 @@ export default function ProvidersScreen() {
                             disabled={completingSignIn}
                             onPress={() => {
                               if (completingSignIn) return;
-                              const submittedCode = oauthCodeDrafts[codeKey];
+                              const submittedCode =
+                                method.oauthMode === "auto" ? undefined : oauthCodeDrafts[codeKey];
                               setAuthRequestsInFlight((state) => ({ ...state, [codeKey]: true }));
                               void callback(provider.id, method.id, submittedCode)
                                 .then((completed) => {

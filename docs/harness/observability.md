@@ -8,7 +8,7 @@ Independent of Langfuse telemetry, the server writes session `log` and `error` e
 `~/.cowork/logs/server-YYYY-MM-DD.log` (JSONL, one file per UTC day). This is on by default in every
 build — packaged desktop builds have no terminal, so this file is the durable record of harness tool
 traces and turn failures. Entries pass through credential and sensitive-text redaction
-(`crates/cowork-server/src/observability.rs`, mirrored on the client in `src/diagnostics/redaction.ts`) before hitting disk, files are `0600` inside a `0700` directory, and files older than 14 days
+(`crates/cowork-server/src/observability.rs`, mirrored in the native desktop client in `crates/cowork-desktop/src/native/local_logs.rs`) before hitting disk, files are `0600` inside a `0700` directory, and files older than 14 days
 are swept automatically. Set `COWORK_SERVER_FILE_LOGS=0` to disable.
 
 The server also runs best-effort startup maintenance (`crates/cowork-storage/src/session_db.rs` and `crates/cowork-server/src/lib.rs`):

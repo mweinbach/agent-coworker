@@ -400,6 +400,18 @@ fn normalize_workspaces(raw: Option<&Value>, homedir: &Path) -> Vec<Value> {
             "defaultBackupsEnabled".to_owned(),
             json!(default_backups_enabled),
         );
+        if let Some(preferred_child_model) =
+            as_non_empty_string(item.get("defaultPreferredChildModel"))
+                .or_else(|| as_non_empty_string(item.get("defaultSubAgentModel")))
+        {
+            record.insert(
+                "defaultPreferredChildModel".to_owned(),
+                json!(preferred_child_model),
+            );
+        } else {
+            record.remove("defaultPreferredChildModel");
+        }
+        record.remove("defaultSubAgentModel");
         record.insert("yolo".to_owned(), json!(false));
         seen.insert(id);
         workspaces.push(Value::Object(record));
@@ -557,4 +569,40 @@ pub fn build_fallback_workspace(fallback_cwd: &Path, homedir: &Path) -> Option<V
         "defaultBackupsEnabled": false,
         "yolo": false,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_state_migrates_legacy_default_sub_agent_model() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws_dir = tmp.path().join("project");
+        std::fs::create_dir_all(&ws_dir).unwrap();
+        let raw = json!({
+            "version": 2,
+            "workspaces": [
+                {
+                    "id": "ws-legacy",
+                    "name": "Legacy",
+                    "path": ws_dir.to_string_lossy(),
+                    "createdAt": "2026-01-01T00:00:00.000Z",
+                    "lastOpenedAt": "2026-01-01T00:00:00.000Z",
+                    "defaultSubAgentModel": "gpt-5.2-mini"
+                }
+            ],
+            "threads": []
+        });
+        let normalized = normalize_state(&raw, tmp.path());
+        assert_eq!(
+            normalized["workspaces"][0]["defaultPreferredChildModel"],
+            "gpt-5.2-mini"
+        );
+        assert!(
+            normalized["workspaces"][0]
+                .get("defaultSubAgentModel")
+                .is_none()
+        );
+    }
 }

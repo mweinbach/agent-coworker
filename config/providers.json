@@ -240,7 +240,7 @@
       "transport": "chat-completions",
       "userFacing": true,
       "discovery": "api",
-      "apiKeyEnvVars": ["OPENCODE_ZEN_API_KEY"],
+      "apiKeyEnvVars": ["OPENCODE_ZEN_API_KEY", "OPENCODE_API_KEY"],
       "inferenceBaseUrl": "https://opencode.ai/zen/v1",
       "discoveryBaseUrl": "https://opencode.ai/zen/v1",
       "defaultModel": "glm-5",
@@ -267,6 +267,36 @@
           "oauthMode": "auto"
         }
       ]
+    },
+    {
+      "id": "claude-sdk",
+      "displayName": "Claude SDK",
+      "promptDisplayName": "Claude Code SDK",
+      "transport": "claude-sdk",
+      "userFacing": true,
+      "discovery": "static",
+      "apiKeyEnvVars": ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
+      "inferenceBaseUrl": null,
+      "discoveryBaseUrl": null,
+      "defaultModel": "claude-opus-4-8",
+      "titleModel": "claude-haiku-4-5",
+      "authMethods": [
+        { "id": "api_key", "type": "api", "label": "Anthropic API key or Claude OAuth token" }
+      ]
+    },
+    {
+      "id": "antigravity-acp",
+      "displayName": "Antigravity ACP",
+      "promptDisplayName": "Antigravity ACP",
+      "transport": "antigravity-acp",
+      "userFacing": true,
+      "discovery": "static",
+      "apiKeyEnvVars": ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+      "inferenceBaseUrl": null,
+      "discoveryBaseUrl": null,
+      "defaultModel": "gemini-4-neon",
+      "titleModel": "gemini-3.8-flash",
+      "authMethods": [{ "id": "api_key", "type": "api", "label": "Gemini API key" }]
     }
   ]
 }

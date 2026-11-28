@@ -672,8 +672,28 @@ impl ActiveReplSession {
             }
 
             ParsedReplCommand::Reasoning(arg) => {
-                if !is_openai_compatible_provider(&self.provider) {
-                    writeln!(out, "{OPENAI_COMPATIBLE_PROVIDER_REQUIRED}")?;
+                let supports_reasoning = matches!(
+                    self.provider.as_str(),
+                    "openai"
+                        | "codex-cli"
+                        | "anthropic"
+                        | "google"
+                        | "bedrock"
+                        | "lmstudio"
+                        | "together"
+                        | "fireworks"
+                        | "firepass"
+                        | "opencode-go"
+                        | "opencode-zen"
+                        | "claude-sdk"
+                        | "antigravity-acp"
+                );
+                if !supports_reasoning {
+                    writeln!(
+                        out,
+                        "reasoning effort is not supported for provider '{}'",
+                        sanitize(&self.provider)
+                    )?;
                     out.flush()?;
                     return Ok(LineOutcome::Continue);
                 }
@@ -682,11 +702,23 @@ impl ActiveReplSession {
                     .next()
                     .unwrap_or("")
                     .to_ascii_lowercase();
-                if !REASONING_EFFORTS.contains(&val.as_str()) {
+                let is_google_dynamic = self.provider == "google" && val == "dynamic";
+                if !is_google_dynamic && !REASONING_EFFORTS.contains(&val.as_str()) {
                     writeln!(out, "usage: /reasoning <{}>", REASONING_EFFORTS.join("|"))?;
                     out.flush()?;
                     return Ok(LineOutcome::Continue);
                 }
+                let section = match self.provider.as_str() {
+                    "google" => {
+                        if val == "dynamic" || val == "none" {
+                            json!({ "thinkingConfig": {} })
+                        } else {
+                            json!({ "thinkingConfig": { "thinkingLevel": val } })
+                        }
+                    }
+                    "anthropic" => json!({ "effort": val }),
+                    _ => json!({ "reasoningEffort": val }),
+                };
                 self.rpc
                     .request(
                         "cowork/session/config/set",
@@ -694,7 +726,7 @@ impl ActiveReplSession {
                             "threadId": self.thread_id,
                             "config": {
                                 "providerOptions": {
-                                    (&self.provider): { "reasoningEffort": val }
+                                    (&self.provider): section
                                 }
                             }
                         })),
@@ -1069,7 +1101,12 @@ impl ActiveReplSession {
                         .rpc
                         .request(
                             "cowork/provider/auth/setApiKey",
-                            Some(json!({ "cwd": cwd_str, "provider": provider, "apiKey": rest })),
+                            Some(json!({
+                                "cwd": cwd_str,
+                                "provider": provider,
+                                "methodId": "api_key",
+                                "apiKey": rest
+                            })),
                         )
                         .await?;
                     writeln!(

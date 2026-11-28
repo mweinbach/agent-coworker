@@ -13,13 +13,18 @@
 //!   S256 PKCE verification, and token refresh.
 
 pub mod anthropic_messages;
+pub mod antigravity_acp;
 pub mod bedrock;
 pub mod catalog;
 pub mod chat_completions;
+pub mod claude_sdk;
 pub mod codex_app_server;
 pub mod connection;
+pub(crate) mod credential_proxy;
 pub mod endpoint_capabilities;
 pub mod google_interactions;
+pub(crate) mod harness_mcp_bridge;
+pub mod managed_runtime;
 pub mod oauth;
 pub mod openai_responses;
 pub mod sse;
@@ -29,6 +34,7 @@ use cowork_config::{ProviderName, ProviderWireProtocol};
 use serde::{Deserialize, Serialize};
 
 pub use anthropic_messages::AnthropicMessagesTransport;
+pub use antigravity_acp::AntigravityAcpTransport;
 pub use bedrock::BedrockConverseTransport;
 pub use catalog::{
     CatalogBuildOptions, ProviderAuthMethod, ProviderAuthMethodField, ProviderCatalogEntry,
@@ -39,6 +45,7 @@ pub use catalog::{
     resolve_provider_auth_method, validate_structured_provider_config,
 };
 pub use chat_completions::{ChatCompletionsTransport, ProviderQuirks};
+pub use claude_sdk::ClaudeSdkTransport;
 pub use codex_app_server::CodexAppServerTransport;
 pub use connection::{
     ResolvedProviderConnection, provider_base_url_env_key, provider_base_url_override,
@@ -60,6 +67,7 @@ pub use google_interactions::{
     GoogleInteractionsTransport, GoogleSignatureRepairOutcome, repair_google_tool_call_signatures,
     sanitize_google_replay_messages,
 };
+pub use managed_runtime::{ManagedRuntimeInstallStatus, ManagedRuntimeTarget};
 pub use oauth::PkceOAuthManager;
 pub use openai_responses::OpenAiResponsesTransport;
 pub use sse::{BoxedSseStream, SseFrame, build_http_client, post_json_sse};
@@ -97,6 +105,8 @@ pub enum ProviderTransportKind {
     ChatCompletionsSse,
     BedrockConverseStream,
     CodexAppServerStdio,
+    ClaudeSdkStdio,
+    AntigravityAcpStdio,
 }
 
 impl From<ProviderWireProtocol> for ProviderTransportKind {
@@ -108,6 +118,8 @@ impl From<ProviderWireProtocol> for ProviderTransportKind {
             ProviderWireProtocol::ChatCompletions => Self::ChatCompletionsSse,
             ProviderWireProtocol::BedrockConverse => Self::BedrockConverseStream,
             ProviderWireProtocol::CodexAppServer => Self::CodexAppServerStdio,
+            ProviderWireProtocol::ClaudeSdk => Self::ClaudeSdkStdio,
+            ProviderWireProtocol::AntigravityAcp => Self::AntigravityAcpStdio,
         }
     }
 }

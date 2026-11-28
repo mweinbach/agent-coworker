@@ -1,0 +1,1791 @@
+//! Native Rust `antigravity-acp` provider transport speaking the Agent Client Protocol (ACP)
+//! JSON-RPC 2.0 over stdio against the Cowork-managed `antigravity acp` runtime.
+
+pub mod installer;
+
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
+
+use async_trait::async_trait;
+use chrono::Utc;
+use cowork_config::{cowork_home, env_map_from_process};
+use cowork_inference::{
+    CanonicalMessage, ContentBlock, ContinuationFingerprintInput, MediaKind, MediaSource,
+    MessageRole, ProviderContinuationState, ProviderOpaqueMeta, ProviderTransportError,
+    ReasoningStreamMode, StepBudget, StopReason, StreamEvent, TurnUsage,
+    compute_continuation_fingerprint, filter_persisted_assistant_history,
+    validate_continuation_state,
+};
+use parking_lot::Mutex;
+use serde_json::{Map, Value, json};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::sync::{Mutex as TokioMutex, Notify, mpsc, oneshot};
+use uuid::Uuid;
+
+use crate::codex_app_server::DynamicToolHandler;
+use crate::credential_proxy::{CredentialBrokerProxy, UpstreamAuth, merge_loopback_no_proxy};
+use crate::harness_mcp_bridge::{
+    BridgedToolLookup, HarnessMcpBridge, bridged_tools_fingerprint_values,
+    filter_bridged_harness_tools, render_harness_mcp_bridge_instructions,
+};
+use crate::managed_runtime::{kill_managed_process_tree, spawn_managed_stdio_process};
+use crate::transport::{
+    ProviderStepRequest, ProviderStepResult, ProviderTransport, StreamEventCallback,
+    candidate_continuation_splits, request_disables_all_tools,
+};
+
+pub use installer::{
+    ANTIGRAVITY_ACP_MANAGED_VERSION, AntigravityAcpInstallOptions, AntigravityProxyAuth,
+    antigravity_acp_override_configured, build_antigravity_acp_spawn_env, install_antigravity_acp,
+    resolve_antigravity_acp_home, resolve_antigravity_acp_status, update_managed_antigravity_acp,
+};
+
+const ACP_RPC_TIMEOUT: Duration = Duration::from_secs(30);
+const DEFAULT_GEMINI_API_BASE_URL: &str = "https://generativelanguage.googleapis.com";
+
+#[derive(Clone, Default)]
+pub struct AntigravityAcpTransport {
+    pub command_override: Option<(String, Vec<String>)>,
+    pub env_override: Option<HashMap<String, String>>,
+    pub tool_handler: Option<Arc<dyn DynamicToolHandler>>,
+    pub install_options: Option<AntigravityAcpInstallOptions>,
+    pub disable_tools: bool,
+}
+
+impl std::fmt::Debug for AntigravityAcpTransport {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AntigravityAcpTransport")
+            .field("command_override", &self.command_override)
+            .field("has_env_override", &self.env_override.is_some())
+            .field("has_tool_handler", &self.tool_handler.is_some())
+            .field("disable_tools", &self.disable_tools)
+            .finish()
+    }
+}
+
+impl AntigravityAcpTransport {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_env(env: HashMap<String, String>) -> Self {
+        Self {
+            env_override: Some(env),
+            ..Self::default()
+        }
+    }
+
+    pub fn with_env_and_handler(
+        env: HashMap<String, String>,
+        tool_handler: Option<Arc<dyn DynamicToolHandler>>,
+    ) -> Self {
+        Self {
+            env_override: Some(env),
+            tool_handler,
+            ..Self::default()
+        }
+    }
+
+    pub fn with_tools_disabled(mut self, disable_tools: bool) -> Self {
+        self.disable_tools = disable_tools;
+        self
+    }
+
+    pub fn with_command_override(command: String, args: Vec<String>) -> Self {
+        Self {
+            command_override: Some((command, args)),
+            ..Self::default()
+        }
+    }
+
+    pub fn with_install_options(mut self, opts: AntigravityAcpInstallOptions) -> Self {
+        self.install_options = Some(opts);
+        self
+    }
+}
+
+pub(crate) async fn ensure_antigravity_acp_runtime_command(
+    cowork_home_dir: &Path,
+    env: &HashMap<String, String>,
+    opts: &AntigravityAcpInstallOptions,
+) -> Result<(String, Vec<String>), ProviderTransportError> {
+    let status = resolve_antigravity_acp_status(cowork_home_dir, env);
+    let stale_managed = status.source == "managed" && status.pin_matches_current == Some(false);
+    if !status.available || stale_managed {
+        match install_antigravity_acp(
+            cowork_home_dir,
+            ANTIGRAVITY_ACP_MANAGED_VERSION,
+            false,
+            opts,
+        )
+        .await
+        {
+            Ok(installed) => {
+                return Ok((installed.command.to_string_lossy().into_owned(), Vec::new()));
+            }
+            Err(err) if status.available => {
+                tracing::warn!(
+                    "[antigravity-acp] could not update managed runtime to {ANTIGRAVITY_ACP_MANAGED_VERSION}; using installed runtime: {err}"
+                );
+            }
+            Err(err) => {
+                return Err(ProviderTransportError::protocol(format!(
+                    "Failed to install the Cowork-managed Antigravity ACP runtime {ANTIGRAVITY_ACP_MANAGED_VERSION}: {err}"
+                )));
+            }
+        }
+    }
+    match status.command {
+        Some(command) => Ok((command, status.args.unwrap_or_default())),
+        None => Err(ProviderTransportError::protocol(status.message)),
+    }
+}
+
+fn antigravity_effort(provider_options: &Map<String, Value>) -> Option<&'static str> {
+    let section = provider_options
+        .get("antigravity-acp")
+        .and_then(Value::as_object);
+    let raw = section
+        .and_then(|s| s.get("reasoningEffort").or_else(|| s.get("effort")))
+        .or_else(|| {
+            provider_options
+                .get("reasoningEffort")
+                .or_else(|| provider_options.get("effort"))
+        })
+        .and_then(Value::as_str)?
+        .trim()
+        .to_ascii_lowercase();
+    match raw.as_str() {
+        "none" | "off" | "dynamic" => None,
+        "minimal" | "light" | "low" => Some("low"),
+        "medium" => Some("medium"),
+        "high" => Some("high"),
+        "xhigh" => Some("xhigh"),
+        "max" => Some("max"),
+        _ => None,
+    }
+}
+
+fn allowlist_contains_tool(allowlist: &[String], candidate: &str) -> bool {
+    allowlist
+        .iter()
+        .any(|allowed| allowed.trim().eq_ignore_ascii_case(candidate))
+}
+
+fn acp_name_canonical_tools(name: &str) -> &'static [&'static str] {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return &[];
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    if lower.starts_with("mcp__") || lower.starts_with("mcp_") {
+        return &["mcpCall"];
+    }
+    match lower.as_str() {
+        "bash" | "shell" | "exec" | "execute" | "run_cmd" | "run_command" | "terminal"
+        | "command_status" | "send_command_input" => &["bash"],
+        "read" | "read_file" | "view_file" | "view_file_outline" | "view_code_item"
+        | "list_dir" => &["read"],
+        "write" | "write_file" | "write_to_file" | "create_file" => &["write"],
+        "edit"
+        | "edit_file"
+        | "replace_file_content"
+        | "multi_replace_file_content"
+        | "apply_patch" => &["edit"],
+        "glob" | "find_by_name" | "list_files" => &["glob"],
+        "grep" | "grep_search" | "search_files" => &["grep"],
+        "webfetch" | "web_fetch" | "read_url_content" | "fetch_url" => &["webFetch"],
+        "websearch" | "web_search" | "search_web" => &["webSearch"],
+        "askuserquestion" | "ask_user" => &["AskUserQuestion"],
+        "todowrite" | "todo_write" => &["todoWrite"],
+        "skill" => &["skill"],
+        "spawnagent" | "invoke_subagent" | "agent" | "task" => &["spawnAgent"],
+        _ => &[],
+    }
+}
+
+fn acp_kind_canonical_tools(kind: &str) -> &'static [&'static str] {
+    match kind.trim().to_ascii_lowercase().as_str() {
+        "execute" => &["bash"],
+        "read" => &["read"],
+        "edit" => &["edit", "write"],
+        "delete" | "move" => &["write"],
+        "search" => &["grep", "glob"],
+        "fetch" => &["webFetch", "webSearch"],
+        _ => &[],
+    }
+}
+
+fn acp_bridged_tool_if_authorized<'a>(
+    params: &Value,
+    tools_disabled: bool,
+    authorized_tool_names: Option<&[String]>,
+    lookup: Option<&'a BridgedToolLookup>,
+) -> Option<&'a str> {
+    if tools_disabled {
+        return None;
+    }
+    let tool_call = params.get("toolCall");
+    if let Some(raw_input) = tool_call
+        .and_then(|tc| {
+            tc.get("rawInput")
+                .or_else(|| tc.get("input"))
+                .or_else(|| tc.get("arguments"))
+        })
+        .or_else(|| {
+            params
+                .get("rawInput")
+                .or_else(|| params.get("input"))
+                .or_else(|| params.get("arguments"))
+        })
+        && !raw_input.is_null()
+        && !raw_input.is_object()
+    {
+        return None;
+    }
+    // Never treat a native ACP ToolKind (execute, edit, delete, move, read, search, fetch)
+    // as a Cowork-bridged harness MCP tool.
+    if let Some(kind) = tool_call
+        .and_then(|tc| tc.get("kind"))
+        .or_else(|| params.get("kind"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        && !acp_kind_canonical_tools(kind).is_empty()
+    {
+        return None;
+    }
+    let raw_name = tool_call
+        .and_then(|tc| {
+            tc.get("toolName")
+                .or_else(|| tc.get("name"))
+                .or_else(|| tc.get("title"))
+        })
+        .or_else(|| {
+            params
+                .get("toolName")
+                .or_else(|| params.get("tool_name"))
+                .or_else(|| params.get("name"))
+        })
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())?;
+    let canonical = lookup?.resolve_acp_tool(raw_name)?;
+    if let Some(allowlist) = authorized_tool_names
+        && !allowlist_contains_tool(allowlist, canonical)
+    {
+        return None;
+    }
+    Some(canonical)
+}
+
+/// Fail-closed authorization check for ACP `session/request_permission` requests against
+/// `tools_disabled` and `request.authorized_tool_names` before delegating to approval handlers.
+fn acp_permission_is_authorized(
+    params: &Value,
+    tools_disabled: bool,
+    authorized_tool_names: Option<&[String]>,
+) -> bool {
+    if tools_disabled {
+        return false;
+    }
+    let tool_call = params.get("toolCall");
+    if let Some(raw_input) = tool_call
+        .and_then(|tc| {
+            tc.get("rawInput")
+                .or_else(|| tc.get("input"))
+                .or_else(|| tc.get("arguments"))
+        })
+        .or_else(|| {
+            params
+                .get("rawInput")
+                .or_else(|| params.get("input"))
+                .or_else(|| params.get("arguments"))
+        })
+        && !raw_input.is_null()
+        && !raw_input.is_object()
+    {
+        return false;
+    }
+    let kind = tool_call
+        .and_then(|tc| tc.get("kind"))
+        .or_else(|| params.get("kind"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+
+    let raw_name = tool_call
+        .and_then(|tc| {
+            tc.get("toolName")
+                .or_else(|| tc.get("name"))
+                .or_else(|| tc.get("title"))
+        })
+        .or_else(|| {
+            params
+                .get("toolName")
+                .or_else(|| params.get("tool_name"))
+                .or_else(|| params.get("name"))
+        })
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+
+    // Never allow provider-native URL fetching outside Cowork's DNS-pinned `webFetch` bridge.
+    let is_explicit_web_search =
+        raw_name.is_some_and(|name| acp_name_canonical_tools(name) == ["webSearch"]);
+    let is_native_web_fetch = raw_name
+        .is_some_and(|name| acp_name_canonical_tools(name) == ["webFetch"])
+        || (kind.is_some_and(|k| k.eq_ignore_ascii_case("fetch")) && !is_explicit_web_search);
+    if is_native_web_fetch {
+        return false;
+    }
+
+    let Some(allowlist) = authorized_tool_names else {
+        return true;
+    };
+    if allowlist.is_empty() {
+        return false;
+    }
+
+    // Never allow a misleading display title to bypass a mutating/exec ACP ToolKind.
+    if let Some(k) = kind {
+        let kind_tools = acp_kind_canonical_tools(k);
+        if !kind_tools.is_empty()
+            && !kind_tools
+                .iter()
+                .any(|&canon| allowlist_contains_tool(allowlist, canon))
+        {
+            return false;
+        }
+    }
+
+    if let Some(name) = raw_name {
+        if allowlist_contains_tool(allowlist, name) {
+            return true;
+        }
+        let mapped = acp_name_canonical_tools(name);
+        if !mapped.is_empty() {
+            return mapped
+                .iter()
+                .any(|&canon| allowlist_contains_tool(allowlist, canon));
+        }
+    }
+
+    if let Some(k) = kind {
+        let kind_tools = acp_kind_canonical_tools(k);
+        if !kind_tools.is_empty() {
+            return kind_tools
+                .iter()
+                .any(|&canon| allowlist_contains_tool(allowlist, canon));
+        }
+    }
+
+    false
+}
+
+fn push_acp_history_prefix(blocks: &mut Vec<Value>, prior: &[CanonicalMessage]) {
+    let mut pending_text = String::new();
+    let mut wrote_header = false;
+    let mut has_prior_content = false;
+
+    let ensure_header = |buf: &mut String, wrote_header: &mut bool| {
+        if !*wrote_header {
+            buf.push_str("Prior conversation context:\n");
+            *wrote_header = true;
+        }
+    };
+
+    for msg in prior {
+        let role = match msg.role {
+            MessageRole::User => "User",
+            MessageRole::Assistant => "Assistant",
+            MessageRole::Tool => "Tool",
+            MessageRole::System | MessageRole::Developer => "System",
+        };
+        let mut msg_has_prefix = false;
+        let mut wrote_text_since_image = false;
+
+        for block in &msg.content {
+            match block {
+                ContentBlock::Text { text, .. } if !text.trim().is_empty() => {
+                    ensure_header(&mut pending_text, &mut wrote_header);
+                    if !msg_has_prefix {
+                        if has_prior_content && !pending_text.is_empty() {
+                            pending_text.push_str("\n\n");
+                        }
+                        pending_text.push_str(role);
+                        pending_text.push_str(": ");
+                        msg_has_prefix = true;
+                    } else if wrote_text_since_image {
+                        pending_text.push('\n');
+                    }
+                    pending_text.push_str(text.trim());
+                    wrote_text_since_image = true;
+                    has_prior_content = true;
+                }
+                ContentBlock::ToolResult {
+                    tool_name,
+                    content,
+                    is_error,
+                    ..
+                } => {
+                    let rendered = serde_json::to_string(content).unwrap_or_default();
+                    if !rendered.is_empty() {
+                        ensure_header(&mut pending_text, &mut wrote_header);
+                        if !msg_has_prefix {
+                            if has_prior_content && !pending_text.is_empty() {
+                                pending_text.push_str("\n\n");
+                            }
+                            pending_text.push_str(role);
+                            pending_text.push_str(": ");
+                            msg_has_prefix = true;
+                        } else if wrote_text_since_image {
+                            pending_text.push('\n');
+                        }
+                        pending_text.push_str(&format!(
+                            "[tool_result {} (error={})]: {}",
+                            tool_name.as_deref().unwrap_or("tool"),
+                            is_error,
+                            rendered
+                        ));
+                        wrote_text_since_image = true;
+                        has_prior_content = true;
+                    }
+                }
+                ContentBlock::Media {
+                    kind: MediaKind::Image,
+                    source: MediaSource::Base64 { data, mime_type },
+                    ..
+                } => {
+                    ensure_header(&mut pending_text, &mut wrote_header);
+                    if !msg_has_prefix {
+                        if has_prior_content && !pending_text.is_empty() {
+                            pending_text.push_str("\n\n");
+                        }
+                        pending_text.push_str(role);
+                        pending_text.push(':');
+                        msg_has_prefix = true;
+                    }
+                    if !pending_text.is_empty() {
+                        blocks.push(json!({
+                            "type": "text",
+                            "text": std::mem::take(&mut pending_text),
+                        }));
+                    }
+                    blocks.push(json!({
+                        "type": "image",
+                        "mimeType": mime_type,
+                        "data": data,
+                    }));
+                    wrote_text_since_image = false;
+                    has_prior_content = true;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    if has_prior_content {
+        if !pending_text.is_empty() {
+            pending_text.push_str("\n\n");
+        }
+        pending_text.push_str("Latest user message:");
+        blocks.push(json!({
+            "type": "text",
+            "text": pending_text,
+        }));
+    }
+}
+
+fn build_acp_prompt_blocks(
+    system_prompt: &str,
+    messages: &[CanonicalMessage],
+    include_history: bool,
+) -> Vec<Value> {
+    let mut blocks = Vec::new();
+    if include_history && !system_prompt.trim().is_empty() {
+        blocks.push(json!({
+            "type": "text",
+            "text": format!("System instructions:\n{}", system_prompt.trim())
+        }));
+    }
+    if include_history && messages.len() > 1 {
+        push_acp_history_prefix(&mut blocks, &messages[..messages.len() - 1]);
+    }
+
+    let tail: &[CanonicalMessage] = if include_history {
+        messages.last().map(std::slice::from_ref).unwrap_or(&[])
+    } else {
+        messages
+    };
+
+    for msg in tail {
+        for block in &msg.content {
+            match block {
+                ContentBlock::Text { text, .. } if !text.is_empty() => {
+                    blocks.push(json!({ "type": "text", "text": text }));
+                }
+                ContentBlock::Media {
+                    kind: MediaKind::Image,
+                    source: MediaSource::Base64 { data, mime_type },
+                    ..
+                } => {
+                    blocks.push(json!({
+                        "type": "image",
+                        "mimeType": mime_type,
+                        "data": data,
+                    }));
+                }
+                _ => {}
+            }
+        }
+    }
+    blocks
+}
+
+fn antigravity_fingerprint(
+    request: &ProviderStepRequest,
+    wire_bridged_tools: &[Value],
+    prefix: &[CanonicalMessage],
+) -> String {
+    let mut safe_opts = Map::new();
+    if let Some(effort) = antigravity_effort(&request.provider_options) {
+        safe_opts.insert("reasoningEffort".into(), Value::String(effort.to_owned()));
+    }
+    if request_disables_all_tools(&request.provider_options) {
+        safe_opts.insert("toolsDisabled".into(), Value::Bool(true));
+    }
+    compute_continuation_fingerprint(&ContinuationFingerprintInput {
+        provider: "antigravity-acp",
+        model_id: &request.model_id,
+        system_prompt: &request.system_prompt,
+        tools: wire_bridged_tools,
+        authorized_tool_names: request.authorized_tool_names.as_deref(),
+        canonical_prefix: prefix,
+        stream_options: &safe_opts,
+    })
+}
+
+fn resolve_resume_acp_session<'a>(
+    request: &'a ProviderStepRequest,
+    wire_bridged_tools: &[Value],
+) -> Option<(&'a str, usize)> {
+    let cont = request.continuation.as_ref()?;
+    let ProviderContinuationState::AntigravityAcp { session_id, .. } = cont else {
+        return None;
+    };
+    for (prefix, delta) in candidate_continuation_splits(&request.messages) {
+        let fp = antigravity_fingerprint(request, wire_bridged_tools, prefix);
+        if validate_continuation_state(Some(cont), "antigravity-acp", &request.model_id, &fp)
+            .is_some()
+            && !delta.is_empty()
+        {
+            return Some((session_id.as_str(), prefix.len()));
+        }
+    }
+    None
+}
+
+type PendingAcpMap = HashMap<u64, oneshot::Sender<Result<Value, ProviderTransportError>>>;
+
+struct AcpStdioClient {
+    stdin_tx: mpsc::UnboundedSender<String>,
+    pending: Arc<Mutex<PendingAcpMap>>,
+    next_id: AtomicU64,
+}
+
+impl AcpStdioClient {
+    async fn request(
+        &self,
+        method: &str,
+        params: Value,
+        timeout: Option<Duration>,
+    ) -> Result<Value, ProviderTransportError> {
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        let (tx, rx) = oneshot::channel();
+        self.pending.lock().insert(id, tx);
+        let payload = json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": method,
+            "params": params,
+        });
+        if self.stdin_tx.send(payload.to_string()).is_err() {
+            self.pending.lock().remove(&id);
+            return Err(ProviderTransportError::protocol(format!(
+                "Antigravity ACP stdin closed before {method}"
+            )));
+        }
+        let waited = match timeout {
+            Some(dur) => tokio::time::timeout(dur, rx).await.map_err(|_| {
+                self.pending.lock().remove(&id);
+                ProviderTransportError::protocol(format!(
+                    "Antigravity ACP request '{method}' timed out."
+                ))
+            })?,
+            None => rx.await,
+        };
+        waited.map_err(|_| {
+            ProviderTransportError::protocol(format!(
+                "Antigravity ACP closed before replying to '{method}'."
+            ))
+        })?
+    }
+
+    fn notify(&self, method: &str, params: Value) {
+        let payload = json!({
+            "jsonrpc": "2.0",
+            "method": method,
+            "params": params,
+        });
+        let _ = self.stdin_tx.send(payload.to_string());
+    }
+}
+
+/// Serializes native filesystem permission decisions and tracks approved mutating calls until
+/// the ACP runtime reports their completion. Unlike the Claude SDK, Antigravity can keep several
+/// `session/request_permission` calls in flight at once; validating them against independent
+/// filesystem snapshots would allow one approved mutation to expose a target after another read
+/// had already been authorized.
+#[derive(Default)]
+struct AcpPermissionCoordinator {
+    approval_lock: TokioMutex<()>,
+    active_mutations: TokioMutex<HashSet<String>>,
+    mutation_completed: Notify,
+}
+
+impl AcpPermissionCoordinator {
+    async fn wait_for_mutations(&self) {
+        loop {
+            if self.active_mutations.lock().await.is_empty() {
+                return;
+            }
+            self.mutation_completed.notified().await;
+        }
+    }
+
+    async fn track_mutation(&self, tool_call_id: Option<&str>) -> bool {
+        let Some(id) = tool_call_id.map(str::trim).filter(|id| !id.is_empty()) else {
+            return false;
+        };
+        self.active_mutations.lock().await.insert(id.to_owned());
+        true
+    }
+
+    async fn complete_tool(&self, tool_call_id: &str) {
+        if self.active_mutations.lock().await.remove(tool_call_id) {
+            self.mutation_completed.notify_one();
+        }
+    }
+
+    async fn clear(&self) {
+        self.active_mutations.lock().await.clear();
+        self.mutation_completed.notify_waiters();
+    }
+}
+
+fn acp_permission_tool_call_id(params: &Value) -> Option<&str> {
+    params
+        .get("toolCall")
+        .and_then(|tc| tc.get("toolCallId").or_else(|| tc.get("id")))
+        .or_else(|| params.get("toolCallId"))
+        .and_then(Value::as_str)
+}
+
+fn acp_permission_canonical_tools(params: &Value) -> Vec<&'static str> {
+    let tool_call = params.get("toolCall");
+    let kind = tool_call
+        .and_then(|tc| tc.get("kind"))
+        .or_else(|| params.get("kind"))
+        .and_then(Value::as_str);
+    let name = tool_call
+        .and_then(|tc| {
+            tc.get("toolName")
+                .or_else(|| tc.get("name"))
+                .or_else(|| tc.get("title"))
+        })
+        .or_else(|| {
+            params
+                .get("toolName")
+                .or_else(|| params.get("tool_name"))
+                .or_else(|| params.get("name"))
+        })
+        .and_then(Value::as_str);
+    let mut out = Vec::new();
+    if let Some(kind) = kind {
+        out.extend(acp_kind_canonical_tools(kind));
+    }
+    if let Some(name) = name {
+        out.extend(acp_name_canonical_tools(name));
+    }
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+fn acp_permission_accesses_filesystem(params: &Value) -> bool {
+    acp_permission_canonical_tools(params)
+        .iter()
+        .any(|tool| matches!(*tool, "bash" | "read" | "write" | "edit" | "grep" | "glob"))
+}
+
+fn acp_permission_mutates_filesystem(params: &Value) -> bool {
+    acp_permission_canonical_tools(params)
+        .iter()
+        .any(|tool| matches!(*tool, "bash" | "write" | "edit"))
+}
+
+fn select_permission_option(params: &Value, approved: bool) -> Value {
+    let options = params
+        .get("options")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    if approved {
+        let chosen = options
+            .iter()
+            .find(|o| {
+                matches!(
+                    o.get("kind").and_then(Value::as_str),
+                    Some("allow_once" | "allow_always")
+                )
+            })
+            .or_else(|| options.first())
+            .and_then(|o| o.get("optionId").and_then(Value::as_str));
+        if let Some(opt_id) = chosen {
+            return json!({
+                "outcome": {
+                    "outcome": "selected",
+                    "optionId": opt_id,
+                }
+            });
+        }
+    } else if let Some(reject_id) = options
+        .iter()
+        .find(|o| {
+            matches!(
+                o.get("kind").and_then(Value::as_str),
+                Some("reject_once" | "reject_always")
+            )
+        })
+        .and_then(|o| o.get("optionId").and_then(Value::as_str))
+    {
+        return json!({
+            "outcome": {
+                "outcome": "selected",
+                "optionId": reject_id,
+            }
+        });
+    }
+    json!({
+        "outcome": {
+            "outcome": "cancelled"
+        }
+    })
+}
+
+fn parse_acp_usage(value: &Value) -> Option<TurnUsage> {
+    let usage = value.get("usage").unwrap_or(value);
+    let input = usage
+        .get("inputTokens")
+        .or_else(|| usage.get("input_tokens"))
+        .or_else(|| usage.get("promptTokens"))
+        .and_then(Value::as_u64);
+    let output = usage
+        .get("outputTokens")
+        .or_else(|| usage.get("output_tokens"))
+        .or_else(|| usage.get("completionTokens"))
+        .and_then(Value::as_u64);
+    let cached = usage
+        .get("cachedInputTokens")
+        .or_else(|| usage.get("cached_read_tokens"))
+        .or_else(|| usage.get("cachedTokens"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let reasoning = usage
+        .get("thoughtTokens")
+        .or_else(|| usage.get("reasoningTokens"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    if input.is_none() && output.is_none() {
+        return None;
+    }
+    let prompt_tokens = input.unwrap_or(0);
+    let completion_tokens = output.unwrap_or(0);
+    Some(TurnUsage {
+        prompt_tokens,
+        completion_tokens,
+        total_tokens: prompt_tokens.saturating_add(completion_tokens),
+        cached_prompt_tokens: (cached > 0).then_some(cached),
+        cache_write_prompt_tokens: None,
+        reasoning_output_tokens: (reasoning > 0).then_some(reasoning),
+        estimated_cost_usd: None,
+    })
+}
+
+#[derive(Default)]
+struct AcpToolCallState {
+    name: String,
+    input: serde_json::Map<String, Value>,
+    output: Option<Value>,
+    started: bool,
+    args_published: bool,
+    completed: bool,
+}
+
+fn extract_acp_tool_name(update: &Value) -> Option<String> {
+    update
+        .get("toolName")
+        .or_else(|| update.get("name"))
+        .or_else(|| update.get("title"))
+        .or_else(|| update.get("kind"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn merge_acp_tool_input(target: &mut serde_json::Map<String, Value>, update: &Value) -> bool {
+    let Some(raw) = update.get("rawInput") else {
+        return false;
+    };
+    if raw.is_null() {
+        return false;
+    }
+    let mut changed = false;
+    if let Some(obj) = raw.as_object() {
+        for (k, v) in obj {
+            if target.get(k) != Some(v) {
+                target.insert(k.clone(), v.clone());
+                changed = true;
+            }
+        }
+    } else if target.get("rawInput") != Some(raw) {
+        target.insert("rawInput".to_owned(), raw.clone());
+        changed = true;
+    }
+    changed
+}
+
+fn merge_acp_tool_output(target: &mut Option<Value>, update: &Value) {
+    let incoming = update
+        .get("rawOutput")
+        .filter(|v| !v.is_null())
+        .or_else(|| update.get("content").filter(|v| !v.is_null()));
+    if let Some(val) = incoming {
+        let incoming_empty = match val {
+            Value::String(s) => s.is_empty(),
+            Value::Array(a) => a.is_empty(),
+            Value::Object(m) => m.is_empty(),
+            _ => false,
+        };
+        if incoming_empty && target.is_some() {
+            return;
+        }
+        *target = Some(val.clone());
+    }
+}
+
+#[async_trait]
+impl ProviderTransport for AntigravityAcpTransport {
+    async fn stream_step(
+        &self,
+        request: ProviderStepRequest,
+        budget: &StepBudget,
+        on_event: &mut StreamEventCallback<'_>,
+    ) -> Result<ProviderStepResult, ProviderTransportError> {
+        let env = self
+            .env_override
+            .clone()
+            .unwrap_or_else(env_map_from_process);
+        let cw_home = cowork_home(&env);
+
+        let (command, mut args) = match &self.command_override {
+            Some((cmd, a)) => (cmd.clone(), a.clone()),
+            None => {
+                let opts = self
+                    .install_options
+                    .clone()
+                    .unwrap_or_else(|| AntigravityAcpInstallOptions::from_env(&env));
+                ensure_antigravity_acp_runtime_command(&cw_home, &env, &opts).await?
+            }
+        };
+        if !args.iter().any(|a| a == "acp") {
+            args.push("acp".to_owned());
+            args.push("--disable-telemetry".to_owned());
+        }
+
+        let cwd = request
+            .provider_options
+            .get("cwd")
+            .and_then(Value::as_str)
+            .map(PathBuf::from)
+            .filter(|p| p.is_dir())
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+
+        let tools_disabled =
+            self.disable_tools || request_disables_all_tools(&request.provider_options);
+        let bridged_tools = if self.tool_handler.is_some() {
+            filter_bridged_harness_tools(
+                &request.tools,
+                request.authorized_tool_names.as_deref(),
+                tools_disabled,
+            )
+        } else {
+            Vec::new()
+        };
+        let wire_bridged_tools = bridged_tools_fingerprint_values(&bridged_tools);
+        let mcp_bridge = if !bridged_tools.is_empty()
+            && let Some(handler) = self.tool_handler.clone()
+        {
+            Some(
+                HarnessMcpBridge::start(bridged_tools.clone(), handler)
+                    .await
+                    .map_err(ProviderTransportError::protocol)?,
+            )
+        } else {
+            None
+        };
+        let mcp_lookup = mcp_bridge.as_ref().map(HarnessMcpBridge::lookup);
+
+        let credential_proxy = if let Some(secret) = request
+            .api_key
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            let upstream = request
+                .base_url
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .unwrap_or(DEFAULT_GEMINI_API_BASE_URL);
+            Some(
+                CredentialBrokerProxy::start(
+                    upstream,
+                    UpstreamAuth::GeminiApiKey(secret.to_owned()),
+                )
+                .await
+                .map_err(ProviderTransportError::protocol)?,
+            )
+        } else {
+            None
+        };
+        let proxy_auth = credential_proxy.as_ref().map(|proxy| AntigravityProxyAuth {
+            base_url: proxy.base_url().to_owned(),
+            proxy_token: proxy.proxy_token().to_owned(),
+        });
+        let mut spawn_env = build_antigravity_acp_spawn_env(&cw_home, &env, proxy_auth.as_ref());
+        if mcp_bridge.is_some() && proxy_auth.is_none() {
+            let existing = spawn_env
+                .get("NO_PROXY")
+                .or_else(|| spawn_env.get("no_proxy"))
+                .map(String::as_str);
+            let merged = merge_loopback_no_proxy(existing);
+            spawn_env.insert("NO_PROXY".to_owned(), merged.clone());
+            spawn_env.insert("no_proxy".to_owned(), merged);
+        }
+        let mut child =
+            spawn_managed_stdio_process(&command, &args, &cwd, &spawn_env, "Antigravity ACP")
+                .map_err(ProviderTransportError::protocol)?;
+
+        let mut child_stdin = child.stdin.take().ok_or_else(|| {
+            ProviderTransportError::protocol("Failed to capture Antigravity ACP stdin")
+        })?;
+        let child_stdout = child.stdout.take().ok_or_else(|| {
+            ProviderTransportError::protocol("Failed to capture Antigravity ACP stdout")
+        })?;
+        let child_stderr = child.stderr.take();
+
+        if let Some(stderr) = child_stderr {
+            tokio::spawn(async move {
+                let mut lines = BufReader::new(stderr).lines();
+                while let Ok(Some(_)) = lines.next_line().await {}
+            });
+        }
+
+        let (stdin_tx, mut stdin_rx) = mpsc::unbounded_channel::<String>();
+        tokio::spawn(async move {
+            while let Some(mut line) = stdin_rx.recv().await {
+                if !line.ends_with('\n') {
+                    line.push('\n');
+                }
+                if child_stdin.write_all(line.as_bytes()).await.is_err() {
+                    break;
+                }
+                let _ = child_stdin.flush().await;
+            }
+        });
+
+        let pending: Arc<Mutex<PendingAcpMap>> = Arc::new(Mutex::new(HashMap::new()));
+        let (notif_tx, mut notif_rx) = mpsc::unbounded_channel::<(String, Value)>();
+        let permission_coordinator = Arc::new(AcpPermissionCoordinator::default());
+
+        let authorized_tools_for_reqs = Arc::new(request.authorized_tool_names.clone());
+
+        let pending_reader = Arc::clone(&pending);
+        let stdin_for_reqs = stdin_tx.clone();
+        let handler_for_reqs = self.tool_handler.clone();
+        let mcp_lookup_for_reqs = mcp_lookup.clone();
+        let coordinator_for_reqs = Arc::clone(&permission_coordinator);
+        tokio::spawn(async move {
+            let mut lines = BufReader::new(child_stdout).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                let trimmed = line.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                let Ok(msg) = serde_json::from_str::<Value>(trimmed) else {
+                    continue;
+                };
+                let Some(obj) = msg.as_object() else {
+                    continue;
+                };
+                let id_opt = obj.get("id").cloned();
+                let method_opt = obj
+                    .get("method")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned);
+
+                match (id_opt, method_opt) {
+                    (Some(req_id), Some(method)) => {
+                        let params = obj.get("params").cloned().unwrap_or(Value::Null);
+                        let tx_reply = stdin_for_reqs.clone();
+                        let handler = handler_for_reqs.clone();
+                        let authorized_tools = Arc::clone(&authorized_tools_for_reqs);
+                        let mcp_lookup_req = mcp_lookup_for_reqs.clone();
+                        let coordinator = Arc::clone(&coordinator_for_reqs);
+                        tokio::spawn(async move {
+                            let reply = if method == "session/request_permission" {
+                                let bridged = handler.is_some()
+                                    && acp_bridged_tool_if_authorized(
+                                        &params,
+                                        tools_disabled,
+                                        authorized_tools.as_deref(),
+                                        mcp_lookup_req.as_deref(),
+                                    )
+                                    .is_some();
+                                let approved = if bridged {
+                                    true
+                                } else if acp_permission_accesses_filesystem(&params) {
+                                    let _serialization_permit =
+                                        coordinator.approval_lock.lock().await;
+                                    coordinator.wait_for_mutations().await;
+                                    let mut approved = if !acp_permission_is_authorized(
+                                        &params,
+                                        tools_disabled,
+                                        authorized_tools.as_deref(),
+                                    ) {
+                                        false
+                                    } else if let Some(h) = handler {
+                                        h.request_approval(&method, &params).await
+                                    } else {
+                                        false
+                                    };
+                                    if approved
+                                        && acp_permission_mutates_filesystem(&params)
+                                        && !coordinator
+                                            .track_mutation(acp_permission_tool_call_id(&params))
+                                            .await
+                                    {
+                                        approved = false;
+                                    }
+                                    approved
+                                } else if !acp_permission_is_authorized(
+                                    &params,
+                                    tools_disabled,
+                                    authorized_tools.as_deref(),
+                                ) {
+                                    false
+                                } else if let Some(h) = handler {
+                                    h.request_approval(&method, &params).await
+                                } else {
+                                    false
+                                };
+                                json!({
+                                    "jsonrpc": "2.0",
+                                    "id": req_id,
+                                    "result": select_permission_option(&params, approved),
+                                })
+                            } else {
+                                json!({
+                                    "jsonrpc": "2.0",
+                                    "id": req_id,
+                                    "error": {
+                                        "code": -32601,
+                                        "message": format!("Unsupported ACP client method: {method}")
+                                    }
+                                })
+                            };
+                            let _ = tx_reply.send(reply.to_string());
+                        });
+                    }
+                    (Some(resp_id), None) => {
+                        if let Some(id_num) = resp_id.as_u64()
+                            && let Some(tx) = pending_reader.lock().remove(&id_num)
+                        {
+                            if let Some(err) = obj.get("error") {
+                                let msg = err
+                                    .get("message")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("Antigravity ACP RPC error");
+                                let _ = tx.send(Err(ProviderTransportError::protocol(msg)));
+                            } else {
+                                let _ =
+                                    tx.send(Ok(obj.get("result").cloned().unwrap_or(Value::Null)));
+                            }
+                        }
+                    }
+                    (None, Some(method)) => {
+                        let params = obj.get("params").cloned().unwrap_or(Value::Null);
+                        if method == "session/update" {
+                            let update = params.get("update").unwrap_or(&params);
+                            let kind = update
+                                .get("sessionUpdate")
+                                .or_else(|| update.get("type"))
+                                .and_then(Value::as_str)
+                                .unwrap_or("");
+                            let status = update.get("status").and_then(Value::as_str).unwrap_or("");
+                            if matches!(kind, "tool_call" | "tool_call_update")
+                                && matches!(status, "completed" | "failed" | "cancelled")
+                                && let Some(id) = update.get("toolCallId").and_then(Value::as_str)
+                            {
+                                coordinator_for_reqs.complete_tool(id).await;
+                            }
+                        }
+                        let _ = notif_tx.send((method, params));
+                    }
+                    _ => {}
+                }
+            }
+            // Wake serialized permission waiters and fail all pending RPCs on EOF.
+            coordinator_for_reqs.clear().await;
+            let mut guard = pending_reader.lock();
+            for (_, tx) in guard.drain() {
+                let _ = tx.send(Err(ProviderTransportError::protocol(
+                    "Antigravity ACP process exited unexpectedly.",
+                )));
+            }
+        });
+
+        let client = Arc::new(AcpStdioClient {
+            stdin_tx: stdin_tx.clone(),
+            pending,
+            next_id: AtomicU64::new(1),
+        });
+
+        let cancel = budget.cancellation_token().clone();
+        let turn_id = request.turn_id.clone();
+        let resume_plan = resolve_resume_acp_session(&request, &wire_bridged_tools);
+        let mcp_servers_payload = mcp_bridge
+            .as_ref()
+            .map(HarnessMcpBridge::acp_mcp_servers_json)
+            .unwrap_or_else(|| json!([]));
+        let has_mcp_bridge = mcp_bridge.is_some();
+
+        let setup_res = async {
+            let init_res = client
+                .request(
+                    "initialize",
+                    json!({
+                        "protocolVersion": 1,
+                        "clientInfo": {
+                            "name": "agent-coworker",
+                            "version": env!("CARGO_PKG_VERSION"),
+                        },
+                        "clientCapabilities": {},
+                    }),
+                    Some(ACP_RPC_TIMEOUT),
+                )
+                .await?;
+
+            if has_mcp_bridge
+                && init_res
+                    .pointer("/agentCapabilities/mcpCapabilities/http")
+                    .and_then(Value::as_bool)
+                    == Some(false)
+            {
+                return Err(ProviderTransportError::protocol(
+                    "Antigravity ACP runtime does not support HTTP MCP servers required to bridge Cowork harness tools.",
+                ));
+            }
+
+            // Authenticate via Gemini API key if the agent advertises authMethods and we have a key.
+            let advertises_gemini_key = init_res
+                .get("authMethods")
+                .and_then(Value::as_array)
+                .is_some_and(|methods| {
+                    methods
+                        .iter()
+                        .any(|m| m.get("id").and_then(Value::as_str) == Some("gemini-api-key"))
+                });
+            if advertises_gemini_key
+                && request
+                    .api_key
+                    .as_deref()
+                    .is_some_and(|k| !k.trim().is_empty())
+            {
+                let _ = client
+                    .request(
+                        "authenticate",
+                        json!({ "methodId": "gemini-api-key" }),
+                        Some(ACP_RPC_TIMEOUT),
+                    )
+                    .await;
+            }
+
+            let cwd_str = cwd.to_string_lossy().into_owned();
+            let mut resumed = false;
+            let session_id = if let Some((stored_sid, _)) = resume_plan {
+                match client
+                    .request(
+                        "session/resume",
+                        json!({
+                            "sessionId": stored_sid,
+                            "cwd": cwd_str,
+                            "mcpServers": mcp_servers_payload.clone(),
+                        }),
+                        Some(ACP_RPC_TIMEOUT),
+                    )
+                    .await
+                {
+                    Ok(_) => {
+                        resumed = true;
+                        stored_sid.to_owned()
+                    }
+                    Err(_) => {
+                        let created = client
+                            .request(
+                                "session/new",
+                                json!({ "cwd": cwd_str, "mcpServers": mcp_servers_payload.clone() }),
+                                Some(ACP_RPC_TIMEOUT),
+                            )
+                            .await?;
+                        created
+                            .get("sessionId")
+                            .and_then(Value::as_str)
+                            .map(ToOwned::to_owned)
+                            .ok_or_else(|| {
+                                ProviderTransportError::protocol(
+                                    "Antigravity ACP session/new did not return sessionId",
+                                )
+                            })?
+                    }
+                }
+            } else {
+                let created = client
+                    .request(
+                        "session/new",
+                        json!({ "cwd": cwd_str, "mcpServers": mcp_servers_payload.clone() }),
+                        Some(ACP_RPC_TIMEOUT),
+                    )
+                    .await?;
+                created
+                    .get("sessionId")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned)
+                    .ok_or_else(|| {
+                        ProviderTransportError::protocol(
+                            "Antigravity ACP session/new did not return sessionId",
+                        )
+                    })?
+            };
+
+            if !request.model_id.trim().is_empty() {
+                client
+                    .request(
+                        "session/set_model",
+                        json!({ "sessionId": session_id, "modelId": request.model_id }),
+                        Some(ACP_RPC_TIMEOUT),
+                    )
+                    .await
+                    .map_err(|err| {
+                        ProviderTransportError::protocol(format!(
+                            "Antigravity ACP failed to select model '{}': {}",
+                            request.model_id, err.message
+                        ))
+                    })?;
+            }
+
+            if let Some(effort) = antigravity_effort(&request.provider_options) {
+                let _ = client
+                    .request(
+                        "session/set_config_option",
+                        json!({
+                            "sessionId": session_id,
+                            "configId": "thought_level",
+                            "value": effort,
+                        }),
+                        Some(ACP_RPC_TIMEOUT),
+                    )
+                    .await;
+            }
+            if tools_disabled {
+                let _ = client
+                    .request(
+                        "session/set_config_option",
+                        json!({
+                            "sessionId": session_id,
+                            "configId": "tools_enabled",
+                            "value": false,
+                        }),
+                        Some(ACP_RPC_TIMEOUT),
+                    )
+                    .await;
+            }
+
+            Ok::<(String, bool), ProviderTransportError>((session_id, resumed))
+        };
+
+        let (session_id, resumed) = match tokio::select! {
+            res = setup_res => res,
+            () = cancel.cancelled() => Err(ProviderTransportError::aborted("Model turn aborted.")),
+        } {
+            Ok(v) => v,
+            Err(err) => {
+                drop(stdin_tx);
+                kill_managed_process_tree(child).await;
+                return Err(err);
+            }
+        };
+
+        let effective_system_prompt = if mcp_bridge.is_some()
+            && let Some(note) = render_harness_mcp_bridge_instructions(&bridged_tools)
+        {
+            if request.system_prompt.trim().is_empty() {
+                note
+            } else {
+                format!("{}\n\n{note}", request.system_prompt)
+            }
+        } else {
+            request.system_prompt.clone()
+        };
+        let prompt_blocks = match (resumed, resume_plan) {
+            (true, Some((_, delta_start))) => {
+                build_acp_prompt_blocks("", &request.messages[delta_start..], false)
+            }
+            _ => build_acp_prompt_blocks(&effective_system_prompt, &request.messages, true),
+        };
+        if prompt_blocks.is_empty() {
+            drop(stdin_tx);
+            kill_managed_process_tree(child).await;
+            return Err(ProviderTransportError::protocol(
+                "Antigravity ACP runtime requires a user message.",
+            ));
+        }
+
+        // Launch session/prompt RPC concurrently while draining `session/update` notifications.
+        let prompt_client = Arc::clone(&client);
+        let prompt_sid = session_id.clone();
+        let prompt_fut = tokio::spawn(async move {
+            prompt_client
+                .request(
+                    "session/prompt",
+                    json!({
+                        "sessionId": prompt_sid,
+                        "prompt": prompt_blocks,
+                    }),
+                    None,
+                )
+                .await
+        });
+
+        let mut raw_events = Vec::new();
+        let mut thinking_started = false;
+        let mut thinking_closed = false;
+        let mut think_segment: usize = 0;
+        let mut think_stream_id = format!("{turn_id}:acp-think-0");
+        let mut thinking_text = String::new();
+        let mut thinking_segment_text = String::new();
+        let mut text_started = false;
+        let mut text_block_index: usize = 0;
+        let mut text_segment_text = String::new();
+        let mut final_text = String::new();
+        let mut announced_tools: HashMap<String, AcpToolCallState> = HashMap::new();
+        let mut usage = TurnUsage::default();
+
+        let prompt_outcome = budget
+            .run(async {
+                tokio::pin!(prompt_fut);
+                let close_text_segment =
+                    |text_started: &mut bool,
+                     text_block_index: &mut usize,
+                     text_segment_text: &mut String,
+                     on_event: &mut StreamEventCallback<'_>| {
+                        if *text_started {
+                            *text_started = false;
+                            let segment = std::mem::take(text_segment_text);
+                            on_event(StreamEvent::TextEnd {
+                                turn_id: turn_id.clone(),
+                                block_index: *text_block_index,
+                                text: segment,
+                                phase: None,
+                                citations: Vec::new(),
+                                annotations: Vec::new(),
+                            });
+                            *text_block_index += 1;
+                        }
+                    };
+                #[allow(clippy::too_many_arguments)]
+                let handle_notif =
+                    |method: &str,
+                     params: &Value,
+                     raw_events: &mut Vec<Value>,
+                     thinking_started: &mut bool,
+                     thinking_closed: &mut bool,
+                     think_segment: &mut usize,
+                     think_stream_id: &mut String,
+                     thinking_text: &mut String,
+                     thinking_segment_text: &mut String,
+                     text_started: &mut bool,
+                     text_block_index: &mut usize,
+                     text_segment_text: &mut String,
+                     final_text: &mut String,
+                     announced_tools: &mut HashMap<String, AcpToolCallState>,
+                     usage: &mut TurnUsage,
+                     on_event: &mut StreamEventCallback<'_>| {
+                        raw_events.push(json!({ "method": method, "params": params }));
+                        if method != "session/update" {
+                            return;
+                        }
+                        let update = params.get("update").unwrap_or(params);
+                        let kind = update
+                            .get("sessionUpdate")
+                            .or_else(|| update.get("type"))
+                            .and_then(Value::as_str)
+                            .unwrap_or("");
+                        let extract_chunk_text = |u: &Value| -> Option<String> {
+                            u.get("content")
+                                .and_then(|c| c.get("text"))
+                                .or_else(|| u.get("text"))
+                                .or_else(|| u.get("delta"))
+                                .and_then(Value::as_str)
+                                .filter(|s| !s.is_empty())
+                                .map(ToOwned::to_owned)
+                        };
+                        match kind {
+                            "agent_thought_chunk" => {
+                                if let Some(d) = extract_chunk_text(update) {
+                                    close_text_segment(
+                                        text_started,
+                                        text_block_index,
+                                        text_segment_text,
+                                        on_event,
+                                    );
+                                    if !*thinking_started || *thinking_closed {
+                                        if *thinking_closed {
+                                            *think_segment += 1;
+                                            *think_stream_id =
+                                                format!("{turn_id}:acp-think-{think_segment}");
+                                            *thinking_closed = false;
+                                        }
+                                        *thinking_started = true;
+                                        thinking_segment_text.clear();
+                                        on_event(StreamEvent::ThinkingStart {
+                                            turn_id: turn_id.clone(),
+                                            stream_id: think_stream_id.clone(),
+                                            mode: ReasoningStreamMode::Summary,
+                                        });
+                                    }
+                                    thinking_text.push_str(&d);
+                                    thinking_segment_text.push_str(&d);
+                                    on_event(StreamEvent::ThinkingDelta {
+                                        turn_id: turn_id.clone(),
+                                        stream_id: think_stream_id.clone(),
+                                        mode: ReasoningStreamMode::Summary,
+                                        delta: d,
+                                    });
+                                }
+                            }
+                            "agent_message_chunk" => {
+                                if let Some(d) = extract_chunk_text(update) {
+                                    if *thinking_started && !*thinking_closed {
+                                        *thinking_closed = true;
+                                        on_event(StreamEvent::ThinkingEnd {
+                                            turn_id: turn_id.clone(),
+                                            stream_id: think_stream_id.clone(),
+                                            mode: ReasoningStreamMode::Summary,
+                                            text: std::mem::take(thinking_segment_text),
+                                            signature: None,
+                                            redacted: false,
+                                        });
+                                    }
+                                    if !*text_started {
+                                        *text_started = true;
+                                        text_segment_text.clear();
+                                        on_event(StreamEvent::TextStart {
+                                            turn_id: turn_id.clone(),
+                                            block_index: *text_block_index,
+                                            phase: None,
+                                        });
+                                    }
+                                    text_segment_text.push_str(&d);
+                                    final_text.push_str(&d);
+                                    on_event(StreamEvent::TextDelta {
+                                        turn_id: turn_id.clone(),
+                                        block_index: *text_block_index,
+                                        delta: d,
+                                        phase: None,
+                                    });
+                                }
+                            }
+                            "tool_call" | "tool_call_update" => {
+                                let id = update
+                                    .get("toolCallId")
+                                    .and_then(Value::as_str)
+                                    .map(str::trim)
+                                    .unwrap_or("")
+                                    .to_owned();
+                                if id.is_empty() {
+                                    return;
+                                }
+                                let snap = announced_tools.entry(id.clone()).or_default();
+                                if snap.completed {
+                                    return;
+                                }
+                                let incoming_name = extract_acp_tool_name(update).map(|raw| {
+                                    mcp_lookup
+                                        .as_deref()
+                                        .map(|l| l.normalize_stream_tool_name(&raw))
+                                        .unwrap_or(raw)
+                                });
+                                let mut name_changed = false;
+                                if let Some(next_name) = incoming_name {
+                                    if snap.name != next_name {
+                                        snap.name = next_name;
+                                        name_changed = true;
+                                    }
+                                } else if snap.name.is_empty() {
+                                    snap.name = "tool".to_owned();
+                                }
+                                let input_changed = merge_acp_tool_input(&mut snap.input, update);
+                                merge_acp_tool_output(&mut snap.output, update);
+
+                                let status =
+                                    update.get("status").and_then(Value::as_str).unwrap_or("");
+                                let is_terminal = matches!(status, "completed" | "failed");
+
+                                if !snap.started {
+                                    close_text_segment(
+                                        text_started,
+                                        text_block_index,
+                                        text_segment_text,
+                                        on_event,
+                                    );
+                                    if *thinking_started && !*thinking_closed {
+                                        *thinking_closed = true;
+                                        on_event(StreamEvent::ThinkingEnd {
+                                            turn_id: turn_id.clone(),
+                                            stream_id: think_stream_id.clone(),
+                                            mode: ReasoningStreamMode::Summary,
+                                            text: std::mem::take(thinking_segment_text),
+                                            signature: None,
+                                            redacted: false,
+                                        });
+                                    }
+                                    snap.started = true;
+                                    on_event(StreamEvent::ToolCallStart {
+                                        turn_id: turn_id.clone(),
+                                        key: id.clone(),
+                                        name: snap.name.clone(),
+                                        initial_args: (!snap.input.is_empty())
+                                            .then(|| snap.input.clone()),
+                                    });
+                                }
+
+                                let should_publish_args = (!snap.input.is_empty()
+                                    && (!snap.args_published || input_changed || name_changed))
+                                    || (is_terminal && !snap.args_published);
+                                if should_publish_args {
+                                    snap.args_published = true;
+                                    on_event(StreamEvent::ToolCallEnd {
+                                        turn_id: turn_id.clone(),
+                                        key: id.clone(),
+                                        name: snap.name.clone(),
+                                        arguments: Some(snap.input.clone()),
+                                        retry_of: None,
+                                        input_digest: None,
+                                    });
+                                }
+
+                                if is_terminal {
+                                    close_text_segment(
+                                        text_started,
+                                        text_block_index,
+                                        text_segment_text,
+                                        on_event,
+                                    );
+                                    snap.completed = true;
+                                    on_event(StreamEvent::ToolResult {
+                                        turn_id: turn_id.clone(),
+                                        key: id,
+                                        name: snap.name.clone(),
+                                        result: snap.output.clone().unwrap_or(Value::Null),
+                                        is_error: status == "failed",
+                                        denied: false,
+                                    });
+                                }
+                            }
+                            "usage_update" => {
+                                if let Some(u) = parse_acp_usage(update) {
+                                    *usage = u;
+                                }
+                            }
+                            _ => {}
+                        }
+                    };
+
+                let mut notif_open = true;
+                loop {
+                    tokio::select! {
+                        biased;
+                        () = cancel.cancelled() => {
+                            client.notify("session/cancel", json!({ "sessionId": session_id }));
+                            return Err(ProviderTransportError::aborted("Model turn aborted."));
+                        }
+                        maybe_notif = notif_rx.recv(), if notif_open => {
+                            match maybe_notif {
+                                Some((method, params)) => {
+                                    handle_notif(
+                                        &method,
+                                        &params,
+                                        &mut raw_events,
+                                        &mut thinking_started,
+                                        &mut thinking_closed,
+                                        &mut think_segment,
+                                        &mut think_stream_id,
+                                        &mut thinking_text,
+                                        &mut thinking_segment_text,
+                                        &mut text_started,
+                                        &mut text_block_index,
+                                        &mut text_segment_text,
+                                        &mut final_text,
+                                        &mut announced_tools,
+                                        &mut usage,
+                                        on_event,
+                                    );
+                                }
+                                None => {
+                                    notif_open = false;
+                                }
+                            }
+                        }
+                        prompt_res = &mut prompt_fut => {
+                            // Drain any buffered notifications emitted just before the prompt reply.
+                            while let Ok((method, params)) = notif_rx.try_recv() {
+                                handle_notif(
+                                    &method,
+                                    &params,
+                                    &mut raw_events,
+                                    &mut thinking_started,
+                                    &mut thinking_closed,
+                                    &mut think_segment,
+                                    &mut think_stream_id,
+                                    &mut thinking_text,
+                                    &mut thinking_segment_text,
+                                    &mut text_started,
+                                    &mut text_block_index,
+                                    &mut text_segment_text,
+                                    &mut final_text,
+                                    &mut announced_tools,
+                                    &mut usage,
+                                    on_event,
+                                );
+                            }
+                            let res = prompt_res.map_err(|e| {
+                                ProviderTransportError::protocol(format!(
+                                    "Antigravity ACP prompt task failed: {e}"
+                                ))
+                            })??;
+                            return Ok(res);
+                        }
+                    }
+                }
+            })
+            .await;
+
+        drop(stdin_tx);
+        kill_managed_process_tree(child).await;
+        drop(mcp_bridge);
+        drop(credential_proxy);
+
+        let prompt_result = prompt_outcome?;
+        if let Some(u) = parse_acp_usage(&prompt_result) {
+            usage = u;
+        }
+        if thinking_started && !thinking_closed {
+            on_event(StreamEvent::ThinkingEnd {
+                turn_id: turn_id.clone(),
+                stream_id: think_stream_id,
+                mode: ReasoningStreamMode::Summary,
+                text: thinking_segment_text,
+                signature: None,
+                redacted: false,
+            });
+        }
+        if text_started {
+            on_event(StreamEvent::TextEnd {
+                turn_id: turn_id.clone(),
+                block_index: text_block_index,
+                text: text_segment_text,
+                phase: None,
+                citations: Vec::new(),
+                annotations: Vec::new(),
+            });
+        }
+
+        let mut content = Vec::new();
+        if !thinking_text.is_empty() {
+            content.push(ContentBlock::Thinking {
+                text: thinking_text,
+                summary: None,
+                redacted: false,
+                signature: None,
+                provider_meta: ProviderOpaqueMeta::default(),
+            });
+        }
+        if !final_text.is_empty() {
+            content.push(ContentBlock::Text {
+                text: final_text,
+                phase: None,
+                citations: Vec::new(),
+                provider_meta: ProviderOpaqueMeta::default(),
+            });
+        }
+
+        let assistant = CanonicalMessage {
+            id: format!("msg-{}", Uuid::new_v4()),
+            role: MessageRole::Assistant,
+            content,
+            phase: None,
+            provider: Some("antigravity-acp".to_owned()),
+            api: Some("antigravity-acp".to_owned()),
+            model: Some(request.model_id.clone()),
+            stop_reason: Some(StopReason::Stop),
+            provider_meta: ProviderOpaqueMeta::default(),
+            created_at: Utc::now().to_rfc3339(),
+        };
+        let persisted_assistant = filter_persisted_assistant_history(&assistant);
+
+        let mut next_prefix = request.messages.clone();
+        next_prefix.push(persisted_assistant.as_ref().unwrap_or(&assistant).clone());
+        let fp = antigravity_fingerprint(&request, &wire_bridged_tools, &next_prefix);
+        let continuation = Some(ProviderContinuationState::AntigravityAcp {
+            model: request.model_id,
+            session_id,
+            updated_at: Utc::now().to_rfc3339(),
+            request_fingerprint: Some(fp),
+        });
+
+        Ok(ProviderStepResult {
+            assistant,
+            persisted_assistant,
+            usage,
+            continuation,
+            raw_events,
+        })
+    }
+}

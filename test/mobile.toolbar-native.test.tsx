@@ -4,12 +4,11 @@ import path from "node:path";
 import * as React from "react";
 import { act, createContext, createElement, useContext, useState } from "react";
 import { createRoot } from "react-dom/client";
-
-import { setupJsdom } from "../apps/desktop/test/jsdomHarness";
 import {
   buildThreadHomeViewModel,
   defaultThreadHomeUiState,
 } from "../apps/mobile/src/features/cowork/threadHomeModel";
+import { setupJsdom } from "./helpers/jsdomHarness";
 
 const originalPlatform = process.env.EXPO_OS;
 const sdk = path.resolve("apps/mobile/node_modules/expo-router/build");

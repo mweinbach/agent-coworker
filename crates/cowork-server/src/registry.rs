@@ -2944,7 +2944,21 @@ impl ServerRuntimeState {
             ProviderName::Anthropic => {
                 defaults.contains_key("effort") || defaults.contains_key("thinking")
             }
-            ProviderName::CodexCli => true,
+            ProviderName::Bedrock => {
+                let lower = model.trim().to_ascii_lowercase();
+                lower.contains("claude")
+                    || defaults.contains_key("reasoningEffort")
+                    || defaults.contains_key("effort")
+            }
+            ProviderName::CodexCli
+            | ProviderName::ClaudeSdk
+            | ProviderName::AntigravityAcp
+            | ProviderName::Lmstudio
+            | ProviderName::Fireworks
+            | ProviderName::Firepass
+            | ProviderName::Together
+            | ProviderName::OpencodeGo
+            | ProviderName::OpencodeZen => true,
             _ => false,
         };
         if !declares_reasoning {
@@ -4710,7 +4724,21 @@ const EDITABLE_CODEX_WEB_SEARCH_CONTEXT_SIZE_VALUES: [&str; 3] = ["low", "medium
 const EDITABLE_GOOGLE_THINKING_LEVEL_VALUES: [&str; 4] = ["minimal", "low", "medium", "high"];
 
 /// `EDITABLE_PROVIDER_OPTIONS_PROVIDER_NAMES`, in the order the TS merge walks them.
-const EDITABLE_PROVIDER_OPTION_SECTIONS: [&str; 4] = ["openai", "codex-cli", "google", "lmstudio"];
+const EDITABLE_PROVIDER_OPTION_SECTIONS: [&str; 13] = [
+    "openai",
+    "codex-cli",
+    "claude-sdk",
+    "antigravity-acp",
+    "google",
+    "anthropic",
+    "bedrock",
+    "lmstudio",
+    "together",
+    "fireworks",
+    "firepass",
+    "opencode-go",
+    "opencode-zen",
+];
 
 /// Copies `obj[key]` into `dst` when it is exactly one of `allowed` (TS `is*` enum guards).
 fn pick_enum_into(
@@ -4838,8 +4866,15 @@ fn pick_codex_cli_section(obj: &Map<String, Value>) -> Option<Map<String, Value>
 }
 
 /// TS `pickGoogleThinkingConfig`: a valid `thinkingLevel`, or `{}` for an explicit empty
-/// object (which the merge reads as "clear the stored level").
+/// object or `"dynamic"` (which the merge reads as "clear the stored level").
 fn pick_google_thinking_config(obj: &Map<String, Value>) -> Option<Map<String, Value>> {
+    if obj
+        .get("thinkingLevel")
+        .and_then(Value::as_str)
+        .is_some_and(|s| s.trim().eq_ignore_ascii_case("dynamic"))
+    {
+        return Some(Map::new());
+    }
     let mut dst = Map::new();
     pick_enum_into(
         &mut dst,
@@ -4894,6 +4929,51 @@ fn pick_lmstudio_section(obj: &Map<String, Value>) -> Option<Map<String, Value>>
             dst.insert(key.to_owned(), Value::Bool(b));
         }
     }
+    pick_enum_into(
+        &mut dst,
+        obj,
+        "reasoningEffort",
+        &EDITABLE_REASONING_EFFORT_VALUES,
+    );
+    (!dst.is_empty()).then_some(dst)
+}
+
+fn pick_anthropic_section(obj: &Map<String, Value>) -> Option<Map<String, Value>> {
+    let mut dst = Map::new();
+    pick_enum_into(&mut dst, obj, "effort", &EDITABLE_REASONING_EFFORT_VALUES);
+    pick_enum_into(
+        &mut dst,
+        obj,
+        "reasoningEffort",
+        &EDITABLE_REASONING_EFFORT_VALUES,
+    );
+    if let Some(thinking) = obj.get("thinking").and_then(Value::as_object) {
+        let mut t_dst = Map::new();
+        pick_enum_into(
+            &mut t_dst,
+            thinking,
+            "type",
+            &["adaptive", "enabled", "disabled"],
+        );
+        if let Some(budget) = pick_positive_integer(thinking.get("budgetTokens")) {
+            t_dst.insert("budgetTokens".to_owned(), Value::from(budget));
+        }
+        if !t_dst.is_empty() {
+            dst.insert("thinking".to_owned(), Value::Object(t_dst));
+        }
+    }
+    (!dst.is_empty()).then_some(dst)
+}
+
+fn pick_reasoning_effort_section(obj: &Map<String, Value>) -> Option<Map<String, Value>> {
+    let mut dst = Map::new();
+    pick_enum_into(
+        &mut dst,
+        obj,
+        "reasoningEffort",
+        &EDITABLE_REASONING_EFFORT_VALUES,
+    );
+    pick_enum_into(&mut dst, obj, "effort", &EDITABLE_REASONING_EFFORT_VALUES);
     (!dst.is_empty()).then_some(dst)
 }
 
@@ -4907,7 +4987,10 @@ fn pick_editable_provider_section(provider: &str, section: &Value) -> Option<Map
         }
         "codex-cli" => pick_codex_cli_section(obj),
         "google" => pick_google_section(obj),
+        "anthropic" => pick_anthropic_section(obj),
         "lmstudio" => pick_lmstudio_section(obj),
+        "bedrock" | "together" | "fireworks" | "firepass" | "opencode-go" | "opencode-zen"
+        | "claude-sdk" | "antigravity-acp" => pick_reasoning_effort_section(obj),
         _ => None,
     }
 }
@@ -5248,6 +5331,7 @@ fn cleared_config_key(key: &str) -> Option<&'static str> {
         "clearSkillImprovementModel" => Some("skillImprovementModel"),
         "clearToolOutputOverflowChars" => Some("toolOutputOverflowChars"),
         "clearToolCalling" => Some("toolCalling"),
+        "clearProviderOptions" => Some("providerOptions"),
         _ => None,
     }
 }
@@ -5284,16 +5368,30 @@ fn merge_session_config_overrides(overrides: &mut Map<String, Value>, patch: Map
     for (k, v) in patch {
         if let Some(cleared) = cleared_config_key(&k) {
             if v.as_bool() == Some(true) {
-                overrides.remove(cleared);
-                if cleared == "toolCalling" {
-                    overrides.remove("deferredToolSearch");
-                    overrides.remove("codeMode");
+                if cleared == "providerOptions" {
                     if let Some(Value::Object(po)) = overrides.get_mut("providerOptions") {
-                        po.remove("deferredToolSearch");
-                        po.remove("codeMode");
-                        po.remove("toolCallingStrategy");
+                        po.retain(|key, _| {
+                            matches!(
+                                key.as_str(),
+                                "deferredToolSearch" | "codeMode" | "toolCallingStrategy"
+                            )
+                        });
                         if po.is_empty() {
                             overrides.remove("providerOptions");
+                        }
+                    }
+                } else {
+                    overrides.remove(cleared);
+                    if cleared == "toolCalling" {
+                        overrides.remove("deferredToolSearch");
+                        overrides.remove("codeMode");
+                        if let Some(Value::Object(po)) = overrides.get_mut("providerOptions") {
+                            po.remove("deferredToolSearch");
+                            po.remove("codeMode");
+                            po.remove("toolCallingStrategy");
+                            if po.is_empty() {
+                                overrides.remove("providerOptions");
+                            }
                         }
                     }
                 }
@@ -5430,6 +5528,7 @@ fn apply_session_config_to_project_patch(
         ("skillImprovementModel", "clearSkillImprovementModel"),
         ("toolOutputOverflowChars", "clearToolOutputOverflowChars"),
         ("toolCalling", "clearToolCalling"),
+        ("providerOptions", "clearProviderOptions"),
     ] {
         if cp.contains_key(value_key) && flag(clear_key) {
             return Err(format!("{value_key} cannot be combined with {clear_key}"));
@@ -5512,6 +5611,9 @@ fn apply_session_config_to_project_patch(
     if flag("clearToolCalling") {
         patch.clear_tool_calling = true;
     }
+    if flag("clearProviderOptions") {
+        patch.clear_provider_options = true;
+    }
     let mut tc_patch = ToolCallingPatch::default();
     if let Some(po) = cp.get("providerOptions").and_then(Value::as_object) {
         if let Some(b) = po.get("codeMode").and_then(Value::as_bool) {
@@ -5575,7 +5677,9 @@ fn apply_session_config_to_project_patch(
     {
         patch.feature_flags = Some(ff);
     }
-    if let Some(v) = cp.get("providerOptions").and_then(Value::as_object) {
+    if !patch.clear_provider_options
+        && let Some(v) = cp.get("providerOptions").and_then(Value::as_object)
+    {
         let mut persisted_po = v.clone();
         persisted_po.remove("codeMode");
         persisted_po.remove("deferredToolSearch");
@@ -5615,5 +5719,57 @@ mod tests {
             vec![("user", "hello"), ("assistant", "visible answer")],
             "reasoning parts must not become visible seed text"
         );
+    }
+
+    #[test]
+    fn clear_provider_options_clears_session_and_project_overrides_preserving_tool_calling() {
+        let mut overrides = Map::new();
+        overrides.insert(
+            "providerOptions".to_owned(),
+            json!({
+                "openai": { "reasoningEffort": "high" },
+                "google": { "nativeWebSearch": true },
+                "codeMode": true,
+                "deferredToolSearch": true
+            }),
+        );
+        let mut clear_patch = Map::new();
+        clear_patch.insert("clearProviderOptions".to_owned(), json!(true));
+        merge_session_config_overrides(&mut overrides, clear_patch.clone());
+        let remaining = overrides
+            .get("providerOptions")
+            .and_then(Value::as_object)
+            .expect("tool-calling toggles remain preserved");
+        assert!(!remaining.contains_key("openai"));
+        assert!(!remaining.contains_key("google"));
+        assert_eq!(remaining.get("codeMode"), Some(&json!(true)));
+        assert_eq!(remaining.get("deferredToolSearch"), Some(&json!(true)));
+
+        // When no tool-calling toggles exist, `providerOptions` is removed completely.
+        let mut plain_overrides = Map::new();
+        plain_overrides.insert(
+            "providerOptions".to_owned(),
+            json!({ "openai": { "reasoningEffort": "high" } }),
+        );
+        merge_session_config_overrides(&mut plain_overrides, clear_patch.clone());
+        assert!(!plain_overrides.contains_key("providerOptions"));
+
+        // Project patch conversion accepts `clearProviderOptions: true` and rejects combining it
+        // with `providerOptions`.
+        let mut proj_patch = ProjectConfigPatch::default();
+        apply_session_config_to_project_patch(&clear_patch, &mut proj_patch)
+            .expect("clearProviderOptions alone is valid");
+        assert!(proj_patch.clear_provider_options);
+        assert!(proj_patch.provider_options.is_none());
+
+        let mut combined = clear_patch;
+        combined.insert(
+            "providerOptions".to_owned(),
+            json!({ "openai": { "reasoningEffort": "low" } }),
+        );
+        let err =
+            apply_session_config_to_project_patch(&combined, &mut ProjectConfigPatch::default())
+                .expect_err("combining providerOptions with clearProviderOptions must fail");
+        assert!(err.contains("clearProviderOptions"));
     }
 }

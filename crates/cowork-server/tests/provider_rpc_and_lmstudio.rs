@@ -449,7 +449,7 @@ async fn serves_all_17_provider_rpc_routes_and_3_openai_native_connector_routes(
     let mut ws = connect_initialized_ws(server.ws_url()).await;
     let cwd = iso.workspace_dir.to_string_lossy().into_owned();
 
-    // 1. catalog/read -> all 14 providers
+    // 1. catalog/read -> all 16 providers
     let cat_res = ws_rpc(
         &mut ws,
         "r1",
@@ -458,7 +458,7 @@ async fn serves_all_17_provider_rpc_routes_and_3_openai_native_connector_routes(
     )
     .await;
     let all = cat_res["result"]["event"]["all"].as_array().unwrap();
-    assert_eq!(all.len(), 14);
+    assert_eq!(all.len(), 16);
 
     // Unknown param key -> -32602
     let unknown_param = ws_rpc(
@@ -481,10 +481,12 @@ async fn serves_all_17_provider_rpc_routes_and_3_openai_native_connector_routes(
     let methods = methods_res["result"]["event"]["methods"]
         .as_object()
         .unwrap();
-    assert_eq!(methods.len(), 14);
+    assert_eq!(methods.len(), 16);
     assert_eq!(methods["google"].as_array().unwrap().len(), 3);
     assert_eq!(methods["bedrock"].as_array().unwrap().len(), 4);
     assert_eq!(methods["codex-cli"][0]["id"], "oauth_cli");
+    assert_eq!(methods["claude-sdk"][0]["id"], "api_key");
+    assert_eq!(methods["antigravity-acp"][0]["id"], "api_key");
 
     // 3. auth/setApiKey (default methodId omitted for CLI compatibility + explicit exa_api_key + validation)
     let set_openai = ws_rpc(
@@ -634,7 +636,7 @@ async fn serves_all_17_provider_rpc_routes_and_3_openai_native_connector_routes(
     let statuses = status_res["result"]["event"]["providers"]
         .as_array()
         .unwrap();
-    assert_eq!(statuses.len(), 14);
+    assert_eq!(statuses.len(), 16);
     let openai_st = statuses.iter().find(|s| s["provider"] == "openai").unwrap();
     assert_eq!(openai_st["authorized"], true);
     assert_eq!(openai_st["savedApiKeyMasks"]["api_key"], "sk-p...9876");
@@ -768,6 +770,38 @@ async fn serves_all_17_provider_rpc_routes_and_3_openai_native_connector_routes(
     )
     .await;
     assert!(codex_up["result"]["status"]["message"].is_string());
+
+    // 13b. Generic cowork/provider/runtime/status for claude-sdk, antigravity-acp, and non-managed rejection
+    let claude_rt_st = ws_rpc(
+        &mut ws,
+        "r13-claude",
+        "cowork/provider/runtime/status",
+        json!({ "cwd": cwd, "provider": "claude-sdk" }),
+    )
+    .await;
+    assert_eq!(claude_rt_st["result"]["provider"], "claude-sdk");
+    assert_eq!(claude_rt_st["result"]["status"]["source"], "missing");
+    assert_eq!(claude_rt_st["result"]["status"]["pinnedVersion"], "2.1.330");
+
+    let agy_rt_st = ws_rpc(
+        &mut ws,
+        "r13-agy",
+        "cowork/provider/runtime/status",
+        json!({ "cwd": cwd, "provider": "antigravity-acp" }),
+    )
+    .await;
+    assert_eq!(agy_rt_st["result"]["provider"], "antigravity-acp");
+    assert_eq!(agy_rt_st["result"]["status"]["source"], "missing");
+    assert_eq!(agy_rt_st["result"]["status"]["pinnedVersion"], "1.5.14");
+
+    let bad_rt_st = ws_rpc(
+        &mut ws,
+        "r13-bad",
+        "cowork/provider/runtime/status",
+        json!({ "cwd": cwd, "provider": "openai" }),
+    )
+    .await;
+    assert_eq!(bad_rt_st["error"]["code"], -32602);
 
     // 14 & 15. lmstudio/local/status & lmstudio/local/start
     let lms_st = ws_rpc(
@@ -2133,10 +2167,11 @@ async fn bedrock_server_turn_runner_honors_saved_region_isolated_env_and_nested_
     let seen = captured_bdrk.lock().unwrap();
     assert_eq!(seen.len(), 4);
 
-    // Request 0: Bearer token + nested `providerOptions.bedrock.{maxTokens, reasoningEffort}` + top-level `temperature`
+    // Request 0: Bearer token + nested `providerOptions.bedrock.{maxTokens, reasoningEffort}`;
+    // `temperature` is omitted when Claude thinking is enabled (Bedrock rejects custom temperature with thinking).
     assert_eq!(seen[0].1, "Bearer ABSK-server-saved-bearer-token");
     assert_eq!(seen[0].2["inferenceConfig"]["maxTokens"], json!(4096));
-    assert_eq!(seen[0].2["inferenceConfig"]["temperature"], json!(0.4));
+    assert!(seen[0].2["inferenceConfig"].get("temperature").is_none());
     assert_eq!(
         seen[0].2["additionalModelRequestFields"]["output_config"]["effort"],
         json!("high")
@@ -2271,4 +2306,117 @@ async fn codex_app_server_update_runs_managed_installer_and_fails_closed_on_chec
     )
     .await;
     assert_eq!(after["result"]["status"]["available"], json!(false));
+}
+
+#[tokio::test]
+async fn lmstudio_local_status_and_start_suppress_saved_key_for_client_override_urls() {
+    let configured_auth = Arc::new(Mutex::new(Vec::<Option<String>>::new()));
+    let configured_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let configured_port = configured_listener.local_addr().unwrap().port();
+    let configured_url = format!("http://127.0.0.1:{configured_port}");
+    {
+        let auth_log = Arc::clone(&configured_auth);
+        let app = axum::Router::new().fallback(axum::routing::get(
+            move |headers: axum::http::HeaderMap| {
+                let auth_log = Arc::clone(&auth_log);
+                async move {
+                    let auth = headers
+                        .get(axum::http::header::AUTHORIZATION)
+                        .and_then(|v| v.to_str().ok())
+                        .map(str::to_string);
+                    auth_log.lock().unwrap().push(auth);
+                    axum::Json(json!({ "models": [] }))
+                }
+            },
+        ));
+        tokio::spawn(async move {
+            axum::serve(configured_listener, app).await.unwrap();
+        });
+    }
+
+    let attacker_auth = Arc::new(Mutex::new(Vec::<Option<String>>::new()));
+    let attacker_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let attacker_port = attacker_listener.local_addr().unwrap().port();
+    let attacker_url = format!("http://127.0.0.1:{attacker_port}");
+    {
+        let auth_log = Arc::clone(&attacker_auth);
+        let app = axum::Router::new().fallback(axum::routing::get(
+            move |headers: axum::http::HeaderMap| {
+                let auth_log = Arc::clone(&auth_log);
+                async move {
+                    let auth = headers
+                        .get(axum::http::header::AUTHORIZATION)
+                        .and_then(|v| v.to_str().ok())
+                        .map(str::to_string);
+                    auth_log.lock().unwrap().push(auth);
+                    axum::Json(json!({ "models": [] }))
+                }
+            },
+        ));
+        tokio::spawn(async move {
+            axum::serve(attacker_listener, app).await.unwrap();
+        });
+    }
+
+    let mut iso = IsolatedEnv::new();
+    iso.env
+        .insert("LM_STUDIO_BASE_URL".into(), configured_url.clone());
+    // Also place a fake `lms` binary in `~/.lmstudio/bin/lms` so `local/start` probes the URL.
+    let lms_bin = iso.home_dir.join(".lmstudio/bin/lms");
+    std::fs::create_dir_all(lms_bin.parent().unwrap()).unwrap();
+    std::fs::write(&lms_bin, "#!/bin/sh\nexit 0\n").unwrap();
+
+    let server = start_server(iso.server_options()).await.unwrap();
+    let mut ws = connect_initialized_ws(server.ws_url()).await;
+    let cwd = iso.workspace_dir.to_string_lossy().into_owned();
+
+    // Save a secret LM Studio API key in the connection store.
+    let save_key = ws_rpc(
+        &mut ws,
+        "lms-key",
+        "cowork/provider/auth/setApiKey",
+        json!({ "cwd": cwd, "provider": "lmstudio", "apiKey": "lms-secret-token" }),
+    )
+    .await;
+    assert!(save_key.get("error").is_none(), "{save_key}");
+
+    // 1. Checking the configured endpoint (implicit or exact match) authenticates with the saved key.
+    let configured_resp = ws_rpc(
+        &mut ws,
+        "lms-st-cfg",
+        "cowork/provider/lmstudio/local/status",
+        json!({ "cwd": cwd }),
+    )
+    .await;
+    assert_eq!(configured_resp["result"]["status"]["running"], json!(true));
+    assert_eq!(
+        configured_auth.lock().unwrap().as_slice(),
+        &[Some("Bearer lms-secret-token".to_string())]
+    );
+
+    // 2. Client-overridden `baseUrl` MUST NOT receive the saved LM Studio key on status or start.
+    let override_status = ws_rpc(
+        &mut ws,
+        "lms-st-override",
+        "cowork/provider/lmstudio/local/status",
+        json!({ "cwd": cwd, "baseUrl": attacker_url }),
+    )
+    .await;
+    assert_eq!(override_status["result"]["status"]["running"], json!(true));
+
+    let override_start = ws_rpc(
+        &mut ws,
+        "lms-start-override",
+        "cowork/provider/lmstudio/local/start",
+        json!({ "cwd": cwd, "baseUrl": attacker_url, "timeoutMs": 600 }),
+    )
+    .await;
+    assert_eq!(override_start["result"]["status"]["running"], json!(true));
+
+    let attacker_seen = attacker_auth.lock().unwrap().clone();
+    assert_eq!(
+        attacker_seen,
+        vec![None, None],
+        "saved LM Studio API key must never be sent to client-selected baseUrl overrides"
+    );
 }

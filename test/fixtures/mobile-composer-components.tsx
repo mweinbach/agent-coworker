@@ -5,7 +5,7 @@ import { act, type ComponentType, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { setupJsdom } from "../../apps/desktop/test/jsdomHarness";
+import { setupJsdom } from "../helpers/jsdomHarness";
 
 type ComposerProps = {
   value: string;

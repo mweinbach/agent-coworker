@@ -149,6 +149,8 @@ fn print_command_applies_policy_and_backend_transform() {
             assert_eq!(&args[args.len() - 2..], &["/bin/echo", "hi"]);
         }
         "windows-sandbox" => {
+            assert!(args.contains(&"__sandbox-exec"), "{args:?}");
+            assert!(args.contains(&"--windows-mxc"), "{args:?}");
             assert_eq!(&args[args.len() - 2..], &["/bin/echo", "hi"]);
         }
         other => panic!("unexpected sandbox {other}"),

@@ -1,0 +1,217 @@
+//! Chat feature view module (owned by `chat`).
+//!
+//! Ported from `apps/desktop/src/ui/ChatView.tsx`, `src/ui/chat/`, `src/ui/composer/`,
+//! `src/ui/markdown/`, `src/ui/attachments/`, and `src/ui/AgentRunViewer.tsx`.
+
+pub mod activity;
+pub mod agent_run_viewer;
+pub mod attachments;
+pub mod canvas;
+pub mod components;
+pub mod composer;
+pub mod dialogs;
+pub mod feed;
+pub mod feed_row;
+pub mod icons;
+pub mod interaction;
+pub mod landing;
+pub mod markdown;
+mod math;
+pub mod model;
+#[cfg(test)]
+mod parity_tests;
+mod row_version;
+pub mod state;
+
+pub use canvas::{canvas_pane, is_canvas_document_path, is_canvas_maximized};
+pub use state::ChatUiState;
+
+use std::cell::Cell;
+
+use rune::{Cx, col, row};
+use rune_kit::Kit;
+
+use crate::state::{AppState, ServerLifecycleState, ThreadStatus};
+use crate::theme::{self, AccentPalette, ThemeTokens};
+use crate::views::SubviewOutput;
+
+use self::agent_run_viewer::build_agent_run_drawer;
+use self::attachments::shared_waker_image_cache;
+use self::components::{locked_task_bar, read_only_notice_bar};
+use self::dialogs::{build_cancel_subagents_dialog, build_transcript_recovery_banner};
+use self::feed::{ChatFeedProps, FeedSource, build_chat_feed_surface};
+use self::feed_row::render_active_feed_popovers;
+use self::model::workspace_is_reconnecting;
+
+type ChatTokensCacheKey = (bool, bool, bool, AccentPalette);
+
+thread_local! {
+    static CACHED_CHAT_TOKENS: Cell<Option<(ChatTokensCacheKey, ThemeTokens)>> =
+        const { Cell::new(None) };
+}
+
+pub(super) fn resolve_cached_tokens(
+    dark: bool,
+    reduced_transparency: bool,
+    high_contrast: bool,
+    accent: AccentPalette,
+) -> ThemeTokens {
+    let key = (dark, reduced_transparency, high_contrast, accent);
+    CACHED_CHAT_TOKENS.with(|slot| {
+        if let Some((cached_key, cached_tokens)) = slot.get()
+            && cached_key == key
+        {
+            return cached_tokens;
+        }
+        let tokens =
+            theme::resolve_tokens_with_accent(dark, reduced_transparency, high_contrast, accent);
+        slot.set(Some((key, tokens)));
+        tokens
+    })
+}
+
+/// Renders the active chat landing view or thread transcript + composer + subagent drawer + overlays.
+pub fn view(s: &AppState, cx: &mut Cx<AppState>, k: &Kit) -> SubviewOutput {
+    let dark = s.effective_dark(cx.system_dark());
+    let t = resolve_cached_tokens(
+        dark,
+        s.desktop_settings.reduced_transparency,
+        s.desktop_settings.high_contrast,
+        s.desktop_settings.accent_palette,
+    );
+
+    let chat_view_width = cx.layout_size("chat-view").map(|[w, _]| w);
+    let mut overlays = Vec::new();
+    let content = if let Some(thread) = s.active_thread() {
+        let rt = s.active_thread_runtime();
+        let ws = s.workspaces.iter().find(|w| w.id == thread.workspace_id);
+        let ws_rt = s.workspace_runtime_by_id.get(&thread.workspace_id);
+        let disconnected = thread.status == ThreadStatus::Disconnected
+            || ws_rt
+                .is_some_and(|w| !matches!(w.server_state, ServerLifecycleState::Running { .. }));
+        let reconnecting = workspace_is_reconnecting(ws_rt);
+        let thread_busy = rt.is_some_and(|r| r.streaming || r.active_turn_id.is_some());
+
+        let mut main_col = col()
+            .key("chat-main")
+            .w_full()
+            .grow(1.0)
+            .min_w(0.0)
+            .min_h(0.0);
+
+        if let Some(notice) = rt.and_then(|r| r.read_only_notice.as_ref()) {
+            main_col = main_col.child(read_only_notice_bar(
+                k,
+                &t,
+                &notice.title,
+                &notice.detail,
+                None,
+            ));
+        }
+
+        let feed_wrap = build_chat_feed_surface(
+            s,
+            k,
+            &t,
+            &ChatFeedProps {
+                thread_key: &thread.id,
+                source: FeedSource::Thread(thread.id.clone()),
+                thread_busy,
+                hydrating: rt.is_some_and(|r| r.hydrating),
+                transcript_only: rt.is_some_and(|r| r.transcript_only),
+                disconnected,
+                reconnecting,
+                interaction_errors: rt
+                    .map(|r| &r.interaction_errors)
+                    .unwrap_or(&EMPTY_INTERACTION_ERRORS),
+                workspace_id: Some(thread.workspace_id.as_str()),
+                workspace_path: ws.map(|w| w.path.as_str()),
+                external_cache: shared_waker_image_cache(s.services.waker.as_ref()),
+                is_agent_viewer: false,
+                scroll_area_key: "chat-feed-area",
+                viewport_key: "chat-feed-scroll",
+                frame_key: "chat-feed-frame",
+            },
+            "chat-feed-surface",
+        );
+        main_col = main_col.child(feed_wrap);
+
+        if let Some(failure) = rt.and_then(|r| r.transcript_delivery_failure.as_ref()) {
+            main_col = main_col.child(build_transcript_recovery_banner(k, &t, &thread.id, failure));
+        }
+
+        if let Some(task) = s.active_task.as_ref().filter(|task| {
+            thread.source_task_id.as_ref() == Some(&task.summary.id) && task.summary.is_terminal()
+        }) {
+            main_col = main_col.child(
+                read_only_notice_bar(
+                    k,
+                    &t,
+                    "This task conversation is read-only.",
+                    if task.summary.status == "failed" {
+                        "Retry the task to continue this conversation."
+                    } else {
+                        "Reopen the task to continue this conversation."
+                    },
+                    None,
+                )
+                .key("task-conversation-read-only"),
+            );
+        } else if let Some(lock) = rt
+            .and_then(|r| r.source_task.as_ref())
+            .filter(|l| l.read_only)
+        {
+            main_col = main_col.child(locked_task_bar(
+                k,
+                &t,
+                lock.task_id.clone(),
+                lock.task_title.clone(),
+            ));
+        } else {
+            main_col = main_col.child(composer::build_composer(s, k, &t, &mut overlays, false));
+        }
+
+        let mut split = row()
+            .key("chat-view")
+            .w_full()
+            .grow(1.0)
+            .min_w(0.0)
+            .min_h(0.0)
+            .child(main_col);
+        if let Some(drawer) = build_agent_run_drawer(s, k, &t, chat_view_width) {
+            if chat_view_width.is_some_and(|w| w < 820.0) {
+                split = split.child(
+                    col()
+                        .key("agent-run-viewer-backdrop")
+                        .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
+                        .fill(t.scrim)
+                        .items_end()
+                        .modal(true, |s: &mut AppState| {
+                            s.dispatch(crate::actions::Action::Chat(
+                                crate::actions::ChatAction::CloseAgentViewer,
+                            ));
+                        })
+                        .child(drawer),
+                );
+            } else {
+                split = split.child(drawer);
+            }
+        }
+        split
+    } else {
+        col()
+            .key("chat-view")
+            .w_full()
+            .grow(1.0)
+            .min_h(0.0)
+            .child(landing::build_landing_view(s, k, &t, &mut overlays))
+    };
+
+    build_cancel_subagents_dialog(s, k, &mut overlays);
+    render_active_feed_popovers(s, k, &t, &mut overlays);
+
+    SubviewOutput { content, overlays }
+}
+
+static EMPTY_INTERACTION_ERRORS: std::sync::LazyLock<std::collections::HashMap<String, String>> =
+    std::sync::LazyLock::new(std::collections::HashMap::new);

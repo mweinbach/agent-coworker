@@ -61,7 +61,7 @@ type MCPServerAuthMode = "none" | "missing" | "api_key" | "oauth" | "oauth_pendi
 // control envelopes and persisted session artifacts.
 export const WEBSOCKET_PROTOCOL_VERSION = "7.48";
 
-export type SessionConfigPatch = {
+type SessionConfigPatch = {
   yolo?: boolean;
   observabilityEnabled?: boolean;
   backupsEnabled?: boolean;
@@ -90,6 +90,7 @@ export type SessionConfigPatch = {
   };
   clearToolCalling?: boolean;
   providerOptions?: OpenAiCompatibleProviderOptionsByProvider;
+  clearProviderOptions?: boolean;
   userName?: string;
   userProfile?: {
     instructions?: string;
@@ -135,7 +136,7 @@ type SessionConfigState = {
   };
 };
 
-export type SessionEvent =
+type SessionEvent =
   | {
       type: "server_hello";
       sessionId: string;

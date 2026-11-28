@@ -20,6 +20,7 @@ pub mod idempotency;
 pub mod importers;
 pub mod interactions;
 pub mod memory_generator;
+mod native_tool_approval;
 pub mod ooxml;
 pub mod presentation;
 mod prompt_template;
@@ -80,7 +81,7 @@ mod tests {
         assert_eq!(MAX_SUBAGENT_DEPTH, 1);
         assert_eq!(MAX_ACTIVE_SUBAGENTS, 16);
         assert_eq!(MIN_TASK_REVIEW_ROUNDS, 3);
-        assert_eq!(cowork_providers::registered_provider_ids().count(), 14);
+        assert_eq!(cowork_providers::registered_provider_ids().count(), 16);
         assert_eq!(cowork_tools::CANONICAL_BUILTIN_TOOL_IDS.len(), 27);
     }
 }

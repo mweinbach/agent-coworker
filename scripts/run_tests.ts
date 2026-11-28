@@ -71,7 +71,7 @@ export function buildTestInvocation(options: {
       ? args.map((arg) =>
           arg.startsWith("test/") || arg.startsWith("apps/") ? path.join(repoRoot, arg) : arg,
         )
-      : [path.join(repoRoot, "test"), path.join(repoRoot, "apps", "desktop", "test")];
+      : [path.join(repoRoot, "test")];
 
   return {
     command: [
@@ -133,7 +133,7 @@ export function formatFailureSummary(failedFiles: FailedTestFile[]): string {
 }
 
 async function discoverProjectTestFiles(repoRoot: string): Promise<string[]> {
-  const testRoots = [path.join(repoRoot, "test"), path.join(repoRoot, "apps", "desktop", "test")];
+  const testRoots = [path.join(repoRoot, "test")];
   const files: string[] = [];
   for (const testRoot of testRoots) {
     const glob = new Bun.Glob("**/*.test.{ts,tsx,js,jsx}");

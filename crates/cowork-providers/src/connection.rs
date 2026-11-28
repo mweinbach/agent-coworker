@@ -16,9 +16,9 @@ use crate::bedrock::{
 };
 use crate::chat_completions::lmstudio::resolve_lmstudio_options;
 use crate::{
-    AnthropicMessagesTransport, BedrockConverseTransport, ChatCompletionsTransport,
-    CodexAppServerTransport, GoogleInteractionsTransport, OpenAiResponsesTransport,
-    ProviderTransport,
+    AnthropicMessagesTransport, AntigravityAcpTransport, BedrockConverseTransport,
+    ChatCompletionsTransport, ClaudeSdkTransport, CodexAppServerTransport,
+    GoogleInteractionsTransport, OpenAiResponsesTransport, ProviderTransport,
 };
 
 /// Bedrock auth for `provider` (`None` for every other provider, or when Bedrock has no usable
@@ -51,6 +51,7 @@ pub fn provider_base_url_env_key(provider: ProviderName) -> String {
     match provider {
         ProviderName::Google => "GEMINI_BASE_URL".to_owned(),
         ProviderName::Bedrock => "AWS_BEDROCK_ENDPOINT_URL".to_owned(),
+        ProviderName::Lmstudio => "LM_STUDIO_BASE_URL".to_owned(),
         other => format!(
             "{}_BASE_URL",
             other.as_str().to_ascii_uppercase().replace('-', "_")
@@ -132,6 +133,10 @@ pub fn select_provider_transport(
             ))),
         },
         ProviderName::CodexCli => Ok(Arc::new(codex_transport())),
+        ProviderName::ClaudeSdk => Ok(Arc::new(ClaudeSdkTransport::with_env(env.clone()))),
+        ProviderName::AntigravityAcp => {
+            Ok(Arc::new(AntigravityAcpTransport::with_env(env.clone())))
+        }
         other => ChatCompletionsTransport::new(other)
             .map(|t| Arc::new(t) as Arc<dyn ProviderTransport>)
             .ok_or_else(|| format!("Unsupported provider transport: {}", other.as_str())),

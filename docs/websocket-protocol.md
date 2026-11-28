@@ -181,8 +181,9 @@ workspace-settings permission, because memory holds long-lived private user/proj
 usage state, runs local skill-file edits, and can restore skill backups.
 Routes that start a local process or run a model job also require `turns`:
 `cowork/skills/improvement/run`, `cowork/skills/improvement/restore`,
-`cowork/provider/lmstudio/local/start` (starts the local LM Studio server), and
-`cowork/provider/codexAppServer/update` (replaces the managed Codex app-server binary) require
+`cowork/provider/lmstudio/local/start` (starts the local LM Studio server),
+`cowork/provider/codexAppServer/update` (replaces the managed Codex app-server binary), and
+`cowork/provider/runtime/update` (installs/replaces a Cowork-managed provider runtime binary) require
 `workspaceSettings` and `turns`; `cowork/memory/advanced/generate` and
 `cowork/memory/advanced/folder/generate` (which also read the source thread's conversation)
 require `workspaceSettings`, `conversations`, and `turns`. `cowork/runtime/libreoffice/check` stays
@@ -482,6 +483,8 @@ Currently implemented `cowork/*` methods include:
   - `cowork/provider/capabilities/check`
   - `cowork/provider/codexAppServer/status`
   - `cowork/provider/codexAppServer/update`
+  - `cowork/provider/runtime/status`
+  - `cowork/provider/runtime/update`
   - `cowork/provider/lmstudio/local/status`
   - `cowork/provider/lmstudio/local/start`
   - `cowork/provider/auth/authorize`
@@ -717,7 +720,7 @@ One-off chat thread workspaces must live under the global `~/.cowork/chats` dire
 
 `cowork/runtime/diagnostics/read` returns `{ diagnostics }` with `startup.ready`, optional `startup.error` and `startup.progress` (`phase`, `version`, `transferredBytes`, `totalBytes`, and `percent`), `sendQueue` counters (`queuedSends`, `droppedDeltas`, `droppedImportant`, serialization/send failures, max/current queue depth), `journal` counters (untrusted thread count, failed writes, dropped journal events, pending threads), and `dbLocks` counters (write-lock waits, timeouts, SQLite lock errors, stale lock recoveries). Clients should use these counters for support diagnostics and to decide whether a reconnect gap needs a full thread snapshot refresh. While `startup.ready` is false, thread list/read/hydrate traffic may continue, but new turn mutations are held until background startup finishes.
 
-`cowork/session/defaults/apply` remains the composite "apply provider/model, editable defaults, and MCP enablement" write. Supplying only `cwd` targets the workspace control session; supplying `threadId` as well applies the same composite write directly to that loaded thread session. Within `config`, `memoryGenerationModel` sets an explicit advanced-memory generation model; `clearMemoryGenerationModel: true` removes that workspace override so future generation inherits the session model. The two fields are mutually exclusive. Skill improvement defaults use `skillImprovementEnabled`, `skillImprovementModel`, `clearSkillImprovementModel`, `skillImprovementScope: "user" | "all"`, and `skillImprovementExcludedSkills: string[]`; `skillImprovementModel` and `clearSkillImprovementModel` are mutually exclusive. Tool-calling defaults use `toolCalling: { codeMode?, deferredToolSearch?, strategy? }` (`strategy` ∈ `"auto" | "native" | "harness"`) and `clearToolCalling: true` (mutually exclusive) to persist or clear workspace tool-calling overrides.
+`cowork/session/defaults/apply` remains the composite "apply provider/model, editable defaults, and MCP enablement" write. Supplying only `cwd` targets the workspace control session; supplying `threadId` as well applies the same composite write directly to that loaded thread session. Within `config`, `memoryGenerationModel` sets an explicit advanced-memory generation model; `clearMemoryGenerationModel: true` removes that workspace override so future generation inherits the session model. The two fields are mutually exclusive. Skill improvement defaults use `skillImprovementEnabled`, `skillImprovementModel`, `clearSkillImprovementModel`, `skillImprovementScope: "user" | "all"`, and `skillImprovementExcludedSkills: string[]`; `skillImprovementModel` and `clearSkillImprovementModel` are mutually exclusive. Tool-calling defaults use `toolCalling: { codeMode?, deferredToolSearch?, strategy? }` (`strategy` ∈ `"auto" | "native" | "harness"`) and `clearToolCalling: true` (mutually exclusive) to persist or clear workspace tool-calling overrides. Provider-specific editable defaults use `providerOptions` and `clearProviderOptions: true` (mutually exclusive) to persist or clear workspace provider-option overrides while preserving tool-calling toggles.
 
 `cowork/provider/capabilities/check` resolves native tool-search and programmatic tool-calling capabilities for `{ cwd?, threadId?, provider?, model?, baseUrl?, strategy?, refresh? }`, performing a bounded live `/v1/models/{id}` or `/models/{id}` probe (cached for 15 minutes unless `refresh: true` is set) and returning `{ provider, model, strategy, capabilities: { provider, modelId, endpointHost?, nativeToolSearch?, nativeProgrammaticToolCalling?, source, checkedAtMs?, detail? } }`. When the caller supplies a `baseUrl` override that differs from the configured provider base URL, saved API keys are omitted from the probe request.
 
@@ -1149,6 +1152,7 @@ Changes in `7.32`:
 - Added JSON-RPC controls for the runtime-managed Codex app-server payload:
   - `cowork/provider/codexAppServer/status` returns `{ status }` with source, current version, app-pinned version, and whether the installed managed payload matches the app pin.
   - `cowork/provider/codexAppServer/update` downloads/promotes the app-pinned Cowork-managed Codex app-server under `~/.cowork/codex-app-server`; callers cannot select or pin arbitrary versions.
+  - `cowork/provider/runtime/status` (`{ cwd?, provider, checkLatest? }`) and `cowork/provider/runtime/update` (`{ cwd?, provider, force? }`) generalize managed runtime status and installation across `codex-cli`, `claude-sdk`, and `antigravity-acp`, returning `{ provider, status }`. Every managed binary is verified against repo-pinned SHA-256/SHA-512 checksums before extraction or execution and never resolved from `PATH`.
 - Desktop/runtime Codex app-server resolution now downloads and uses the app-pinned Cowork-managed release. Updating the desktop app can bump the code pin so the next runtime use downloads the replacement payload.
 - The current managed runtime pin is Codex app-server `0.160.0`. Release assets are SHA-256 verified for supported macOS, Linux, and Windows architectures before installation or execution.
 

@@ -1,0 +1,22 @@
+name: Setup Linux desktop dependencies
+description: Install Linux desktop linking, font, and software Vulkan (Lavapipe) libraries required to compile and run cowork-desktop headless tests on Ubuntu runners.
+
+runs:
+  using: composite
+  steps:
+    - name: Install Linux desktop and headless Vulkan dependencies
+      shell: bash
+      run: |
+        set -euo pipefail
+        sudo apt-get update
+        sudo apt-get install --yes --no-install-recommends \
+          pkg-config \
+          libgtk-3-dev \
+          libayatana-appindicator3-dev \
+          libxkbcommon-dev \
+          libxkbcommon-x11-dev \
+          libwayland-dev \
+          libfontconfig1-dev \
+          fonts-dejavu-core \
+          libvulkan1 \
+          mesa-vulkan-drivers

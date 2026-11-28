@@ -31,6 +31,8 @@ pub struct RunSandboxExecOptions {
     pub output_dir: Option<PathBuf>,
     pub uploads_dir: Option<PathBuf>,
     pub writable_roots: Vec<PathBuf>,
+    pub read_allowed_roots: Vec<PathBuf>,
+    pub read_denied_roots: Vec<PathBuf>,
     pub target_paths: Vec<String>,
     pub read_only_role: bool,
     pub network: Option<bool>,
@@ -53,6 +55,18 @@ pub enum ParsedSandboxExecArgs {
         deny_network: bool,
         command: Vec<String>,
     },
+    /// Internal Windows stage launching a command inside a Microsoft Execution Container (MXC)
+    /// `ProcessContainer` with inherited stdio.
+    WindowsMxc {
+        mode: String,
+        cwd: PathBuf,
+        writable_roots: Vec<PathBuf>,
+        read_allowed_roots: Vec<PathBuf>,
+        read_denied_roots: Vec<PathBuf>,
+        allow_network: bool,
+        timeout_ms: Option<u64>,
+        command: Vec<String>,
+    },
     /// Cross-platform OS sandbox wrapper mode.
     Run(Box<RunSandboxExecOptions>),
 }
@@ -60,6 +74,7 @@ pub enum ParsedSandboxExecArgs {
 /// Parses arguments passed after `cowork-server __sandbox-exec`.
 pub fn parse_sandbox_exec_args(args: &[String]) -> Result<ParsedSandboxExecArgs, String> {
     let mut linux_seccomp = false;
+    let mut windows_mxc = false;
     let mut deny_network = false;
     let mut policy_json: Option<String> = None;
     let mut mode: Option<String> = None;
@@ -68,6 +83,8 @@ pub fn parse_sandbox_exec_args(args: &[String]) -> Result<ParsedSandboxExecArgs,
     let mut output_dir: Option<PathBuf> = None;
     let mut uploads_dir: Option<PathBuf> = None;
     let mut writable_roots: Vec<PathBuf> = Vec::new();
+    let mut read_allowed_roots: Vec<PathBuf> = Vec::new();
+    let mut read_denied_roots: Vec<PathBuf> = Vec::new();
     let mut target_paths: Vec<String> = Vec::new();
     let mut read_only_role = false;
     let mut network: Option<bool> = None;
@@ -108,6 +125,7 @@ pub fn parse_sandbox_exec_args(args: &[String]) -> Result<ParsedSandboxExecArgs,
 
         match flag {
             "--linux-seccomp" => linux_seccomp = true,
+            "--windows-mxc" => windows_mxc = true,
             "--deny-network" => deny_network = true,
             "--policy-json" => policy_json = Some(next_val(flag)?),
             "--mode" => mode = Some(next_val(flag)?),
@@ -116,6 +134,8 @@ pub fn parse_sandbox_exec_args(args: &[String]) -> Result<ParsedSandboxExecArgs,
             "--output-dir" => output_dir = Some(PathBuf::from(next_val(flag)?)),
             "--uploads-dir" => uploads_dir = Some(PathBuf::from(next_val(flag)?)),
             "--writable-root" => writable_roots.push(PathBuf::from(next_val(flag)?)),
+            "--read-root" => read_allowed_roots.push(PathBuf::from(next_val(flag)?)),
+            "--read-deny" => read_denied_roots.push(PathBuf::from(next_val(flag)?)),
             "--target-path" => target_paths.push(next_val(flag)?),
             "--read-only-role" => read_only_role = true,
             "--allow-network" => network = Some(true),
@@ -167,6 +187,21 @@ pub fn parse_sandbox_exec_args(args: &[String]) -> Result<ParsedSandboxExecArgs,
         });
     }
 
+    if windows_mxc {
+        let resolved_cwd =
+            cwd.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+        return Ok(ParsedSandboxExecArgs::WindowsMxc {
+            mode: mode.unwrap_or_else(|| "workspace-write".to_owned()),
+            cwd: resolved_cwd,
+            writable_roots,
+            read_allowed_roots,
+            read_denied_roots,
+            allow_network: network.unwrap_or(false),
+            timeout_ms,
+            command,
+        });
+    }
+
     Ok(ParsedSandboxExecArgs::Run(Box::new(
         RunSandboxExecOptions {
             policy_json,
@@ -176,6 +211,8 @@ pub fn parse_sandbox_exec_args(args: &[String]) -> Result<ParsedSandboxExecArgs,
             output_dir,
             uploads_dir,
             writable_roots,
+            read_allowed_roots,
+            read_denied_roots,
             target_paths,
             read_only_role,
             network,
@@ -412,8 +449,29 @@ pub fn run_sandbox_exec_cli(args: &[String]) -> i32 {
             deny_network,
             command,
         } => exec_linux_seccomp_stage(*deny_network, command),
+        ParsedSandboxExecArgs::WindowsMxc {
+            mode,
+            cwd,
+            writable_roots,
+            read_allowed_roots,
+            read_denied_roots,
+            allow_network,
+            timeout_ms,
+            command,
+        } => exec_windows_mxc_stage(
+            mode,
+            cwd,
+            writable_roots,
+            read_allowed_roots,
+            read_denied_roots,
+            *allow_network,
+            timeout_ms.map(Duration::from_millis),
+            command,
+        ),
         ParsedSandboxExecArgs::Run(run_opts) => {
             let RunSandboxExecOptions {
+                read_allowed_roots,
+                read_denied_roots: extra_read_denied_roots,
                 timeout_ms,
                 json_result,
                 print_command,
@@ -433,11 +491,16 @@ pub fn run_sandbox_exec_cli(args: &[String]) -> i32 {
                 file: command[0].clone(),
                 args: command[1..].to_vec(),
             };
-            let read_denied_roots = default_credential_read_denied_roots(
+            let mut read_denied_roots = default_credential_read_denied_roots(
                 &sanitized_process_env(),
                 host_platform(),
                 &cwd,
             );
+            for extra in extra_read_denied_roots {
+                if !read_denied_roots.contains(extra) {
+                    read_denied_roots.push(extra.clone());
+                }
+            }
 
             if *print_command {
                 let launch = match prepare_sandbox_launch(
@@ -447,6 +510,7 @@ pub fn run_sandbox_exec_cli(args: &[String]) -> i32 {
                     yolo,
                     require_backend,
                     has_scoped_targets,
+                    read_allowed_roots,
                     &read_denied_roots,
                     None,
                 ) {
@@ -484,6 +548,7 @@ pub fn run_sandbox_exec_cli(args: &[String]) -> i32 {
                 req.require_backend = require_backend;
                 req.has_scoped_target_paths = has_scoped_targets;
                 req.timeout = timeout_ms.map(Duration::from_millis);
+                req.read_allowed_roots = read_allowed_roots.clone();
                 req.read_denied_roots = read_denied_roots;
                 let res: SandboxExecutionResult = rt.block_on(runner.run_with_approval(
                     req,
@@ -506,6 +571,7 @@ pub fn run_sandbox_exec_cli(args: &[String]) -> i32 {
                 require_backend,
                 has_scoped_targets,
                 timeout_ms.map(Duration::from_millis),
+                read_allowed_roots,
                 &read_denied_roots,
             )
         }
@@ -520,7 +586,7 @@ pub struct PreparedSandboxLaunch {
     /// Backend wrapping the command (`"linux-bwrap"`, `"macos-seatbelt"`, `"windows-sandbox"`,
     /// or `"none"` when it runs unsandboxed, e.g. `--yolo` without a hard floor).
     pub sandbox: SandboxType,
-    /// Program to spawn (`bwrap`, `/usr/bin/sandbox-exec`, the Windows helper, or the raw command).
+    /// Program to spawn (`bwrap`, `/usr/bin/sandbox-exec`, the Windows MXC stage launcher, or the raw command).
     pub file: String,
     pub args: Vec<String>,
     /// Working directory the program is spawned in.
@@ -547,6 +613,7 @@ fn prepare_sandbox_launch(
     yolo: bool,
     require_backend: bool,
     has_scoped_targets: bool,
+    read_allowed_roots: &[PathBuf],
     read_denied_roots: &[PathBuf],
     capabilities: Option<&SandboxCapabilities>,
 ) -> Result<PreparedSandboxLaunch, i32> {
@@ -565,6 +632,7 @@ fn prepare_sandbox_launch(
             capabilities,
             sandbox_exec_path: None,
             env_source: Some(&env_src),
+            read_allowed_roots,
             read_denied_roots,
         },
     );
@@ -633,12 +701,15 @@ fn run_transparent_cli_command(
     require_backend: bool,
     has_scoped_targets: bool,
     timeout: Option<Duration>,
+    read_allowed_roots: &[PathBuf],
     read_denied_roots: &[PathBuf],
 ) -> i32 {
     let PreparedSandboxLaunch {
+        sandbox,
         file: exec_file,
         args: exec_args,
         env: child_env,
+        unsandboxed,
         ..
     } = match prepare_sandbox_launch(
         inner,
@@ -647,12 +718,48 @@ fn run_transparent_cli_command(
         yolo,
         require_backend,
         has_scoped_targets,
+        read_allowed_roots,
         read_denied_roots,
         None,
     ) {
         Ok(launch) => launch,
         Err(code) => return code,
     };
+
+    #[cfg(windows)]
+    if sandbox == SandboxType::Windows && !unsandboxed {
+        let host_env = sanitized_process_env();
+        let manager = SandboxManager::new();
+        let caps = manager.detect_capabilities(Some("win32"), Some(&host_env));
+        if caps.backend != SandboxType::Windows
+            || !caps.enforcement.integrity
+            || !caps.windows_supports_deny_paths
+        {
+            let reason = caps.warning.as_deref().unwrap_or(
+                "Windows ProcessContainer (MXC/PSEC) sandbox requires deniedPaths support",
+            );
+            let _ = writeln!(std::io::stderr(), "SANDBOX_REQUIRED: {reason}");
+            return 125;
+        }
+        return crate::windows::run_windows_mxc_inherited(
+            inner,
+            policy,
+            cwd,
+            &child_env,
+            &host_env,
+            crate::windows::WindowsMxcBuildOptions {
+                sandbox_exec_path: None,
+                cache: Some(manager.protected_paths_cache()),
+                read_allowed_roots,
+                read_denied_roots,
+                supports_deny_paths: caps.windows_supports_deny_paths,
+                extra_tool_readonly_paths: &[],
+            },
+            timeout,
+        );
+    }
+    #[cfg(not(windows))]
+    let _ = (sandbox, unsandboxed);
 
     let mut cmd = Command::new(&exec_file);
     cmd.args(&exec_args)
@@ -768,6 +875,97 @@ fn exec_linux_seccomp_stage(_deny_network: bool, _command: &[String]) -> i32 {
     125
 }
 
+#[cfg(windows)]
+#[allow(clippy::too_many_arguments)]
+fn exec_windows_mxc_stage(
+    mode: &str,
+    cwd: &Path,
+    writable_roots: &[PathBuf],
+    read_allowed_roots: &[PathBuf],
+    read_denied_roots: &[PathBuf],
+    allow_network: bool,
+    timeout: Option<Duration>,
+    command: &[String],
+) -> i32 {
+    let host_env = sanitized_process_env();
+    let manager = SandboxManager::new();
+    let caps = manager.detect_capabilities(Some("win32"), Some(&host_env));
+    if caps.backend != SandboxType::Windows
+        || !caps.enforcement.integrity
+        || !caps.windows_supports_deny_paths
+    {
+        let reason = caps
+            .warning
+            .as_deref()
+            .unwrap_or("Windows ProcessContainer (MXC/PSEC) sandbox is unavailable");
+        let _ = writeln!(std::io::stderr(), "SANDBOX_REQUIRED: {reason}");
+        return 125;
+    }
+
+    let policy = match mode {
+        "read-only" => SandboxPolicy::ReadOnly {
+            network: allow_network,
+        },
+        "network-only" => SandboxPolicy::DangerFullAccess {
+            network: Some(allow_network),
+        },
+        _ => SandboxPolicy::WorkspaceWrite {
+            writable_roots: writable_roots.to_vec(),
+            writable_root_kinds: HashMap::new(),
+            network: allow_network,
+        },
+    };
+    let inner = SandboxCommand {
+        file: command[0].clone(),
+        args: command[1..].to_vec(),
+    };
+    let mut child_env = host_env.clone();
+    child_env.insert(
+        "COWORK_SANDBOX".to_owned(),
+        SandboxType::Windows.as_str().to_owned(),
+    );
+    if !allow_network {
+        child_env.insert("COWORK_SANDBOX_NETWORK_DISABLED".to_owned(), "1".to_owned());
+    }
+    remove_env(&mut child_env, PARENT_MANAGED_ENV_VAR, "win32");
+
+    crate::windows::run_windows_mxc_inherited(
+        &inner,
+        &policy,
+        cwd,
+        &child_env,
+        &host_env,
+        crate::windows::WindowsMxcBuildOptions {
+            sandbox_exec_path: None,
+            cache: Some(manager.protected_paths_cache()),
+            read_allowed_roots,
+            read_denied_roots,
+            supports_deny_paths: caps.windows_supports_deny_paths,
+            extra_tool_readonly_paths: &[],
+        },
+        timeout,
+    )
+}
+
+#[cfg(not(windows))]
+#[allow(clippy::too_many_arguments)]
+fn exec_windows_mxc_stage(
+    _mode: &str,
+    _cwd: &Path,
+    _writable_roots: &[PathBuf],
+    _read_allowed_roots: &[PathBuf],
+    _read_denied_roots: &[PathBuf],
+    _allow_network: bool,
+    _timeout: Option<Duration>,
+    _command: &[String],
+) -> i32 {
+    let _ = writeln!(
+        std::io::stderr(),
+        "Windows sandbox execution failed: MXC ProcessContainer is only supported on Windows"
+    );
+    125
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -800,10 +998,10 @@ mod tests {
         let caps = SandboxCapabilities {
             backend: SandboxType::Bwrap,
             bwrap_path: Some(PathBuf::from("/usr/bin/bwrap")),
-            windows_helper_path: None,
             enforcement: SandboxEnforcement::FULL,
             warning: None,
-            setup_required: false,
+            windows_supports_deny_paths: false,
+            windows_supports_ingress_host_loopback_allow: false,
         };
         let launch = prepare_sandbox_launch(
             &SandboxCommand::new("/bin/echo", ["hi"]),
@@ -812,6 +1010,7 @@ mod tests {
             yolo,
             require_backend,
             scoped,
+            &[],
             &[],
             Some(&caps),
         )

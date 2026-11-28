@@ -358,15 +358,15 @@ fn sandbox_required_gate_fails_closed_for_hard_floors_and_require_backend() {
     let partial_caps = SandboxCapabilities {
         backend: SandboxType::Windows,
         bwrap_path: None,
-        windows_helper_path: Some(PathBuf::from("cowork-win-sandbox.exe")),
         enforcement: SandboxEnforcement {
             filesystem: true,
             network: false,
             process: true,
             integrity: true,
         },
-        warning: Some("Firewall rule missing".to_owned()),
-        setup_required: false,
+        warning: Some("Network isolation unavailable".to_owned()),
+        windows_supports_deny_paths: true,
+        windows_supports_ingress_host_loopback_allow: false,
     };
     let yolo_no_net_decision = manager.evaluate_gate(
         &cmd,
@@ -416,6 +416,55 @@ fn sandbox_required_gate_fails_closed_for_hard_floors_and_require_backend() {
             error_code: SandboxErrorCode::SandboxRequired,
             ..
         }
+    ));
+
+    // 4. Windows MXC without `deniedPaths` support MUST NOT be treated as enforcing:
+    //    `require_backend: true` fails closed with `SandboxRequired`, and non-yolo
+    //    `workspace-write` requires explicit approval instead of running auto-approved.
+    let no_deny_win_caps = SandboxCapabilities {
+        backend: SandboxType::Windows,
+        bwrap_path: None,
+        enforcement: SandboxEnforcement::FULL,
+        warning: None,
+        windows_supports_deny_paths: false,
+        windows_supports_ingress_host_loopback_allow: true,
+    };
+    let no_deny_req_backend = manager.evaluate_gate(
+        &cmd,
+        &ww_policy,
+        &ws,
+        false,
+        true,
+        false,
+        TransformOptions {
+            platform: Some("win32"),
+            capabilities: Some(&no_deny_win_caps),
+            ..Default::default()
+        },
+    );
+    assert!(matches!(
+        no_deny_req_backend,
+        SandboxGateDecision::Deny {
+            error_code: SandboxErrorCode::SandboxRequired,
+            ..
+        }
+    ));
+    let no_deny_interactive = manager.evaluate_gate(
+        &cmd,
+        &ww_policy,
+        &ws,
+        false,
+        false,
+        false,
+        TransformOptions {
+            platform: Some("win32"),
+            capabilities: Some(&no_deny_win_caps),
+            ..Default::default()
+        },
+    );
+    assert!(matches!(
+        no_deny_interactive,
+        SandboxGateDecision::RequireUnsandboxedApproval { .. }
     ));
 
     // 4. Standard `workspace-write` with `requireBackend: false` requests explicit unsandboxed approval.

@@ -1,0 +1,13 @@
+{
+  "id": "claude-sonnet-4-6",
+  "provider": "claude-sdk",
+  "displayName": "Claude Sonnet 4.6 (Claude SDK)",
+  "knowledgeCutoff": "January 2026",
+  "supportsImageInput": true,
+  "promptTemplate": "system-models/claude-sonnet-4-6.md",
+  "providerOptionsDefaults": {
+    "reasoningEffort": "high"
+  },
+  "supportedReasoningEfforts": ["none", "low", "medium", "high", "max"],
+  "isDefault": false
+}

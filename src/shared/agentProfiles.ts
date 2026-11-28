@@ -41,7 +41,7 @@ const agentProfileDefinitionSchema = z
   })
   .strict();
 
-export type AgentProfileDefinition = z.infer<typeof agentProfileDefinitionSchema>;
+type AgentProfileDefinition = z.infer<typeof agentProfileDefinitionSchema>;
 
 export const agentProfileSnapshotSchema = z
   .object({
@@ -79,7 +79,7 @@ const agentProfileCatalogEntrySchema = z
   })
   .strict();
 
-export type AgentProfileCatalogEntry = z.infer<typeof agentProfileCatalogEntrySchema>;
+type AgentProfileCatalogEntry = z.infer<typeof agentProfileCatalogEntrySchema>;
 
 const agentProfileDiagnosticSchema = z
   .object({
@@ -106,10 +106,6 @@ export const agentProfilesCatalogSchema = z
 
 export type AgentProfilesCatalog = z.infer<typeof agentProfilesCatalogSchema>;
 
-export type AgentProfileUpsertInput = AgentProfileDefinition & {
-  scope: AgentProfileScope;
-};
-
 export const agentProfileUpsertInputSchema = agentProfileDefinitionSchema.extend({
   scope: agentProfileScopeSchema,
 });
@@ -131,8 +127,6 @@ export const agentProfileCopyInputSchema = z
     targetDisplayName: z.string().trim().min(1).max(120).optional(),
   })
   .strict();
-
-export type AgentProfileCopyInput = z.infer<typeof agentProfileCopyInputSchema>;
 
 export function buildAgentProfileRef(scope: AgentProfileScope, id: string): string {
   return `${scope}:${id}`;

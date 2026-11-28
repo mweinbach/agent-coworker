@@ -63,42 +63,126 @@ if (mode === "probe") {
 }
 if (mode !== "convert") throw new Error("Unknown child mode");
 const packageDir = path.join(assets, "node_modules/@matbee/libreoffice-converter");
-const { createSubprocessConverter } = await import(
+const { SubprocessConverter } = await import(
   pathToFileURL(path.join(packageDir, "dist/index.js")).href
 );
-const started = performance.now();
-const converter = await createSubprocessConverter({
-  wasmPath: path.join(packageDir, "wasm"),
-  workerPath: path.join(packageDir, "dist/subprocess.worker.cjs"),
-  includeSystemFonts: false,
-  maxInitRetries: 1, // Zero falls back to upstream defaults via `||`.
-  maxConversionRetries: 1,
-  restartOnMemoryError: false,
-  verbose: true,
-});
-const results = { node: process.version, initMs: performance.now() - started, files: [] };
+
+// Upstream `@matbee/libreoffice-converter@2.7.2` hardcodes 180s init / 120s
+// convert waits and never restarts its forked worker on timeout, so a single
+// intermittent Emscripten pthread deadlock consumes the entire 180s supervisor
+// budget. Bound each init/convert step and replace a stalled worker inside the
+// same offline sandbox while recording any restarts in `conversion.json`.
+const STEP_TIMEOUT_MS = 45_000;
+const MAX_STEP_ATTEMPTS = 3;
+
+function withTimeout(promise, label, timeoutMs) {
+  let timer;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        const error = new Error(`${label} timed out after ${timeoutMs}ms`);
+        error.code = "STEP_TIMEOUT";
+        reject(error);
+      }, timeoutMs);
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
+function isStepTimeout(error) {
+  return error instanceof Error && error.code === "STEP_TIMEOUT";
+}
+
+function forceKillConverter(converter) {
+  if (!converter) return;
+  try {
+    if (typeof converter.killWorker === "function") {
+      converter.killWorker();
+    } else if (converter.child) {
+      converter.child.kill("SIGKILL");
+    }
+  } catch {
+    // Best-effort cleanup; supervisor also enforces zero surviving descendants.
+  }
+}
+
+async function createBoundedConverter(restarts) {
+  for (let attempt = 1; attempt <= MAX_STEP_ATTEMPTS; attempt++) {
+    const started = performance.now();
+    const converter = new SubprocessConverter({
+      wasmPath: path.join(packageDir, "wasm"),
+      workerPath: path.join(packageDir, "dist/subprocess.worker.cjs"),
+      includeSystemFonts: false,
+      maxInitRetries: 1, // Zero falls back to upstream defaults via `||`.
+      maxConversionRetries: 1,
+      restartOnMemoryError: false,
+      // Upstream `verbose: true` monkey-patches Emscripten `FS.open` and proxies
+      // pthread `print`/`printErr` through `console.*`, triggering an intermittent
+      // main-thread / em-pthread `WasmI32AtomicWait` deadlock on macOS ARM64.
+      verbose: false,
+    });
+    try {
+      await withTimeout(converter.initialize(), "init", STEP_TIMEOUT_MS);
+      return { converter, initMs: performance.now() - started };
+    } catch (error) {
+      forceKillConverter(converter);
+      if (!isStepTimeout(error) || attempt >= MAX_STEP_ATTEMPTS) {
+        throw error;
+      }
+      restarts.push({ stage: "init", attempt, reason: error.message });
+    }
+  }
+  throw new Error("Exhausted converter initialization attempts");
+}
+
+const restarts = [];
+let { converter, initMs } = await createBoundedConverter(restarts);
+const results = { node: process.version, initMs, files: [], restarts };
 try {
   for (const inputFormat of ["docx", "pptx", "xlsx"]) {
-    const before = performance.now();
     const file = `fixture.${inputFormat}`;
-    const result = await converter.convert(
-      await fs.readFile(path.join(root, file)),
-      { inputFormat, outputFormat: "pdf" },
-      file,
-    );
-    const bytes = Buffer.from(result.data);
-    if (bytes.length > 20_000_000 || !bytes.subarray(0, 5).equals(Buffer.from("%PDF-"))) {
-      throw new Error("Invalid or oversized PDF");
+    const inputBytes = await fs.readFile(path.join(root, file));
+    for (let attempt = 1; attempt <= MAX_STEP_ATTEMPTS; attempt++) {
+      const before = performance.now();
+      try {
+        const result = await withTimeout(
+          converter.convert(inputBytes, { inputFormat, outputFormat: "pdf" }, file),
+          `convert:${inputFormat}`,
+          STEP_TIMEOUT_MS,
+        );
+        const bytes = Buffer.from(result.data);
+        if (bytes.length > 20_000_000 || !bytes.subarray(0, 5).equals(Buffer.from("%PDF-"))) {
+          throw new Error("Invalid or oversized PDF");
+        }
+        await fs.writeFile(path.join(root, `${inputFormat}.pdf`), bytes);
+        results.files.push({
+          inputFormat,
+          bytes: bytes.length,
+          durationMs: performance.now() - before,
+          ...(attempt > 1 ? { attempt } : {}),
+        });
+        break;
+      } catch (error) {
+        if (!isStepTimeout(error) || attempt >= MAX_STEP_ATTEMPTS) {
+          forceKillConverter(converter);
+          converter = null;
+          throw error;
+        }
+        restarts.push({ stage: `convert:${inputFormat}`, attempt, reason: error.message });
+        forceKillConverter(converter);
+        converter = null;
+        ({ converter } = await createBoundedConverter(restarts));
+      }
     }
-    await fs.writeFile(path.join(root, `${inputFormat}.pdf`), bytes);
-    results.files.push({
-      inputFormat,
-      bytes: bytes.length,
-      durationMs: performance.now() - before,
-    });
   }
 } finally {
-  await converter.destroy();
+  if (converter) {
+    try {
+      await withTimeout(converter.destroy(), "destroy", 5_000);
+    } catch {
+      forceKillConverter(converter);
+    }
+  }
 }
 await fs.writeFile(path.join(root, "conversion.json"), JSON.stringify(results, null, 2));
 // Disposable CLI only: upstream send() leaves referenced request timers alive.

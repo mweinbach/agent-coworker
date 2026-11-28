@@ -35,14 +35,14 @@ fn test_temp_base() -> PathBuf {
 const BUILTIN_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
 
 #[test]
-fn masks_api_keys_and_exposes_all_14_provider_auth_methods() {
+fn masks_api_keys_and_exposes_all_16_provider_auth_methods() {
     assert_eq!(mask_api_key(""), "****");
     assert_eq!(mask_api_key("abc"), "****");
     assert_eq!(mask_api_key("12345678"), "********");
     assert_eq!(mask_api_key("sk-proj-1234567890abcd"), "sk-p...abcd");
 
     let methods = default_provider_auth_methods();
-    assert_eq!(methods.len(), 14);
+    assert_eq!(methods.len(), 16);
     for provider in ProviderName::ALL {
         assert!(
             methods.contains_key(provider.as_str()),
@@ -280,7 +280,7 @@ async fn merges_custom_models_applies_preferences_and_repairs_disabled_default_m
         base_url_overrides: base_url_overrides.clone(),
     })
     .await;
-    assert_eq!(cat_initial.all.len(), 14);
+    assert_eq!(cat_initial.all.len(), 16);
 
     let openai_initial = cat_initial
         .all

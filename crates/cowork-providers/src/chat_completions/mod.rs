@@ -620,7 +620,8 @@ impl ProviderTransport for ChatCompletionsTransport {
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
         headers.insert(ACCEPT, HeaderValue::from_static("text/event-stream"));
         if let Some(key) = api_key {
-            let auth_hv = HeaderValue::from_str(&format!("Bearer {key}")).map_err(|e| {
+            let prefix = self.quirks.discovery_auth_prefix;
+            let auth_hv = HeaderValue::from_str(&format!("{prefix} {key}")).map_err(|e| {
                 ProviderTransportError::protocol(format!("Invalid API key header: {e}"))
             })?;
             headers.insert(AUTHORIZATION, auth_hv);

@@ -4,15 +4,22 @@ import {
   isGoogleThinkingLevel,
 } from "./googleThinking";
 
-export { GOOGLE_THINKING_LEVEL_VALUES } from "./googleThinking";
-
-export const OPENAI_COMPATIBLE_PROVIDER_NAMES = ["openai", "codex-cli"] as const;
-export type OpenAiCompatibleProviderName = (typeof OPENAI_COMPATIBLE_PROVIDER_NAMES)[number];
+const OPENAI_COMPATIBLE_PROVIDER_NAMES = ["openai", "codex-cli"] as const;
+type OpenAiCompatibleProviderName = (typeof OPENAI_COMPATIBLE_PROVIDER_NAMES)[number];
 const EDITABLE_PROVIDER_OPTIONS_PROVIDER_NAMES = [
   "openai",
   "codex-cli",
   "google",
+  "anthropic",
+  "bedrock",
   "lmstudio",
+  "together",
+  "fireworks",
+  "firepass",
+  "opencode-go",
+  "opencode-zen",
+  "claude-sdk",
+  "antigravity-acp",
 ] as const;
 
 // Canonical effort ladder shared by OpenAI-compatible providers and Codex.
@@ -59,13 +66,13 @@ export const CATALOG_REASONING_EFFORT_VALUES = [
 export type CatalogReasoningEffort = (typeof CATALOG_REASONING_EFFORT_VALUES)[number];
 
 export const OPENAI_REASONING_SUMMARY_VALUES = ["auto", "concise", "detailed"] as const;
-export type OpenAiReasoningSummary = (typeof OPENAI_REASONING_SUMMARY_VALUES)[number];
+type OpenAiReasoningSummary = (typeof OPENAI_REASONING_SUMMARY_VALUES)[number];
 
 export const OPENAI_TEXT_VERBOSITY_VALUES = ["low", "medium", "high"] as const;
-export type OpenAiTextVerbosity = (typeof OPENAI_TEXT_VERBOSITY_VALUES)[number];
+type OpenAiTextVerbosity = (typeof OPENAI_TEXT_VERBOSITY_VALUES)[number];
 
 export const CODEX_WEB_SEARCH_MODE_VALUES = ["disabled", "cached", "live"] as const;
-export type CodexWebSearchMode = (typeof CODEX_WEB_SEARCH_MODE_VALUES)[number];
+type CodexWebSearchMode = (typeof CODEX_WEB_SEARCH_MODE_VALUES)[number];
 
 export const LOCAL_WEB_SEARCH_PROVIDER_VALUES = ["exa", "parallel"] as const;
 export type LocalWebSearchProvider = (typeof LOCAL_WEB_SEARCH_PROVIDER_VALUES)[number];
@@ -92,7 +99,7 @@ type CodexWebSearchOptions = {
   location?: CodexWebSearchLocation;
 };
 
-export type OpenAiCompatibleProviderOptions = {
+type OpenAiCompatibleProviderOptions = {
   reasoningEffort?: OpenAiReasoningEffort;
   reasoningSummary?: OpenAiReasoningSummary;
   textVerbosity?: OpenAiTextVerbosity;
@@ -100,7 +107,7 @@ export type OpenAiCompatibleProviderOptions = {
 
 type OpenAiProviderOptions = OpenAiCompatibleProviderOptions;
 
-export type CodexCliProviderOptions = OpenAiCompatibleProviderOptions & {
+type CodexCliProviderOptions = OpenAiCompatibleProviderOptions & {
   webSearchBackend?: CodexWebSearchBackend;
   webSearchFallbackBackend?: LocalWebSearchProvider;
   webSearchMode?: CodexWebSearchMode;
@@ -112,13 +119,30 @@ type LmStudioProviderOptions = {
   contextLength?: number;
   autoLoad?: boolean;
   reloadOnContextMismatch?: boolean;
+  reasoningEffort?: OpenAiReasoningEffort;
+};
+
+type AnthropicThinkingOptions = {
+  type?: "adaptive" | "enabled" | "disabled";
+  budgetTokens?: number;
+};
+
+type AnthropicProviderOptions = {
+  effort?: OpenAiReasoningEffort;
+  reasoningEffort?: OpenAiReasoningEffort;
+  thinking?: AnthropicThinkingOptions;
+};
+
+type ReasoningEffortProviderOptions = {
+  reasoningEffort?: OpenAiReasoningEffort;
+  effort?: OpenAiReasoningEffort;
 };
 
 type GoogleThinkingConfig = {
   thinkingLevel?: GoogleThinkingLevel;
 };
 
-export type GoogleProviderOptions = {
+type GoogleProviderOptions = {
   nativeWebSearch?: boolean;
   thinkingConfig?: GoogleThinkingConfig;
   responseFormat?: unknown;
@@ -129,7 +153,16 @@ export type OpenAiCompatibleProviderOptionsByProvider = Partial<{
   openai: OpenAiProviderOptions;
   "codex-cli": CodexCliProviderOptions;
   google: GoogleProviderOptions;
+  anthropic: AnthropicProviderOptions;
+  bedrock: ReasoningEffortProviderOptions;
   lmstudio: LmStudioProviderOptions;
+  together: ReasoningEffortProviderOptions;
+  fireworks: ReasoningEffortProviderOptions;
+  firepass: ReasoningEffortProviderOptions;
+  "opencode-go": ReasoningEffortProviderOptions;
+  "opencode-zen": ReasoningEffortProviderOptions;
+  "claude-sdk": ReasoningEffortProviderOptions;
+  "antigravity-acp": ReasoningEffortProviderOptions;
 }>;
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -329,12 +362,64 @@ function pickLmStudioProviderOptionsSection(value: unknown): LmStudioProviderOpt
   if (reloadOnContextMismatch !== undefined) {
     next.reloadOnContextMismatch = reloadOnContextMismatch;
   }
+  if (isOpenAiReasoningEffort(value.reasoningEffort)) {
+    next.reasoningEffort = value.reasoningEffort;
+  }
 
+  return Object.keys(next).length > 0 ? next : undefined;
+}
+
+function pickAnthropicProviderOptionsSection(value: unknown): AnthropicProviderOptions | undefined {
+  if (!isPlainObject(value)) return undefined;
+  const next: AnthropicProviderOptions = {};
+  if (isOpenAiReasoningEffort(value.effort)) {
+    next.effort = value.effort;
+  }
+  if (isOpenAiReasoningEffort(value.reasoningEffort)) {
+    next.reasoningEffort = value.reasoningEffort;
+  }
+  if (isPlainObject(value.thinking)) {
+    const t: AnthropicThinkingOptions = {};
+    if (
+      value.thinking.type === "adaptive" ||
+      value.thinking.type === "enabled" ||
+      value.thinking.type === "disabled"
+    ) {
+      t.type = value.thinking.type;
+    }
+    const budget = pickPositiveInteger(value.thinking.budgetTokens);
+    if (budget !== undefined) {
+      t.budgetTokens = budget;
+    }
+    if (Object.keys(t).length > 0) {
+      next.thinking = t;
+    }
+  }
+  return Object.keys(next).length > 0 ? next : undefined;
+}
+
+function pickReasoningEffortProviderOptionsSection(
+  value: unknown,
+): ReasoningEffortProviderOptions | undefined {
+  if (!isPlainObject(value)) return undefined;
+  const next: ReasoningEffortProviderOptions = {};
+  if (isOpenAiReasoningEffort(value.reasoningEffort)) {
+    next.reasoningEffort = value.reasoningEffort;
+  }
+  if (isOpenAiReasoningEffort(value.effort)) {
+    next.effort = value.effort;
+  }
   return Object.keys(next).length > 0 ? next : undefined;
 }
 
 function pickGoogleThinkingConfig(value: unknown): GoogleThinkingConfig | undefined {
   if (!isPlainObject(value)) return undefined;
+  if (
+    typeof value.thinkingLevel === "string" &&
+    value.thinkingLevel.trim().toLowerCase() === GOOGLE_DYNAMIC_REASONING_EFFORT
+  ) {
+    return {};
+  }
 
   const next: GoogleThinkingConfig = {};
   if (isGoogleThinkingLevel(value.thinkingLevel)) {
@@ -389,9 +474,28 @@ export function pickEditableOpenAiCompatibleProviderOptions(
   if (google) {
     out.google = google;
   }
+  const anthropic = pickAnthropicProviderOptionsSection(providerOptions.anthropic);
+  if (anthropic) {
+    out.anthropic = anthropic;
+  }
   const lmstudio = pickLmStudioProviderOptionsSection(providerOptions.lmstudio);
   if (lmstudio) {
     out.lmstudio = lmstudio;
+  }
+  for (const provider of [
+    "bedrock",
+    "together",
+    "fireworks",
+    "firepass",
+    "opencode-go",
+    "opencode-zen",
+    "claude-sdk",
+    "antigravity-acp",
+  ] as const) {
+    const picked = pickReasoningEffortProviderOptionsSection(providerOptions[provider]);
+    if (picked) {
+      out[provider] = picked;
+    }
   }
 
   return Object.keys(out).length > 0 ? out : undefined;
@@ -460,7 +564,11 @@ export function mergeEditableOpenAiCompatibleProviderOptions(
           ? pickOpenAiCompatibleProviderOptionsSection(sectionPatch)
           : provider === "google"
             ? pickGoogleProviderOptionsSection(sectionPatch)
-            : pickLmStudioProviderOptionsSection(sectionPatch);
+            : provider === "anthropic"
+              ? pickAnthropicProviderOptionsSection(sectionPatch)
+              : provider === "lmstudio"
+                ? pickLmStudioProviderOptionsSection(sectionPatch)
+                : pickReasoningEffortProviderOptionsSection(sectionPatch);
     if (!cleanedPatch) continue;
 
     const currentSection = isPlainObject(current[provider]) ? { ...current[provider] } : {};

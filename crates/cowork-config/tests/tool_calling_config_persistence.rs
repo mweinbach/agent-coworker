@@ -202,4 +202,60 @@ async fn tool_calling_config_precedence_env_overrides_and_patch_persistence() {
         on_disk.get("toolCalling").is_none(),
         "clear_tool_calling must delete toolCalling from persisted JSON"
     );
+
+    // 6. `clear_provider_options: true` removes persisted provider overrides from `.cowork/config.json`
+    // and clears them in `merge_config_patch`.
+    persist_project_config_patch(
+        &project_cowork_dir,
+        &ProjectConfigPatch {
+            provider_options: Some(
+                json!({ "openai": { "reasoningEffort": "high" } })
+                    .as_object()
+                    .cloned()
+                    .unwrap(),
+            ),
+            ..Default::default()
+        },
+        None,
+        Some(&global_config_dir),
+    )
+    .await
+    .expect("persist providerOptions");
+
+    let with_po = load_config(LoadConfigOptions {
+        cwd: Some(iso.workspace.clone()),
+        homedir: Some(iso.home.clone()),
+        built_in_dir: Some(repo_root()),
+        env: Some(iso.base_env()),
+    })
+    .expect("reload config with providerOptions");
+    assert!(with_po.provider_options.is_some());
+    let cleared_po_mem = merge_config_patch(
+        &with_po,
+        &ProjectConfigPatch {
+            clear_provider_options: true,
+            ..Default::default()
+        },
+    );
+    assert!(cleared_po_mem.provider_options.is_none());
+
+    persist_project_config_patch(
+        &project_cowork_dir,
+        &ProjectConfigPatch {
+            clear_provider_options: true,
+            ..Default::default()
+        },
+        None,
+        Some(&global_config_dir),
+    )
+    .await
+    .expect("persist clear_provider_options");
+
+    let on_disk_after_po_clear: Value =
+        serde_json::from_str(&fs::read_to_string(project_cowork_dir.join("config.json")).unwrap())
+            .unwrap();
+    assert!(
+        on_disk_after_po_clear.get("providerOptions").is_none(),
+        "clear_provider_options must delete providerOptions from persisted JSON"
+    );
 }

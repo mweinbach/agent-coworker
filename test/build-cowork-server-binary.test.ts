@@ -1,16 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 
 import { buildServerBinary } from "../scripts/build_cowork_server_binary";
 import { scratchRoots } from "../src/platform/scratchRoots";
-import {
-  WINDOWS_SANDBOX_COMMAND_RUNNER_NAME,
-  WINDOWS_SANDBOX_HASH_MANIFEST_NAME,
-  WINDOWS_SANDBOX_HELPER_NAME,
-  WINDOWS_SANDBOX_SETUP_NAME,
-} from "../src/platform/windowsSandboxHelper";
 
 describe("standalone server bundles", () => {
   test("rejects repository-root output before compiling or deleting source resources", async () => {
@@ -80,16 +73,12 @@ describe("standalone server bundles", () => {
     { arch: "x64", rustTarget: "x86_64-pc-windows-msvc" },
     { arch: "arm64", rustTarget: "aarch64-pc-windows-msvc" },
   ])(
-    "stages a complete Rust server, CLI, and sandbox bundle for Windows $arch",
+    "stages a complete Rust server and CLI bundle for Windows $arch without external sandbox helpers",
     async ({ arch, rustTarget }) => {
       const root = await fs.mkdtemp(path.join(scratchRoots()[0], "cowork-server-windows-"));
-      const binaryNames = [
-        WINDOWS_SANDBOX_HELPER_NAME,
-        WINDOWS_SANDBOX_SETUP_NAME,
-        WINDOWS_SANDBOX_COMMAND_RUNNER_NAME,
-      ];
       const outfile = path.join(root, "dist", "bundle", "cowork-server.exe");
       const commands: string[][] = [];
+      let observedMxcTelemetryPath: string | undefined;
       try {
         await fs.mkdir(path.join(root, "prompts"));
         await fs.writeFile(path.join(root, "prompts", "system.md"), "bundled prompt");
@@ -113,9 +102,10 @@ describe("standalone server bundles", () => {
         await buildServerBinary({
           root,
           argv: ["--outfile", outfile, "--platform", "win32", "--arch", arch],
-          commandRunner: async (command, { onStdout }) => {
+          commandRunner: async (command, { env, onStdout }) => {
             commands.push(command);
             if (command[0] === "cargo" && command.includes("cowork-server")) {
+              observedMxcTelemetryPath = env?.MXC_TELEMETRY_COMPONENT_PATH;
               const workspaceReleaseDir = path.join(root, "custom-target", rustTarget, "release");
               await fs.mkdir(workspaceReleaseDir, { recursive: true });
               const previousReleaseDir = path.join(root, "target", rustTarget, "release");
@@ -134,31 +124,12 @@ describe("standalone server bundles", () => {
               }
               onStdout?.(events.join("\n"));
             }
-            if (command[0] === "cargo" && command.includes("--manifest-path")) {
-              const releaseDir = path.join(
-                root,
-                "crates",
-                "cowork-win-sandbox",
-                "target",
-                rustTarget,
-                "release",
-              );
-              await fs.mkdir(releaseDir, { recursive: true });
-              for (const name of binaryNames) await fs.writeFile(path.join(releaseDir, name), name);
-            }
           },
         });
 
         const outputDir = path.dirname(outfile);
         expect(await fs.readFile(protectedFile, "utf8")).toBe("protected lockfile");
-        const manifest = JSON.parse(
-          await fs.readFile(path.join(outputDir, WINDOWS_SANDBOX_HASH_MANIFEST_NAME), "utf8"),
-        );
-        expect(manifest.rustTarget).toBe(rustTarget);
-        for (const name of binaryNames) {
-          const bytes = await fs.readFile(path.join(outputDir, name));
-          expect(manifest.files[name]).toBe(createHash("sha256").update(bytes).digest("hex"));
-        }
+        expect(observedMxcTelemetryPath).toBe("");
         expect(await fs.readFile(outfile, "utf8")).toBe("rust server");
         expect(await fs.readFile(path.join(outputDir, "cowork.exe"), "utf8")).toBe("rust cli");
         const sidecarManifest = JSON.parse(

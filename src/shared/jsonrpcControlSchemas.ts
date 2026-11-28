@@ -121,12 +121,33 @@ const providerOptionsGoogleSchema = z
     nativeWebSearch: z.boolean().optional(),
     thinkingConfig: z
       .object({
-        thinkingLevel: z.enum(GOOGLE_THINKING_LEVEL_VALUES).optional(),
+        thinkingLevel: z.enum([...GOOGLE_THINKING_LEVEL_VALUES, "dynamic"]).optional(),
       })
       .strict()
       .optional(),
     responseFormat: z.unknown().optional(),
     responseMimeType: z.string().trim().min(1).optional(),
+  })
+  .strict();
+
+const providerOptionsAnthropicSchema = z
+  .object({
+    effort: z.enum(OPENAI_REASONING_EFFORT_VALUES).optional(),
+    reasoningEffort: z.enum(OPENAI_REASONING_EFFORT_VALUES).optional(),
+    thinking: z
+      .object({
+        type: z.enum(["adaptive", "enabled", "disabled"]).optional(),
+        budgetTokens: z.number().int().positive().optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
+
+const providerOptionsReasoningEffortSchema = z
+  .object({
+    reasoningEffort: z.enum(OPENAI_REASONING_EFFORT_VALUES).optional(),
+    effort: z.enum(OPENAI_REASONING_EFFORT_VALUES).optional(),
   })
   .strict();
 
@@ -136,6 +157,7 @@ const providerOptionsLmStudioSchema = z
     contextLength: z.number().int().positive().optional(),
     autoLoad: z.boolean().optional(),
     reloadOnContextMismatch: z.boolean().optional(),
+    reasoningEffort: z.enum(OPENAI_REASONING_EFFORT_VALUES).optional(),
   })
   .strict();
 
@@ -144,7 +166,16 @@ const editableProviderOptionsSchema = z
     openai: providerOptionsOpenAiSchema.optional(),
     "codex-cli": providerOptionsCodexSchema.optional(),
     google: providerOptionsGoogleSchema.optional(),
+    anthropic: providerOptionsAnthropicSchema.optional(),
+    bedrock: providerOptionsReasoningEffortSchema.optional(),
     lmstudio: providerOptionsLmStudioSchema.optional(),
+    together: providerOptionsReasoningEffortSchema.optional(),
+    fireworks: providerOptionsReasoningEffortSchema.optional(),
+    firepass: providerOptionsReasoningEffortSchema.optional(),
+    "opencode-go": providerOptionsReasoningEffortSchema.optional(),
+    "opencode-zen": providerOptionsReasoningEffortSchema.optional(),
+    "claude-sdk": providerOptionsReasoningEffortSchema.optional(),
+    "antigravity-acp": providerOptionsReasoningEffortSchema.optional(),
   })
   .strict();
 
@@ -375,6 +406,13 @@ const codexAppServerInstallStatusSchema = z
 
 const codexAppServerInstallStatusEnvelopeSchema = z
   .object({
+    status: codexAppServerInstallStatusSchema,
+  })
+  .strict();
+
+const providerRuntimeInstallStatusEnvelopeSchema = z
+  .object({
+    provider: providerNameSchema,
     status: codexAppServerInstallStatusSchema,
   })
   .strict();
@@ -1603,6 +1641,22 @@ const providerCodexAppServerUpdateRequestSchema = z
   })
   .strict();
 
+const providerRuntimeStatusRequestSchema = z
+  .object({
+    cwd: optionalNonEmptyTrimmedStringSchema,
+    provider: providerNameSchema,
+    checkLatest: z.boolean().optional(),
+  })
+  .strict();
+
+const providerRuntimeUpdateRequestSchema = z
+  .object({
+    cwd: optionalNonEmptyTrimmedStringSchema,
+    provider: providerNameSchema,
+    force: z.boolean().optional(),
+  })
+  .strict();
+
 const providerLmStudioLocalStatusRequestSchema = z
   .object({
     cwd: optionalNonEmptyTrimmedStringSchema,
@@ -2117,6 +2171,7 @@ const sessionDefaultsApplyRequestSchema = z
         allowedChildModelRefs: z.array(z.string()).optional(),
         workflowMaxConcurrentAgents: z.number().int().min(1).max(16).optional(),
         providerOptions: editableProviderOptionsSchema.optional(),
+        clearProviderOptions: z.boolean().optional(),
         userName: z.string().optional(),
         userProfile: userProfileSchema.optional(),
         featureFlags: z
@@ -2143,6 +2198,8 @@ export const jsonRpcControlRequestSchemas = {
   "cowork/provider/capabilities/check": providerCapabilitiesCheckRequestSchema,
   "cowork/provider/codexAppServer/status": providerCodexAppServerStatusRequestSchema,
   "cowork/provider/codexAppServer/update": providerCodexAppServerUpdateRequestSchema,
+  "cowork/provider/runtime/status": providerRuntimeStatusRequestSchema,
+  "cowork/provider/runtime/update": providerRuntimeUpdateRequestSchema,
   "cowork/provider/lmstudio/local/status": providerLmStudioLocalStatusRequestSchema,
   "cowork/provider/lmstudio/local/start": providerLmStudioLocalStartRequestSchema,
   "cowork/runtime/libreoffice/check": libreOfficeRuntimeCheckRequestSchema,
@@ -2241,6 +2298,8 @@ export const jsonRpcControlResultSchemas = {
   "cowork/provider/capabilities/check": providerCapabilitiesCheckResultSchema,
   "cowork/provider/codexAppServer/status": codexAppServerInstallStatusEnvelopeSchema,
   "cowork/provider/codexAppServer/update": codexAppServerInstallStatusEnvelopeSchema,
+  "cowork/provider/runtime/status": providerRuntimeInstallStatusEnvelopeSchema,
+  "cowork/provider/runtime/update": providerRuntimeInstallStatusEnvelopeSchema,
   "cowork/provider/lmstudio/local/status": lmStudioLocalStatusEnvelopeSchema,
   "cowork/provider/lmstudio/local/start": lmStudioLocalStartEnvelopeSchema,
   "cowork/runtime/libreoffice/check": libreOfficeRuntimeDiagnosticEnvelopeSchema,
@@ -2378,6 +2437,4 @@ const runtimeControlSchemas = pickJsonRpcControlSchemas([
 
 export const jsonRpcRuntimeResultSchemas = runtimeControlSchemas.results;
 
-export type CodexAppServerInstallStatus = z.infer<typeof codexAppServerInstallStatusSchema>;
-export type LibreOfficeRuntimeDiagnostic = z.infer<typeof libreOfficeRuntimeDiagnosticSchema>;
 export type ProviderCapabilitiesCheckResult = z.infer<typeof providerCapabilitiesCheckResultSchema>;

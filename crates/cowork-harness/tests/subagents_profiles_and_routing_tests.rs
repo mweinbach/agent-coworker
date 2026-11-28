@@ -564,10 +564,39 @@ async fn enforces_atomic_16_child_cap_max_depth_1_context_modes_target_paths_and
             .find(|i| i.agent_id == brief_child.agent_id)
             .unwrap();
         assert_eq!(brief_in.initial_messages.len(), 1);
-        let ContentBlock::Text { ref text, .. } = brief_in.initial_messages[0].content[0] else {
+        let brief_msg = &brief_in.initial_messages[0];
+        assert_eq!(brief_msg.role, MessageRole::User);
+        assert!(
+            Uuid::parse_str(&brief_msg.id).is_ok(),
+            "briefing id must be a UUID"
+        );
+        assert!(
+            chrono::DateTime::parse_from_rfc3339(&brief_msg.created_at).is_ok(),
+            "briefing created_at must be RFC 3339"
+        );
+        assert_eq!(brief_msg.phase, None);
+        assert_eq!(brief_msg.provider, None);
+        assert_eq!(brief_msg.api, None);
+        assert_eq!(brief_msg.model, None);
+        assert_eq!(brief_msg.stop_reason, None);
+        assert!(brief_msg.provider_meta.is_empty());
+        assert_eq!(brief_msg.content.len(), 1);
+        let ContentBlock::Text {
+            ref text,
+            phase,
+            ref citations,
+            ref provider_meta,
+        } = brief_msg.content[0]
+        else {
             panic!("expected briefing text");
         };
-        assert!(text.starts_with("Parent briefing:\nAuth lives in"));
+        assert_eq!(
+            text,
+            "Parent briefing:\nAuth lives in crates/cowork-mcp/src/credentials.rs"
+        );
+        assert_eq!(phase, None);
+        assert!(citations.is_empty());
+        assert!(provider_meta.is_empty());
         assert!(
             brief_in.read_only_role,
             "explorer role must enforce read_only_role"

@@ -415,7 +415,7 @@ fn resolve_anthropic_api_key(
         return Ok(key.to_string());
     }
     if allow_ambient_env {
-        for var in ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"] {
+        for var in ["ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN"] {
             if let Ok(val) = std::env::var(var)
                 && !val.trim().is_empty()
             {
@@ -577,14 +577,23 @@ fn build_anthropic_messages_payload(
     let thinking_type = thinking_cfg
         .and_then(|t| t.get("type"))
         .and_then(Value::as_str);
-    let thinking_enabled = matches!(thinking_type, Some("adaptive" | "enabled"));
-    let explicit_effort = read_anthropic_opt(provider_options, "effort")
+    let raw_effort = read_anthropic_opt(provider_options, "effort")
         .or_else(|| read_anthropic_opt(provider_options, "reasoningEffort"))
         .or_else(|| read_anthropic_opt(provider_options, "reasoning_effort"))
         .and_then(Value::as_str)
         .map(str::trim)
-        .filter(|s| !s.is_empty() && *s != "none" && *s != "off")
-        .map(ToOwned::to_owned);
+        .filter(|s| !s.is_empty())
+        .map(str::to_ascii_lowercase);
+    let effort_disables_thinking = matches!(raw_effort.as_deref(), Some("none" | "off"));
+    let thinking_enabled =
+        matches!(thinking_type, Some("adaptive" | "enabled")) && !effort_disables_thinking;
+    let adaptive_effort = raw_effort.as_deref().and_then(|e| match e {
+        "minimal" | "light" | "low" => Some("low".to_string()),
+        "medium" => Some("medium".to_string()),
+        "high" => Some("high".to_string()),
+        "xhigh" | "max" => Some("max".to_string()),
+        _ => None,
+    });
     let interleaved_thinking = read_anthropic_opt(provider_options, "interleavedThinking")
         .and_then(Value::as_bool)
         .unwrap_or(true);
@@ -606,10 +615,11 @@ fn build_anthropic_messages_payload(
                 "type": "adaptive",
                 "display": "summarized",
             }));
-            active_effort = explicit_effort;
+            active_effort = adaptive_effort;
         } else {
             // pi: `budget_tokens: options.thinkingBudgetTokens || 1024`, where TS only forwards
-            // `budgetTokens` for `type: enabled`.
+            // `budgetTokens` for `type: enabled`. When an explicit standardized effort override
+            // is provided (low/medium/high), map it cleanly to a thinking budget.
             let configured_budget = (thinking_type == Some("enabled"))
                 .then(|| {
                     thinking_cfg
@@ -617,9 +627,18 @@ fn build_anthropic_messages_payload(
                         .and_then(Value::as_u64)
                 })
                 .flatten()
-                .filter(|b| *b > 0)
-                .unwrap_or(MIN_THINKING_BUDGET_TOKENS);
-            let mut budget_tokens = configured_budget.max(MIN_THINKING_BUDGET_TOKENS);
+                .filter(|b| *b > 0);
+            let effort_budget = raw_effort.as_deref().and_then(|e| match e {
+                "minimal" | "light" => Some(2_048u64),
+                "low" => Some(4_096u64),
+                "medium" => Some(16_384u64),
+                "high" | "xhigh" | "max" => Some(configured_budget.unwrap_or(32_000)),
+                _ => None,
+            });
+            let mut budget_tokens = effort_budget
+                .or(configured_budget)
+                .unwrap_or(MIN_THINKING_BUDGET_TOKENS)
+                .max(MIN_THINKING_BUDGET_TOKENS);
             // Anthropic rejects `budget_tokens >= max_tokens`. pi would send that request as-is
             // and fail with a 400; instead shrink the budget to leave room for the answer, and
             // only raise `max_tokens` when even the minimum budget does not fit.

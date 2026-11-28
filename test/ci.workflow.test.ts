@@ -1,9 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
-
-import { scratchRoots } from "../src/platform/scratchRoots";
-import toolingConfig from "../vite.config";
 
 const workflowPath = new URL("../.github/workflows/ci.yml", import.meta.url);
 const rootPackagePath = new URL("../package.json", import.meta.url);
@@ -31,79 +28,6 @@ const { jobs } = Bun.YAML.parse(workflow) as {
 };
 
 describe("main CI workflow", () => {
-  test("gives Vite+ and Biome disjoint lint and format scopes", () => {
-    const biome = JSON.parse(readFileSync(new URL("../biome.json", import.meta.url), "utf8"));
-    const selectedFiles = toolingConfig.lint?.ignorePatterns
-      ?.filter((pattern) => pattern.startsWith("!") && !pattern.endsWith("/"))
-      .map((pattern) => pattern.slice(1));
-
-    expect(selectedFiles).toHaveLength(8);
-    expect(toolingConfig.fmt?.ignorePatterns).toEqual(toolingConfig.lint?.ignorePatterns);
-    for (const file of selectedFiles ?? []) {
-      expect(biome.files.includes).toContain(`!!${file}`);
-    }
-  });
-
-  test("enforces renderer import boundaries through aliases, relative paths, and dynamic imports", () => {
-    const directory = mkdtempSync(path.join(scratchRoots()[0], "cowork-renderer-lint-"));
-    const configPath = path.join(directory, ".oxlintrc.json");
-    const fixturePath = path.join(directory, "fixture.ts");
-    const rendererRules = toolingConfig.lint?.overrides?.[0]?.rules;
-    const restrictedImports = rendererRules?.["eslint/no-restricted-imports"];
-    expect(restrictedImports).toBeDefined();
-    writeFileSync(
-      configPath,
-      JSON.stringify({
-        plugins: [],
-        categories: { correctness: "off" },
-        rules: { "no-restricted-imports": restrictedImports },
-      }),
-    );
-    const fixtures = [
-      { source: 'import { readFile } from "node:fs/promises";', allowed: false },
-      { source: 'import { readFile } from "fs/promises";', allowed: false },
-      { source: 'import { ipcRenderer } from "electron";', allowed: false },
-      { source: 'import { serve } from "bun";', allowed: false },
-      { source: 'import { start } from "@cowork/server/startServer";', allowed: false },
-      { source: 'import { start } from "../../../../src/server/startServer";', allowed: false },
-      { source: 'import { run } from "../../../../src/agent";', allowed: false },
-      { source: 'export * from "../../electron/ipc";', allowed: false },
-      { source: 'void import("@cowork/providers/providerOptions");', allowed: false },
-      { source: 'import type { Message } from "@cowork/types";', allowed: true },
-      { source: 'import { display } from "@cowork/shared/displayCitationMarkers";', allowed: true },
-      { source: 'import type { Message } from "../../../../src/types";', allowed: true },
-      {
-        source: 'import { display } from "../../../../src/shared/displayCitationMarkers";',
-        allowed: true,
-      },
-      { source: 'import { bridge } from "../lib/desktopCommands";', allowed: true },
-      { source: 'import { Button } from "@/components/ui/button";', allowed: true },
-    ];
-    try {
-      for (const fixture of fixtures) {
-        writeFileSync(fixturePath, fixture.source);
-        const result = Bun.spawnSync(
-          [
-            process.execPath,
-            path.resolve(import.meta.dir, "../node_modules/oxlint/bin/oxlint"),
-            "--config",
-            configPath,
-            fixturePath,
-          ],
-          { cwd: directory },
-        );
-        expect(result.exitCode, `${fixture.source}\n${result.stdout}\n${result.stderr}`).toBe(
-          fixture.allowed ? 0 : 1,
-        );
-        if (!fixture.allowed) {
-          expect(result.stdout.toString(), fixture.source).toContain("no-restricted-imports");
-        }
-      }
-    } finally {
-      rmSync(directory, { recursive: true, force: true });
-    }
-  });
-
   test("pins Bun version via .bun-version file", () => {
     expect(workflow).toContain("uses: ./.github/actions/setup-bun");
     expect(setupBunAction).toContain("- name: Setup Bun");
@@ -123,8 +47,8 @@ describe("main CI workflow", () => {
     expect(setupBunAction).toContain("if: ${{ inputs.save-cache == 'true' }}");
     expect(setupBunAction).toContain("if: ${{ inputs.save-cache != 'true' }}");
     expect(setupBunAction).toContain("~/.bun/install/cache");
-    expect(setupBunAction).toContain("~/.cache/electron");
-    expect(setupBunAction).toContain("~/.cache/electron-builder");
+    expect(setupBunAction).not.toContain("~/.cache/electron");
+    expect(setupBunAction).not.toContain("apps/desktop/package.json");
     expect(setupBunAction).toContain("bun install --frozen-lockfile");
     expect(setupBunAction).not.toContain("node_modules");
     expect(workflow).toContain("run: bun install --cwd apps/mobile --frozen-lockfile");
@@ -182,8 +106,9 @@ describe("main CI workflow", () => {
     const harnessPackage = JSON.parse(
       readFileSync(new URL("../packages/harness/package.json", import.meta.url), "utf8"),
     );
-    expect(rootPackage.scripts?.typecheck).toBe(
-      "bunx tsc --noEmit && bunx tsc --noEmit -p apps/desktop/tsconfig.json && bun run typecheck:tooling",
+    expect(rootPackage.scripts?.typecheck).toBe("bunx tsc --noEmit");
+    expect(rootPackage.scripts?.start).toBe(
+      "cargo build --quiet -p cowork-server --bin cowork-server && cargo run --quiet -p cowork-desktop --bin cowork-desktop --",
     );
     expect(rootPackage.scripts?.["app:mobile:typecheck"]).toBe(
       "cd apps/mobile && bun run typecheck",
@@ -195,7 +120,7 @@ describe("main CI workflow", () => {
     expect(harnessPackage.devDependencies.typescript).toBeUndefined();
   });
 
-  test("runs Windows path and desktop smoke coverage", () => {
+  test("runs Windows path and server smoke coverage", () => {
     const windowsSmokeJob = workflow.match(/windows-smoke:[\s\S]*?\n {2}macos-smoke:/)?.[0] ?? "";
 
     expect(workflow).toContain("windows-smoke:");
@@ -205,25 +130,19 @@ describe("main CI workflow", () => {
     expect(windowsSmokeJob).toMatch(
       /- name: Setup dependencies[\s\S]*?uses: \.\/\.github\/actions\/setup-bun[\s\S]*?with:[\s\S]*?cache-scope: windows-smoke-\$\{\{ matrix\.arch \}\}[\s\S]*?save-cache: "false"/,
     );
-    expect(workflow).toContain("- name: Windows sandbox helper enforcement");
-    expect(workflow).toContain(
-      "cargo build --release --bins --manifest-path crates\\cowork-win-sandbox\\Cargo.toml",
+    expect(workflow).toContain("- name: Windows MXC sandbox enforcement");
+    expect(windowsSmokeJob).toContain('MXC_TELEMETRY_COMPONENT_PATH: ""');
+    expect(windowsSmokeJob).toContain(
+      "cargo test -p cowork-sandbox --test windows_mxc_live -- --nocapture",
     );
-    expect(workflow).toContain(
-      '$binaryRoot = Join-Path (Get-Location) "crates\\cowork-win-sandbox\\target\\release"',
+    expect(windowsSmokeJob).toContain(
+      "cargo test -p cowork-tools --test bash_approval_parity_tests windows_bash_uses_host_sandbox -- --exact",
     );
-    expect(workflow).toContain('$helperPath = Join-Path $binaryRoot "cowork-win-sandbox.exe"');
-    expect(workflow).toContain("$env:COWORK_WIN_SANDBOX_HELPER = $helperPath");
-    expect(workflow).toContain("COWORK_WIN_SANDBOX_HELPER_SHA256");
-    expect(workflow).toContain("COWORK_WIN_SANDBOX_SETUP_SHA256");
-    expect(workflow).toContain("COWORK_WIN_SANDBOX_COMMAND_RUNNER_SHA256");
-    expect(workflow).toContain("$helperPath setup --sandbox-home");
-    expect(workflow).not.toContain("COWORK_WIN_SANDBOX_HELPER=%CD%");
+    expect(workflow).not.toContain("cowork-win-sandbox");
+    expect(workflow).not.toContain("COWORK_WIN_SANDBOX_HELPER");
     expect(workflow).not.toContain("test/platform/sandbox");
     expect(workflow).toContain("test/build-desktop-resources.test.ts");
-    expect(workflow).toContain("- name: Windows path and desktop smoke tests");
-    expect(workflow).toContain("apps/desktop/test/ipc-security.test.ts");
-    expect(workflow).toContain("apps/desktop/test/file-preview-modal.test.tsx");
+    expect(workflow).toContain("- name: Windows path and server smoke tests");
     expect(workflow).toContain("test/rust-server.http-and-rpc.integration.test.ts");
     expect(workflow).toContain("test/rust-server.mobile-h3.integration.test.ts");
     expect(workflow).toContain("test/rust-server.jsonrpc-turns-and-tools.integration.test.ts");
@@ -234,35 +153,12 @@ describe("main CI workflow", () => {
     expect(workflow).toContain("macos-smoke:");
     expect(workflow).toContain("name: macOS ARM64 smoke");
     expect(workflow).toContain("runs-on: macos-15");
-    expect(workflow).toContain("- name: macOS runtime and desktop sidecar smoke");
+    expect(workflow).toContain("- name: macOS runtime and resource smoke");
     expect(workflow).toContain("cargo test -p cowork-sandbox -p cowork-env -p cowork-js-vm");
     expect(workflow).toContain("test/cli-entrypoint.test.ts");
-    expect(workflow).toContain("apps/desktop/test/server-manager.test.ts");
-  });
-
-  test("runs deterministic real-Electron visual, Axe, performance, and failure-proof gates", () => {
-    const qualityJob = workflow.match(/electron-quality:[\s\S]*?\n {2}windows-smoke:/)?.[0] ?? "";
-    expect(qualityJob).toContain("name: Electron UI quality gates");
-    expect(qualityJob).toContain(
-      "mcr.microsoft.com/playwright:v1.62.0-noble@sha256:baed2032d533817f3dbe6425de795788430ba345e819a1201337009ba17c9d07",
-    );
-    expect(qualityJob).toContain("apt-get install --yes --no-install-recommends ffmpeg unzip");
-    expect(qualityJob.indexOf("- name: Install Linux quality dependencies")).toBeLessThan(
-      qualityJob.indexOf("- name: Setup dependencies"),
-    );
-    expect(qualityJob).toContain("xvfb-run");
-    expect(qualityJob).toContain("bun run desktop:quality");
-    expect(qualityJob).toContain("bun run desktop:quality:proof");
-    expect(qualityJob).toContain("if: ${{ always() && !cancelled() }}");
-    expect(qualityJob).toContain('OPENAI_API_KEY: ""');
-    expect(qualityJob).toContain("if: failure()");
-    expect(qualityJob).toContain("actions/upload-artifact@v4");
-    expect(qualityJob).toContain("if-no-files-found: error");
-    expect(qualityJob).toContain("apps/desktop/quality-gates/artifacts");
-    expect(qualityJob).toContain("apps/desktop/quality-gates/proof-artifacts");
-    expect(rootPackage.scripts?.["desktop:quality:build"]).toContain(
-      "--config quality-gates/electron.vite.config.ts",
-    );
+    expect(workflow).toContain("test/build-desktop-resources.test.ts");
+    expect(workflow).not.toContain("electron-quality:");
+    expect(workflow).not.toContain("apps/desktop/");
   });
 
   test("runs the mobile install, typecheck, autolinking, and dual-platform export lane", () => {
@@ -342,6 +238,37 @@ describe("main CI workflow", () => {
     expect(sandboxAction).toContain("kernel.apparmor_restrict_unprivileged_userns=0");
   });
 
+  test("installs Linux desktop linking and software Vulkan deps before cowork-desktop tests", () => {
+    for (const job of ["rust-test", "test"]) {
+      expect(
+        jobs[job]?.steps.some((step) => step.uses === "./.github/actions/setup-linux-desktop"),
+        job,
+      ).toBe(true);
+    }
+    const desktopAction = readFileSync(
+      new URL("../.github/actions/setup-linux-desktop/action.yml", import.meta.url),
+      "utf8",
+    );
+    expect(desktopAction).toContain("libxkbcommon-dev");
+    expect(desktopAction).toContain("mesa-vulkan-drivers");
+    for (const relWorkflow of [
+      ".github/workflows/cowork-server-release.yml",
+      ".github/workflows/desktop-rune-release.yml",
+    ]) {
+      const release = Bun.YAML.parse(
+        readFileSync(new URL(`../${relWorkflow}`, import.meta.url), "utf8"),
+      ) as {
+        jobs: Record<string, { steps: Array<{ uses?: string }> }>;
+      };
+      expect(
+        release.jobs.validate?.steps.some(
+          (step) => step.uses === "./.github/actions/setup-linux-desktop",
+        ),
+        relWorkflow,
+      ).toBe(true);
+    }
+  });
+
   test("release validate jobs mirror CI sandbox setup, Cargo debuginfo bounds, and disk cleanup", () => {
     // Release workflows only run on tags, so a drift from ci.yml stays hidden
     // until a release fails in `validate`.
@@ -363,10 +290,7 @@ describe("main CI workflow", () => {
       CARGO_INCREMENTAL: "0",
     });
 
-    for (const relWorkflow of [
-      ".github/workflows/cowork-server-release.yml",
-      ".github/workflows/desktop-release.yml",
-    ]) {
+    for (const relWorkflow of [".github/workflows/cowork-server-release.yml"]) {
       const release = Bun.YAML.parse(
         readFileSync(new URL(`../${relWorkflow}`, import.meta.url), "utf8"),
       ) as {
@@ -419,7 +343,7 @@ describe("main CI workflow", () => {
     // Third-party actions stay pinned to immutable commit SHAs.
     expect(setupRustAction).toMatch(/uses: Swatinem\/rust-cache@[0-9a-f]{40}\b/);
     expect(setupRustAction).toContain("rustup toolchain install");
-    expect(setupRustAction).toContain("crates/cowork-win-sandbox -> target");
+    expect(setupRustAction).not.toContain("crates/cowork-win-sandbox");
     // macOS runners ship bash 3.2, which has no globstar.
     expect(setupRustAction).not.toContain("globstar");
   });
@@ -429,7 +353,7 @@ describe("main CI workflow", () => {
     const workflowFiles = [
       ".github/workflows/ci.yml",
       ".github/workflows/cowork-server-release.yml",
-      ".github/workflows/desktop-release.yml",
+      ".github/workflows/desktop-rune-release.yml",
     ];
     for (const relWorkflow of workflowFiles) {
       const content = readFileSync(path.join(repoRoot, relWorkflow), "utf8");

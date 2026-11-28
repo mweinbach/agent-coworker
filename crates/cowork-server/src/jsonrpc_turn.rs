@@ -35,8 +35,9 @@ use cowork_providers::chat_completions::lmstudio::{
 };
 use cowork_providers::codex_app_server::CodexSandboxRestrictions;
 use cowork_providers::{
-    CodexAppServerTransport, ProviderTransport, provider_base_url_override,
-    resolve_provider_api_key, resolve_provider_base_url, resolve_provider_bedrock_auth,
+    AntigravityAcpTransport, ClaudeSdkTransport, CodexAppServerTransport, ProviderTransport,
+    provider_base_url_override, resolve_provider_api_key, resolve_provider_base_url,
+    resolve_provider_bedrock_auth,
 };
 use cowork_sandbox::{
     ResolveSandboxPolicyInput, SandboxPolicy, policy_allows_network, resolve_sandbox_policy,
@@ -746,6 +747,36 @@ pub(crate) fn select_provider_transport_for_turn(
     built_in_dir: Option<&Path>,
     tools_disabled: bool,
 ) -> Result<Arc<dyn ProviderTransport>, String> {
+    if matches!(
+        provider,
+        ProviderName::ClaudeSdk | ProviderName::AntigravityAcp
+    ) {
+        let handler = if tools_disabled {
+            None
+        } else {
+            codex_tool_ctx.map(|(tctx, im, _steer, overflow, catalog)| {
+                let tools_map = create_builtin_tools(tctx);
+                TurnStepRunner::build_codex_dynamic_tool_handler_with_catalog(
+                    tools_map,
+                    tctx.clone(),
+                    Arc::clone(im),
+                    overflow,
+                    catalog,
+                )
+            })
+        };
+        return match provider {
+            ProviderName::ClaudeSdk => Ok(Arc::new(
+                ClaudeSdkTransport::with_env_and_handler(env.clone(), handler)
+                    .with_tools_disabled(tools_disabled),
+            )),
+            ProviderName::AntigravityAcp => Ok(Arc::new(
+                AntigravityAcpTransport::with_env_and_handler(env.clone(), handler)
+                    .with_tools_disabled(tools_disabled),
+            )),
+            _ => unreachable!(),
+        };
+    }
     cowork_providers::select_provider_transport(provider, bedrock_auth, homedir, env, || {
         let Some((tctx, im, steer, overflow, catalog)) = codex_tool_ctx else {
             return CodexAppServerTransport::with_env(env.clone())
@@ -810,8 +841,22 @@ impl ServerRuntimeState {
             cowork_config::parse_child_model_ref(model_ref, Some(current.provider))
                 .ok_or_else(|| format!("invalid memory generation model '{model_ref}'"))?;
         if target == current.provider {
+            let transport: Arc<dyn ProviderTransport> = match target {
+                ProviderName::CodexCli => Arc::new(
+                    CodexAppServerTransport::with_env(self.env.clone())
+                        .with_tools_disabled(true)
+                        .with_built_in_dir(Some(self.built_in_dir.clone())),
+                ),
+                ProviderName::ClaudeSdk => Arc::new(
+                    ClaudeSdkTransport::with_env(self.env.clone()).with_tools_disabled(true),
+                ),
+                ProviderName::AntigravityAcp => Arc::new(
+                    AntigravityAcpTransport::with_env(self.env.clone()).with_tools_disabled(true),
+                ),
+                _ => Arc::clone(current.transport),
+            };
             return Ok(RemoteMemoryModel {
-                transport: Arc::clone(current.transport),
+                transport,
                 model_id,
                 base_url: current.base_url.clone(),
                 api_key: current.api_key.clone(),
@@ -829,13 +874,14 @@ impl ServerRuntimeState {
             None,
         );
         let base_url = resolve_provider_base_url(target, provider_opts, &self.env, false);
-        let transport = select_provider_transport(
+        let transport = select_provider_transport_for_turn(
             target,
             bedrock_auth,
             &self.homedir,
             &self.env,
             None,
             Some(&self.built_in_dir),
+            true,
         )?;
         Ok(RemoteMemoryModel {
             transport,
@@ -1661,6 +1707,8 @@ impl ServerRuntimeState {
             .as_ref()
             .and_then(|cfg| cfg.provider_options.clone())
             .unwrap_or_default();
+        let session_has_reasoning_override =
+            session_options_have_reasoning_override(session_provider_opts.as_ref(), provider);
         if let Some(over) = session_provider_opts {
             for (k, v) in over {
                 match (merged_provider_opts.get_mut(&k), v) {
@@ -1675,23 +1723,16 @@ impl ServerRuntimeState {
                 }
             }
         }
-        // TS `applyReasoningEffort` wrote the effort only into OpenAI-compatible provider options
-        // (`openai`, `codex-cli`), and only for a model that takes it; Google thinking travels
-        // as `thinkingConfig`, so injecting `reasoningEffort` there would make the Google
-        // request builder send `thinking_level` to non-reasoning models.
         let model_defaults = self.model_provider_option_defaults(provider, &model_id);
         if let Some(effort) = requested_reasoning.as_ref().filter(|effort| {
-            matches!(provider, ProviderName::Openai | ProviderName::CodexCli)
-                && self.model_accepts_reasoning_effort(provider, &model_id, effort, &model_defaults)
+            self.model_accepts_reasoning_effort(provider, &model_id, effort, &model_defaults)
         }) {
-            let sub = merged_provider_opts
-                .entry(provider.as_str().to_owned())
-                .or_insert_with(|| Value::Object(Map::new()));
-            if let Some(sub_map) = sub.as_object_mut() {
-                sub_map
-                    .entry("reasoningEffort".to_owned())
-                    .or_insert_with(|| Value::String(effort.clone()));
-            }
+            apply_requested_reasoning_effort(
+                &mut merged_provider_opts,
+                provider,
+                effort,
+                session_has_reasoning_override,
+            );
         }
         // Workspace defaults are reconciled against the workspace model, not this thread's
         // model; drop gated reasoning keys the thread's model does not support so the provider
@@ -1701,15 +1742,26 @@ impl ServerRuntimeState {
                 .unwrap_or_default();
 
         // Pre-turn LM Studio reachability gate BEFORE idempotency commit (`routes/turn.ts` parity).
+        let paths = get_ai_coworker_paths(Some(&self.homedir), &self.env);
+        let conn_store = read_connection_store(&paths).await.ok();
         let mut lmstudio_inference_url: Option<String> = None;
         // Applied in the turn task before inference (`prepareLmStudioModelMetadataForInference`).
         let mut lmstudio_prepare: Option<
             cowork_providers::chat_completions::lmstudio::LmStudioOptions,
         > = None;
         if provider == ProviderName::Lmstudio {
+            let saved_lm_key = conn_store
+                .as_ref()
+                .and_then(|store| store.provider_api_key(ProviderName::Lmstudio));
             let svc = LmStudioLocalService::new();
             let status = svc
-                .get_status(&self.homedir, &self.env, Some(&merged_provider_opts), None)
+                .get_status_with_key(
+                    &self.homedir,
+                    &self.env,
+                    Some(&merged_provider_opts),
+                    None,
+                    saved_lm_key.as_deref(),
+                )
                 .await;
             if !status.running {
                 return Err(JsonRpcLiteError::with_data(
@@ -1727,7 +1779,11 @@ impl ServerRuntimeState {
                     }),
                 ));
             }
-            let lms_opts = resolve_lmstudio_options(&self.env, Some(&merged_provider_opts), None);
+            let lms_opts = resolve_lmstudio_options(
+                &self.env,
+                Some(&merged_provider_opts),
+                saved_lm_key.as_deref(),
+            );
             lmstudio_inference_url = Some(lms_opts.inference_base_url.clone());
             lmstudio_prepare = Some(lms_opts);
             let lms_obj = merged_provider_opts
@@ -1823,8 +1879,6 @@ impl ServerRuntimeState {
                 .await;
         }
 
-        let paths = get_ai_coworker_paths(Some(&self.homedir), &self.env);
-        let conn_store = read_connection_store(&paths).await.ok();
         let api_key = resolve_provider_api_key(provider, conn_store.as_ref(), &self.env);
         let bedrock_auth = resolve_provider_bedrock_auth(
             provider,
@@ -2871,12 +2925,28 @@ impl ServerRuntimeState {
                             if cur_src == SessionTitleSource::Manual {
                                 return;
                             }
+                            let title_transport: Arc<dyn ProviderTransport> = match provider {
+                                ProviderName::CodexCli => Arc::new(
+                                    CodexAppServerTransport::with_env(rt_title.env.clone())
+                                        .with_tools_disabled(true)
+                                        .with_built_in_dir(Some(rt_title.built_in_dir.clone())),
+                                ),
+                                ProviderName::ClaudeSdk => Arc::new(
+                                    ClaudeSdkTransport::with_env(rt_title.env.clone())
+                                        .with_tools_disabled(true),
+                                ),
+                                ProviderName::AntigravityAcp => Arc::new(
+                                    AntigravityAcpTransport::with_env(rt_title.env.clone())
+                                        .with_tools_disabled(true),
+                                ),
+                                _ => transport,
+                            };
                             let (new_title, new_src) = generate_remote_session_title(
                                 cur_src,
                                 &cur_title,
                                 &user_query_for_title,
                                 Some(RemoteTitleOptions {
-                                    transport,
+                                    transport: title_transport,
                                     model_id: t_model.clone(),
                                     base_url,
                                     api_key,
@@ -3383,6 +3453,77 @@ fn collect_completed_turn_skill_usage(
     })
 }
 
+/// Whether the session's own stored provider-option override already carries an explicit
+/// reasoning selection. `requested_reasoning_effort` must override inherited workspace defaults
+/// for resumed child agents, but it must not overwrite a deliberate per-session override written
+/// through `cowork/session/config/set` / thread thinking controls.
+fn session_options_have_reasoning_override(
+    session_provider_opts: Option<&Map<String, Value>>,
+    provider: ProviderName,
+) -> bool {
+    let Some(section) = session_provider_opts
+        .and_then(|po| po.get(provider.as_str()))
+        .and_then(Value::as_object)
+    else {
+        return false;
+    };
+    match provider {
+        ProviderName::Google => section
+            .get("thinkingConfig")
+            .and_then(Value::as_object)
+            .is_some_and(|tc| tc.contains_key("thinkingLevel")),
+        ProviderName::Anthropic => {
+            section.contains_key("effort")
+                || section.contains_key("reasoningEffort")
+                || section.contains_key("thinking")
+        }
+        _ => section.contains_key("reasoningEffort"),
+    }
+}
+
+/// Applies the thread's requested reasoning effort to merged provider options. Workspace
+/// defaults are replaced because the requested effort belongs to this thread; an explicit
+/// per-session provider-options override wins because it is the newer, narrower configuration.
+fn apply_requested_reasoning_effort(
+    merged_provider_opts: &mut Map<String, Value>,
+    provider: ProviderName,
+    effort: &str,
+    preserve_existing: bool,
+) {
+    if preserve_existing {
+        return;
+    }
+    let sub = merged_provider_opts
+        .entry(provider.as_str().to_owned())
+        .or_insert_with(|| Value::Object(Map::new()));
+    let Some(sub_map) = sub.as_object_mut() else {
+        return;
+    };
+    match provider {
+        ProviderName::Google => {
+            let tc = sub_map
+                .entry("thinkingConfig".to_owned())
+                .or_insert_with(|| Value::Object(Map::new()));
+            if let Some(tc_map) = tc.as_object_mut() {
+                if effort.eq_ignore_ascii_case("dynamic") {
+                    tc_map.remove("thinkingLevel");
+                } else {
+                    tc_map.insert("thinkingLevel".to_owned(), Value::String(effort.to_owned()));
+                }
+            }
+        }
+        ProviderName::Anthropic => {
+            sub_map.insert("effort".to_owned(), Value::String(effort.to_owned()));
+        }
+        _ => {
+            sub_map.insert(
+                "reasoningEffort".to_owned(),
+                Value::String(effort.to_owned()),
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3454,5 +3595,56 @@ mod tests {
                 "{ty}"
             );
         }
+    }
+    #[test]
+    fn requested_child_effort_overrides_workspace_default_but_not_session_override() {
+        let mut merged: Map<String, Value> = serde_json::json!({
+            "anthropic": { "effort": "high", "betaFlags": ["context-1m"] }
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+        apply_requested_reasoning_effort(&mut merged, ProviderName::Anthropic, "low", false);
+        assert_eq!(merged["anthropic"]["effort"], serde_json::json!("low"));
+        assert_eq!(
+            merged["anthropic"]["betaFlags"],
+            serde_json::json!(["context-1m"])
+        );
+
+        let mut preserved = merged.clone();
+        apply_requested_reasoning_effort(&mut preserved, ProviderName::Anthropic, "none", true);
+        assert_eq!(preserved["anthropic"]["effort"], serde_json::json!("low"));
+
+        let session_override: Map<String, Value> = serde_json::json!({
+            "anthropic": { "reasoningEffort": "minimal" }
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+        assert!(session_options_have_reasoning_override(
+            Some(&session_override),
+            ProviderName::Anthropic
+        ));
+        assert!(!session_options_have_reasoning_override(
+            None,
+            ProviderName::Anthropic
+        ));
+    }
+
+    #[test]
+    fn requested_google_dynamic_effort_clears_inherited_workspace_level() {
+        let mut merged: Map<String, Value> = serde_json::json!({
+            "google": { "thinkingConfig": { "thinkingLevel": "high" } }
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+        apply_requested_reasoning_effort(&mut merged, ProviderName::Google, "dynamic", false);
+        assert!(
+            merged["google"]["thinkingConfig"]
+                .as_object()
+                .is_none_or(|tc| !tc.contains_key("thinkingLevel")),
+            "{merged:?}"
+        );
     }
 }

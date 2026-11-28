@@ -32,7 +32,7 @@ fn test_temp_base() -> PathBuf {
 }
 
 #[test]
-fn spawns_isolated_codex_home_strips_codex_env_and_syncs_windows_sandbox_markers() {
+fn spawns_isolated_codex_home_strips_codex_env_and_leaves_foreign_codex_home_untouched() {
     let base = test_temp_base().join(format!("cowork-codex-iso-{}", Uuid::new_v4()));
     std::fs::create_dir_all(base.join(".cowork")).unwrap();
     std::fs::create_dir_all(base.join(".codex")).unwrap();
@@ -64,35 +64,12 @@ fn spawns_isolated_codex_home_strips_codex_env_and_syncs_windows_sandbox_markers
         0o700
     );
 
-    // Sync Windows sandbox setup state (version 5, newest-wins) between cowork_home and codex_home
-    std::fs::create_dir_all(cowork_home.join(".sandbox")).unwrap();
-    std::fs::create_dir_all(cowork_home.join(".sandbox-secrets")).unwrap();
-    std::fs::write(
-        cowork_home.join(".sandbox/setup_marker.json"),
-        json!({ "version": 5, "created_at": "2026-10-30T12:00:00Z" }).to_string(),
-    )
-    .unwrap();
-    std::fs::write(
-        cowork_home.join(".sandbox-secrets/sandbox_users.json"),
-        json!({
-            "version": 5,
-            "offline": { "username": "CodexSandboxOffline", "password": "p1" },
-            "online": { "username": "CodexSandboxOnline", "password": "p2" },
-        })
-        .to_string(),
-    )
-    .unwrap();
-
-    // Spawning again syncs the newest v5 state into the isolated Codex home.
-    build_codex_spawn_env(&cowork_home, &parent_env);
-    assert!(codex_home.join(".sandbox/setup_marker.json").is_file());
-    assert!(
-        codex_home
-            .join(".sandbox-secrets/sandbox_users.json")
-            .is_file()
-    );
     // Foreign ~/.codex untouched
-    assert!(!base.join(".codex/.sandbox").exists());
+    assert_eq!(
+        std::fs::read_to_string(base.join(".codex/auth.json")).unwrap(),
+        "{\"foreign\":true}"
+    );
+    assert!(!codex_home.join("auth.json").exists());
 
     let _ = std::fs::remove_dir_all(&base);
 }

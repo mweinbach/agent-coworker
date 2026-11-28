@@ -1611,6 +1611,117 @@ fn get_artifact_detail_sync(
     }))
 }
 
+const MAX_SCOPED_WORKSPACE_BIND_PARAMS: usize = 500;
+
+macro_rules! task_summary_select_prefix {
+    () => {
+        "SELECT task.task_id, task.workspace_path, task.title, task.objective, task.context,
+                  task.source_session_id, task.creation_origin, task.status, task.revision,
+                  task.review_required, task.review_rounds, task.created_at, task.updated_at,
+                  (SELECT COUNT(*) FROM task_threads WHERE task_id = task.task_id) AS thread_count,
+                  (SELECT COUNT(*) FROM task_work_items WHERE task_id = task.task_id AND status = 'done') AS completed_work_item_count,
+                  (SELECT COUNT(*) FROM task_work_items WHERE task_id = task.task_id) AS total_work_item_count,
+                  COALESCE(blockers.active_count, 0) AS active_blocker_count,
+                  (SELECT COUNT(*) FROM task_questions WHERE task_id = task.task_id AND status = 'pending') AS pending_question_count,
+                  (SELECT COUNT(*) FROM task_questions WHERE task_id = task.task_id AND status = 'pending' AND blocking = 1) AS blocking_question_count
+                FROM tasks AS task"
+    };
+}
+
+const TASK_SUMMARY_SELECT_PREFIX: &str = task_summary_select_prefix!();
+
+const TASK_SUMMARY_UNSCOPED_SQL: &str = concat!(
+    task_summary_select_prefix!(),
+    "
+                LEFT JOIN (
+                  SELECT task_id, COUNT(*) AS active_count FROM task_blockers
+                  WHERE status = 'active' GROUP BY task_id
+                ) AS blockers ON blockers.task_id = task.task_id
+                ORDER BY task.updated_at DESC"
+);
+
+const TASK_SUMMARY_SINGLE_WORKSPACE_SQL: &str = concat!(
+    task_summary_select_prefix!(),
+    "
+                LEFT JOIN (
+                  SELECT b.task_id, COUNT(*) AS active_count FROM task_blockers AS b
+                  WHERE b.status = 'active'
+                    AND b.task_id IN (SELECT task_id FROM tasks WHERE workspace_path = ?1)
+                  GROUP BY b.task_id
+                ) AS blockers ON blockers.task_id = task.task_id
+                WHERE task.workspace_path = ?1
+                ORDER BY task.updated_at DESC"
+);
+
+fn map_task_summary_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<TaskSummary> {
+    let origin_raw: String = r.get(6)?;
+    let status_raw: String = r.get(7)?;
+    let rev_req: i64 = r.get(9)?;
+    Ok(TaskSummary {
+        id: r.get(0)?,
+        workspace_path: r.get(1)?,
+        title: r.get(2)?,
+        objective: r.get(3)?,
+        context: r.get(4)?,
+        source_session_id: r.get(5)?,
+        creation_origin: TaskCreationOrigin::parse(&origin_raw)
+            .unwrap_or(TaskCreationOrigin::Manual),
+        status: TaskStatus::parse(&status_raw).unwrap_or(TaskStatus::Draft),
+        revision: r.get(8)?,
+        review_required: rev_req == 1,
+        review_rounds: r.get(10)?,
+        created_at: r.get(11)?,
+        updated_at: r.get(12)?,
+        thread_count: r.get::<_, i64>(13)?.max(0) as usize,
+        completed_work_item_count: r.get::<_, i64>(14)?.max(0) as usize,
+        total_work_item_count: r.get::<_, i64>(15)?.max(0) as usize,
+        active_blocker_count: r.get::<_, i64>(16)?.max(0) as usize,
+        pending_question_count: r.get::<_, i64>(17)?.max(0) as usize,
+        blocking_question_count: r.get::<_, i64>(18)?.max(0) as usize,
+    })
+}
+
+/// Holds a single SQLite WAL read snapshot across multi-statement read queries when the
+/// connection is in autocommit mode, while remaining a no-op if already inside a caller's
+/// active transaction.
+struct ReadSnapshotGuard<'a> {
+    conn: &'a Connection,
+    started: bool,
+}
+
+impl<'a> ReadSnapshotGuard<'a> {
+    fn begin(conn: &'a Connection) -> rusqlite::Result<Self> {
+        if conn.is_autocommit() {
+            conn.execute_batch("BEGIN DEFERRED")?;
+            Ok(Self {
+                conn,
+                started: true,
+            })
+        } else {
+            Ok(Self {
+                conn,
+                started: false,
+            })
+        }
+    }
+
+    fn finish(mut self) -> rusqlite::Result<()> {
+        if self.started {
+            self.started = false;
+            self.conn.execute_batch("COMMIT")?;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for ReadSnapshotGuard<'_> {
+    fn drop(&mut self) {
+        if self.started {
+            let _ = self.conn.execute_batch("ROLLBACK");
+        }
+    }
+}
+
 impl SessionDb {
     pub fn get_task(&self, task_id: &str) -> Result<Option<TaskRecord>> {
         self.with_read_conn(|conn| get_task_sync(conn, task_id))
@@ -1675,72 +1786,82 @@ impl SessionDb {
     }
 
     pub fn list_tasks(&self, workspace_path: Option<&str>) -> Result<Vec<TaskSummary>> {
-        let canonical_ws = workspace_path.map(|ws| {
-            canonicalize_sync(Path::new(ws))
-                .to_string_lossy()
-                .into_owned()
-        });
+        let Some(ws) = workspace_path else {
+            return self.with_read_conn(|conn| {
+                let mut stmt = conn.prepare_cached(TASK_SUMMARY_UNSCOPED_SQL)?;
+                let rows = stmt
+                    .query_map([], map_task_summary_row)?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                Ok(rows)
+            });
+        };
+
+        let canonical_ws = canonicalize_sync(Path::new(ws))
+            .to_string_lossy()
+            .into_owned();
         self.with_read_conn(|conn| {
-            let base_sql = "SELECT task.task_id, task.workspace_path, task.title, task.objective, task.context,
-                  task.source_session_id, task.creation_origin, task.status, task.revision,
-                  task.review_required, task.review_rounds, task.created_at, task.updated_at,
-                  (SELECT COUNT(*) FROM task_threads WHERE task_id = task.task_id) AS thread_count,
-                  (SELECT COUNT(*) FROM task_work_items WHERE task_id = task.task_id AND status = 'done') AS completed_work_item_count,
-                  (SELECT COUNT(*) FROM task_work_items WHERE task_id = task.task_id) AS total_work_item_count,
-                  COALESCE(blockers.active_count, 0) AS active_blocker_count,
-                  (SELECT COUNT(*) FROM task_questions WHERE task_id = task.task_id AND status = 'pending') AS pending_question_count,
-                  (SELECT COUNT(*) FROM task_questions WHERE task_id = task.task_id AND status = 'pending' AND blocking = 1) AS blocking_question_count
-                FROM tasks AS task
-                LEFT JOIN (
-                  SELECT task_id, COUNT(*) AS active_count FROM task_blockers
-                  WHERE status = 'active' GROUP BY task_id
-                ) AS blockers ON blockers.task_id = task.task_id";
-            let map_row = |r: &rusqlite::Row<'_>| -> rusqlite::Result<TaskSummary> {
-                let origin_raw: String = r.get(6)?;
-                let status_raw: String = r.get(7)?;
-                let rev_req: i64 = r.get(9)?;
-                Ok(TaskSummary {
-                    id: r.get(0)?,
-                    workspace_path: r.get(1)?,
-                    title: r.get(2)?,
-                    objective: r.get(3)?,
-                    context: r.get(4)?,
-                    source_session_id: r.get(5)?,
-                    creation_origin: TaskCreationOrigin::parse(&origin_raw)
-                        .unwrap_or(TaskCreationOrigin::Manual),
-                    status: TaskStatus::parse(&status_raw).unwrap_or(TaskStatus::Draft),
-                    revision: r.get(8)?,
-                    review_required: rev_req == 1,
-                    review_rounds: r.get(10)?,
-                    created_at: r.get(11)?,
-                    updated_at: r.get(12)?,
-                    thread_count: r.get::<_, i64>(13)?.max(0) as usize,
-                    completed_work_item_count: r.get::<_, i64>(14)?.max(0) as usize,
-                    total_work_item_count: r.get::<_, i64>(15)?.max(0) as usize,
-                    active_blocker_count: r.get::<_, i64>(16)?.max(0) as usize,
-                    pending_question_count: r.get::<_, i64>(17)?.max(0) as usize,
-                    blocking_question_count: r.get::<_, i64>(18)?.max(0) as usize,
-                })
+            // Keep preflight workspace discovery and scoped summary construction on the same
+            // SQLite read snapshot so concurrent commits cannot split the two reads.
+            let snapshot = ReadSnapshotGuard::begin(conn)?;
+
+            // Stored paths may be spelled differently from today's canonical form (pre-upgrade
+            // rows, Electron-written rows, symlinks, Windows `\\?\` verbatim vs plain paths,
+            // case on win32), so resolve equivalence against the distinct stored workspace_path
+            // values first via the covering index before building per-task summaries.
+            let matching_paths: Vec<String> = {
+                let mut stmt =
+                    conn.prepare_cached("SELECT DISTINCT workspace_path FROM tasks")?;
+                let distinct = stmt.query_map([], |r| r.get::<_, String>(0))?;
+                let mut matched = Vec::new();
+                for stored_ws in distinct {
+                    let stored_ws = stored_ws?;
+                    if stored_ws == canonical_ws || same_workspace_path(&stored_ws, ws) {
+                        matched.push(stored_ws);
+                    }
+                }
+                matched
             };
 
-            let sql = format!("{base_sql} ORDER BY task.updated_at DESC");
-            let mut stmt = conn.prepare(&sql)?;
-            let rows = stmt
-                .query_map([], map_row)?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-            let Some((ws, canonical_ws)) = workspace_path.zip(canonical_ws.as_deref()) else {
-                return Ok(rows);
+            let rows = match matching_paths.as_slice() {
+                [] => Vec::new(),
+                [single] => {
+                    let mut stmt = conn.prepare_cached(TASK_SUMMARY_SINGLE_WORKSPACE_SQL)?;
+                    stmt.query_map(params![single], map_task_summary_row)?
+                        .collect::<rusqlite::Result<Vec<_>>>()?
+                }
+                many if many.len() <= MAX_SCOPED_WORKSPACE_BIND_PARAMS => {
+                    let placeholders = (1..=many.len())
+                        .map(|i| format!("?{i}"))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let sql = format!(
+                        "{TASK_SUMMARY_SELECT_PREFIX}
+                        LEFT JOIN (
+                          SELECT b.task_id, COUNT(*) AS active_count FROM task_blockers AS b
+                          WHERE b.status = 'active'
+                            AND b.task_id IN (SELECT task_id FROM tasks WHERE workspace_path IN ({placeholders}))
+                          GROUP BY b.task_id
+                        ) AS blockers ON blockers.task_id = task.task_id
+                        WHERE task.workspace_path IN ({placeholders})
+                        ORDER BY task.updated_at DESC"
+                    );
+                    let mut stmt = conn.prepare(&sql)?;
+                    stmt.query_map(params_from_iter(many.iter()), map_task_summary_row)?
+                        .collect::<rusqlite::Result<Vec<_>>>()?
+                }
+                many => {
+                    let allowed: HashSet<&str> = many.iter().map(String::as_str).collect();
+                    let mut stmt = conn.prepare_cached(TASK_SUMMARY_UNSCOPED_SQL)?;
+                    stmt.query_map([], map_task_summary_row)?
+                        .collect::<rusqlite::Result<Vec<_>>>()?
+                        .into_iter()
+                        .filter(|row| allowed.contains(row.workspace_path.as_str()))
+                        .collect()
+                }
             };
-            // Stored paths may be spelled differently from today's canonical form (pre-upgrade
-            // rows, Electron-written rows, Windows `\\?\` verbatim vs plain paths, case on
-            // win32), so match with the shared workspace comparison instead of SQL equality.
-            Ok(rows
-                .into_iter()
-                .filter(|row| {
-                    row.workspace_path == canonical_ws
-                        || same_workspace_path(&row.workspace_path, ws)
-                })
-                .collect())
+
+            snapshot.finish()?;
+            Ok(rows)
         })
     }
 

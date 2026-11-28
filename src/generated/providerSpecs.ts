@@ -18,6 +18,8 @@ export const PROVIDER_NAMES = [
   "opencode-go",
   "opencode-zen",
   "codex-cli",
+  "claude-sdk",
+  "antigravity-acp",
 ] as const;
 
 type GeneratedProviderName = (typeof PROVIDER_NAMES)[number];
@@ -37,6 +39,8 @@ export const MODEL_REGISTRY_PROVIDER_NAMES = [
   "opencode-go",
   "opencode-zen",
   "codex-cli",
+  "claude-sdk",
+  "antigravity-acp",
 ] as const satisfies readonly GeneratedProviderName[];
 
 type ProviderSpecAuthField = {
@@ -58,7 +62,7 @@ type ProviderSpecAuthMethod = {
 
 type ProviderSpec = {
   readonly displayName: string;
-  readonly transport: "gemini-interactions" | "openai-responses" | "anthropic-messages" | "bedrock-converse" | "chat-completions" | "codex-app-server";
+  readonly transport: "gemini-interactions" | "openai-responses" | "anthropic-messages" | "bedrock-converse" | "chat-completions" | "codex-app-server" | "claude-sdk" | "antigravity-acp";
   readonly userFacing: boolean;
   readonly discovery: "api" | "static" | "local";
   /** Default model id; for registry providers it is the `isDefault` model in `config/models/`. */
@@ -370,6 +374,36 @@ export const PROVIDER_SPECS: { readonly [P in GeneratedProviderName]: ProviderSp
         "type": "oauth",
         "label": "Sign in with ChatGPT (browser)",
         "oauthMode": "auto"
+      }
+    ],
+  },
+  "claude-sdk": {
+    displayName: "Claude SDK",
+    transport: "claude-sdk",
+    userFacing: true,
+    discovery: "static",
+    defaultModel: "claude-opus-4-8",
+    titleModel: "claude-haiku-4-5",
+    authMethods: [
+      {
+        "id": "api_key",
+        "type": "api",
+        "label": "Anthropic API key or Claude OAuth token"
+      }
+    ],
+  },
+  "antigravity-acp": {
+    displayName: "Antigravity ACP",
+    transport: "antigravity-acp",
+    userFacing: true,
+    discovery: "static",
+    defaultModel: "gemini-4-neon",
+    titleModel: "gemini-3.8-flash",
+    authMethods: [
+      {
+        "id": "api_key",
+        "type": "api",
+        "label": "Gemini API key"
       }
     ],
   },

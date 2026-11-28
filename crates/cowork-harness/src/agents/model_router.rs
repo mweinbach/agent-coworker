@@ -49,28 +49,55 @@ fn is_selectable_model(
     resolved.id == model_id.trim()
 }
 
-/// `OPENAI_COMPATIBLE_PROVIDER_NAMES` (`src/shared/openaiCompatibleOptions.ts`).
-fn is_openai_compatible_provider(provider: ProviderName) -> bool {
-    matches!(provider, ProviderName::Openai | ProviderName::CodexCli)
+/// Providers that accept a standardized reasoning effort override.
+fn is_reasoning_effort_provider(provider: ProviderName) -> bool {
+    matches!(
+        provider,
+        ProviderName::Openai
+            | ProviderName::CodexCli
+            | ProviderName::Anthropic
+            | ProviderName::Google
+            | ProviderName::Bedrock
+            | ProviderName::Lmstudio
+            | ProviderName::Fireworks
+            | ProviderName::Firepass
+            | ProviderName::Together
+            | ProviderName::OpencodeGo
+            | ProviderName::OpencodeZen
+            | ProviderName::ClaudeSdk
+            | ProviderName::AntigravityAcp
+    )
 }
 
 // `OPENAI_REASONING_EFFORT_VALUES` (`src/shared/openaiCompatibleOptions.ts`).
 use cowork_config::models::is_openai_reasoning_effort;
 
-/// The parent's current effort from its (merged) provider options — `currentReasoningEffort`
-/// in `modelRouter.ts`. Only OpenAI-compatible providers carry a `reasoningEffort`.
+/// The parent's current effort from its (merged) provider options.
 fn current_reasoning_effort(cfg: &AgentConfig, provider: ProviderName) -> Option<String> {
-    if !is_openai_compatible_provider(provider) {
+    if !is_reasoning_effort_provider(provider) {
         return None;
     }
-    cfg.provider_options
+    let section = cfg
+        .provider_options
         .as_ref()?
         .get(provider.as_str())?
-        .as_object()?
-        .get("reasoningEffort")?
-        .as_str()
-        .filter(|v| is_openai_reasoning_effort(v))
-        .map(str::to_owned)
+        .as_object()?;
+    let raw = match provider {
+        ProviderName::Google => section
+            .get("thinkingConfig")
+            .and_then(Value::as_object)
+            .and_then(|tc| tc.get("thinkingLevel"))
+            .and_then(Value::as_str),
+        ProviderName::Anthropic => section
+            .get("effort")
+            .or_else(|| section.get("reasoningEffort"))
+            .and_then(Value::as_str),
+        _ => section
+            .get("reasoningEffort")
+            .or_else(|| section.get("effort"))
+            .and_then(Value::as_str),
+    }?;
+    is_openai_reasoning_effort(raw).then(|| raw.to_owned())
 }
 
 /// Resolved `providerOptionsDefaults` of a selectable child model: the bundled registry entry,
@@ -104,8 +131,16 @@ fn model_default_reasoning_effort(
     provider: ProviderName,
     model_id: &str,
 ) -> Option<String> {
-    resolved_provider_option_defaults(registry, cfg, provider, model_id)
-        .get("reasoningEffort")?
+    let defaults = resolved_provider_option_defaults(registry, cfg, provider, model_id);
+    defaults
+        .get("reasoningEffort")
+        .or_else(|| defaults.get("effort"))
+        .or_else(|| {
+            defaults
+                .get("thinkingConfig")
+                .and_then(Value::as_object)
+                .and_then(|tc| tc.get("thinkingLevel"))
+        })?
         .as_str()
         .filter(|v| is_openai_reasoning_effort(v))
         .map(str::to_owned)

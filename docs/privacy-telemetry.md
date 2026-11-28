@@ -2,7 +2,7 @@
 
 Cowork is local-first. Network telemetry is off by default in packaged public builds and only starts when the user enables the relevant Privacy & Telemetry toggle and the matching integration is configured.
 
-All network telemetry and cloud sync share the resolver in `src/telemetry/config.ts`. Set `COWORK_DISABLE_NETWORK_TELEMETRY=1` to disable Sentry, PostHog, Langfuse, diagnostics upload, and cloud sync in every process. Local logs and local diagnostics bundle creation still work.
+All network telemetry and cloud sync share the native resolver in `crates/cowork-desktop/src/native/telemetry_status.rs` (and server-side policy in `crates/cowork-server/src/observability.rs`). Set `COWORK_DISABLE_NETWORK_TELEMETRY=1` to disable Sentry, PostHog, Langfuse, diagnostics upload, and cloud sync in every process. Local logs and local diagnostics bundle creation still work.
 
 ## Toggles
 
@@ -76,7 +76,7 @@ Diagnostics bundles are written under the app user-data directory and remain loc
 
 Crash reports may include scrubbed error names/messages, stack traces, component tags, release/app version, environment, platform, architecture, and packaged/dev mode. Sentry session replay, tracing, structured logs, user identification, and AI instrumentation are disabled for crash reporting.
 
-Product analytics event names are fixed in `src/telemetry/productAnalytics.ts`:
+Product analytics event names are fixed in `crates/cowork-desktop/src/native/product_analytics.rs`:
 
 | Event | Purpose |
 | --- | --- |

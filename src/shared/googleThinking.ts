@@ -31,10 +31,11 @@ export function isGoogleThinkingLevel(value: unknown): value is GoogleThinkingLe
 }
 
 function listGoogleThinkingLevelsForModel(modelId: string): readonly GoogleThinkingLevel[] {
-  if (GOOGLE_FLASH_MODEL_IDS.has(modelId)) {
+  const lower = modelId.trim().toLowerCase();
+  if (GOOGLE_FLASH_MODEL_IDS.has(lower) || lower.includes("flash")) {
     return GOOGLE_FLASH_THINKING_LEVELS;
   }
-  if (GOOGLE_PRO_MODEL_IDS.has(modelId)) {
+  if (GOOGLE_PRO_MODEL_IDS.has(lower)) {
     return GOOGLE_PRO_THINKING_LEVELS;
   }
   return GOOGLE_PRO_THINKING_LEVELS;
@@ -52,16 +53,4 @@ export function normalizeGoogleThinkingLevelForModel(
 ): GoogleThinkingLevel | undefined {
   if (!isGoogleThinkingLevel(value)) return undefined;
   return listGoogleThinkingLevelsForModel(modelId).includes(value) ? value : undefined;
-}
-
-export function googleReasoningEffortFromThinkingLevel(
-  thinkingLevel: GoogleThinkingLevel | undefined,
-): GoogleReasoningEffort {
-  return thinkingLevel ?? GOOGLE_DYNAMIC_REASONING_EFFORT;
-}
-
-export function googleThinkingLevelFromReasoningEffort(
-  reasoningEffort: GoogleReasoningEffort,
-): GoogleThinkingLevel | undefined {
-  return reasoningEffort === GOOGLE_DYNAMIC_REASONING_EFFORT ? undefined : reasoningEffort;
 }

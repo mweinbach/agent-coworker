@@ -7,9 +7,7 @@ publish = false
 description = "OS sandbox policy floors, cached .git/.cowork exclusions, __sandbox-exec backends, and denial classification."
 
 [dependencies]
-chrono.workspace = true
 cowork-config.workspace = true
-hex.workspace = true
 ignore.workspace = true
 libc.workspace = true
 notify.workspace = true
@@ -17,10 +15,10 @@ parking_lot.workspace = true
 regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-sha2.workspace = true
 tokio.workspace = true
 
 [target.'cfg(windows)'.dependencies]
+mxc-sdk = { version = "1.1.0", default-features = false }
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects"] }
 
 [dev-dependencies]

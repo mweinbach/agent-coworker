@@ -1236,6 +1236,47 @@ enum ShellToken {
     },
 }
 
+fn push_shell_word_token(
+    tokens: &mut Vec<ShellToken>,
+    word: String,
+    quoted: bool,
+    has_unquoted_glob: bool,
+    has_unquoted_brace: bool,
+    has_unquoted_dollar: bool,
+    has_unquoted_backtick: bool,
+) -> Result<(), String> {
+    if has_unquoted_brace && word.contains('{') && word.contains('}') {
+        let mut expanded = Vec::new();
+        expand_shell_braces_inner(&word, &mut expanded)?;
+        if expanded.len() > 1 || expanded.first().map(String::as_str) != Some(word.as_str()) {
+            for variant in expanded {
+                if variant.is_empty() && !quoted {
+                    continue;
+                }
+                tokens.push(ShellToken::Word {
+                    has_unquoted_glob: has_unquoted_glob || segment_has_glob_meta(&variant),
+                    text: variant,
+                    quoted,
+                    has_unquoted_brace: false,
+                    has_unquoted_dollar,
+                    has_unquoted_backtick,
+                });
+            }
+            return Ok(());
+        }
+    }
+
+    tokens.push(ShellToken::Word {
+        text: word,
+        quoted,
+        has_unquoted_glob,
+        has_unquoted_brace,
+        has_unquoted_dollar,
+        has_unquoted_backtick,
+    });
+    Ok(())
+}
+
 fn tokenize_shell_command(command: &str) -> Result<Vec<ShellToken>, String> {
     let mut tokens = Vec::new();
     let chars: Vec<char> = command.chars().collect();
@@ -1417,14 +1458,15 @@ fn tokenize_shell_command(command: &str) -> Result<Vec<ShellToken>, String> {
             }
         }
         if !word.is_empty() || quoted {
-            tokens.push(ShellToken::Word {
-                text: word,
+            push_shell_word_token(
+                &mut tokens,
+                word,
                 quoted,
                 has_unquoted_glob,
                 has_unquoted_brace,
                 has_unquoted_dollar,
                 has_unquoted_backtick,
-            });
+            )?;
         }
     }
     Ok(tokens)
@@ -1856,10 +1898,9 @@ fn expand_shell_braces_inner(raw: &str, out: &mut Vec<String>) -> Result<(), Str
     let prefix = &raw[..start];
     let suffix = &raw[end + 1..];
     if comma_positions.is_empty() {
-        // Range brace expansion like `{a..z}` or `{1..10}` — conservatively treat the
-        // brace expression as a wildcard `*` so every on-disk entry in that position is checked.
-        let wildcarded = format!("{prefix}*{suffix}");
-        return expand_shell_braces_inner(&wildcarded, out);
+        return Err(
+            "Native shell range brace expansion is blocked; use explicit paths instead.".to_owned(),
+        );
     }
 
     let mut parts = Vec::with_capacity(comma_positions.len() + 1);
@@ -2180,7 +2221,7 @@ fn validate_shell_glob_operand(
 fn validate_shell_operand_candidate(
     candidate: &str,
     has_unquoted_glob: bool,
-    has_unquoted_brace: bool,
+    _has_unquoted_brace: bool,
     base_dir: &Path,
     ctx: &ToolExecutionContext,
     current_cmd: &str,
@@ -2189,27 +2230,6 @@ fn validate_shell_operand_candidate(
 ) -> Result<(), String> {
     if candidate.is_empty() {
         return Ok(());
-    }
-
-    if has_unquoted_brace && candidate.contains('{') && candidate.contains('}') {
-        let mut expanded = Vec::new();
-        expand_shell_braces_inner(candidate, &mut expanded)?;
-        if expanded.len() > 1 || expanded.first().map(String::as_str) != Some(candidate) {
-            for variant in expanded {
-                let variant_has_glob = has_unquoted_glob || segment_has_glob_meta(&variant);
-                validate_shell_operand_candidate(
-                    &variant,
-                    variant_has_glob,
-                    false,
-                    base_dir,
-                    ctx,
-                    current_cmd,
-                    is_mut,
-                    force_write,
-                )?;
-            }
-            return Ok(());
-        }
     }
 
     if has_unquoted_glob && segment_has_glob_meta(candidate) {

@@ -1380,15 +1380,18 @@ mod native_mxc {
 
         let completed_wait_result = Arc::new(Mutex::new(None));
         let wait_outcome = {
+            let wait_task_ref = &mut wait_task;
+            let out_task_ref = &mut out_task;
+            let err_task_ref = &mut err_task;
             let completion_fut = {
                 let completed_wait_result = Arc::clone(&completed_wait_result);
-                async {
-                    let res = (&mut wait_task).await;
+                async move {
+                    let res = wait_task_ref.await;
                     *completed_wait_result
                         .lock()
                         .unwrap_or_else(|e| e.into_inner()) = Some(res);
-                    join_reader(&mut out_task).await;
-                    join_reader(&mut err_task).await;
+                    join_reader(out_task_ref).await;
+                    join_reader(err_task_ref).await;
                 }
             };
             tokio::pin!(completion_fut);

@@ -1707,6 +1707,8 @@ impl ServerRuntimeState {
             .as_ref()
             .and_then(|cfg| cfg.provider_options.clone())
             .unwrap_or_default();
+        let session_has_reasoning_override =
+            session_options_have_reasoning_override(session_provider_opts.as_ref(), provider);
         if let Some(over) = session_provider_opts {
             for (k, v) in over {
                 match (merged_provider_opts.get_mut(&k), v) {
@@ -1725,37 +1727,12 @@ impl ServerRuntimeState {
         if let Some(effort) = requested_reasoning.as_ref().filter(|effort| {
             self.model_accepts_reasoning_effort(provider, &model_id, effort, &model_defaults)
         }) {
-            let sub = merged_provider_opts
-                .entry(provider.as_str().to_owned())
-                .or_insert_with(|| Value::Object(Map::new()));
-            if let Some(sub_map) = sub.as_object_mut() {
-                match provider {
-                    ProviderName::Google => {
-                        let tc = sub_map
-                            .entry("thinkingConfig".to_owned())
-                            .or_insert_with(|| Value::Object(Map::new()));
-                        if let Some(tc_map) = tc.as_object_mut() {
-                            if effort.eq_ignore_ascii_case("dynamic") {
-                                tc_map.remove("thinkingLevel");
-                            } else {
-                                tc_map
-                                    .entry("thinkingLevel".to_owned())
-                                    .or_insert_with(|| Value::String(effort.clone()));
-                            }
-                        }
-                    }
-                    ProviderName::Anthropic => {
-                        sub_map
-                            .entry("effort".to_owned())
-                            .or_insert_with(|| Value::String(effort.clone()));
-                    }
-                    _ => {
-                        sub_map
-                            .entry("reasoningEffort".to_owned())
-                            .or_insert_with(|| Value::String(effort.clone()));
-                    }
-                }
-            }
+            apply_requested_reasoning_effort(
+                &mut merged_provider_opts,
+                provider,
+                effort,
+                session_has_reasoning_override,
+            );
         }
         // Workspace defaults are reconciled against the workspace model, not this thread's
         // model; drop gated reasoning keys the thread's model does not support so the provider
@@ -3476,6 +3453,77 @@ fn collect_completed_turn_skill_usage(
     })
 }
 
+/// Whether the session's own stored provider-option override already carries an explicit
+/// reasoning selection. `requested_reasoning_effort` must override inherited workspace defaults
+/// for resumed child agents, but it must not overwrite a deliberate per-session override written
+/// through `cowork/session/config/set` / thread thinking controls.
+fn session_options_have_reasoning_override(
+    session_provider_opts: Option<&Map<String, Value>>,
+    provider: ProviderName,
+) -> bool {
+    let Some(section) = session_provider_opts
+        .and_then(|po| po.get(provider.as_str()))
+        .and_then(Value::as_object)
+    else {
+        return false;
+    };
+    match provider {
+        ProviderName::Google => section
+            .get("thinkingConfig")
+            .and_then(Value::as_object)
+            .is_some_and(|tc| tc.contains_key("thinkingLevel")),
+        ProviderName::Anthropic => {
+            section.contains_key("effort")
+                || section.contains_key("reasoningEffort")
+                || section.contains_key("thinking")
+        }
+        _ => section.contains_key("reasoningEffort"),
+    }
+}
+
+/// Applies the thread's requested reasoning effort to merged provider options. Workspace
+/// defaults are replaced because the requested effort belongs to this thread; an explicit
+/// per-session provider-options override wins because it is the newer, narrower configuration.
+fn apply_requested_reasoning_effort(
+    merged_provider_opts: &mut Map<String, Value>,
+    provider: ProviderName,
+    effort: &str,
+    preserve_existing: bool,
+) {
+    if preserve_existing {
+        return;
+    }
+    let sub = merged_provider_opts
+        .entry(provider.as_str().to_owned())
+        .or_insert_with(|| Value::Object(Map::new()));
+    let Some(sub_map) = sub.as_object_mut() else {
+        return;
+    };
+    match provider {
+        ProviderName::Google => {
+            let tc = sub_map
+                .entry("thinkingConfig".to_owned())
+                .or_insert_with(|| Value::Object(Map::new()));
+            if let Some(tc_map) = tc.as_object_mut() {
+                if effort.eq_ignore_ascii_case("dynamic") {
+                    tc_map.remove("thinkingLevel");
+                } else {
+                    tc_map.insert("thinkingLevel".to_owned(), Value::String(effort.to_owned()));
+                }
+            }
+        }
+        ProviderName::Anthropic => {
+            sub_map.insert("effort".to_owned(), Value::String(effort.to_owned()));
+        }
+        _ => {
+            sub_map.insert(
+                "reasoningEffort".to_owned(),
+                Value::String(effort.to_owned()),
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3547,5 +3595,56 @@ mod tests {
                 "{ty}"
             );
         }
+    }
+    #[test]
+    fn requested_child_effort_overrides_workspace_default_but_not_session_override() {
+        let mut merged: Map<String, Value> = serde_json::json!({
+            "anthropic": { "effort": "high", "betaFlags": ["context-1m"] }
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+        apply_requested_reasoning_effort(&mut merged, ProviderName::Anthropic, "low", false);
+        assert_eq!(merged["anthropic"]["effort"], serde_json::json!("low"));
+        assert_eq!(
+            merged["anthropic"]["betaFlags"],
+            serde_json::json!(["context-1m"])
+        );
+
+        let mut preserved = merged.clone();
+        apply_requested_reasoning_effort(&mut preserved, ProviderName::Anthropic, "none", true);
+        assert_eq!(preserved["anthropic"]["effort"], serde_json::json!("low"));
+
+        let session_override: Map<String, Value> = serde_json::json!({
+            "anthropic": { "reasoningEffort": "minimal" }
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+        assert!(session_options_have_reasoning_override(
+            Some(&session_override),
+            ProviderName::Anthropic
+        ));
+        assert!(!session_options_have_reasoning_override(
+            None,
+            ProviderName::Anthropic
+        ));
+    }
+
+    #[test]
+    fn requested_google_dynamic_effort_clears_inherited_workspace_level() {
+        let mut merged: Map<String, Value> = serde_json::json!({
+            "google": { "thinkingConfig": { "thinkingLevel": "high" } }
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+        apply_requested_reasoning_effort(&mut merged, ProviderName::Google, "dynamic", false);
+        assert!(
+            merged["google"]["thinkingConfig"]
+                .as_object()
+                .is_none_or(|tc| !tc.contains_key("thinkingLevel")),
+            "{merged:?}"
+        );
     }
 }

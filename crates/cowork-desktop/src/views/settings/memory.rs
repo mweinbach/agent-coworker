@@ -1362,8 +1362,6 @@ fn build_advanced_memory_section(
                         workspace_id: ws_save.clone(),
                         entry,
                     }));
-                    s.settings_ui.advanced_memory_dialog_open = false;
-                    s.settings_ui.advanced_memory_editing_slug = None;
                 })
                 .build(k),
             );
@@ -1853,8 +1851,6 @@ fn build_legacy_memory_section(
                         content,
                         mode: Some(mode.to_string()),
                     }));
-                    s.settings_ui.memory_dialog_open = false;
-                    s.settings_ui.memory_editing_key = None;
                 })
                 .build(k),
             );

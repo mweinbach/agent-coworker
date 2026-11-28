@@ -2033,6 +2033,8 @@ pub struct AppState {
     pub(crate) pending_task_create_rpc: Option<(u64, String)>,
     pub(crate) pending_agent_profile_upsert_rpc: Option<(u64, String)>,
     pub(crate) pending_mcp_upsert_rpc: Option<(u64, String)>,
+    pub(crate) pending_memory_upsert_rpc: Option<(u64, String)>,
+    pub(crate) pending_advanced_memory_upsert_rpc: Option<(u64, String)>,
     pub(crate) active_file_preview_request_id: Option<String>,
     pub(crate) pending_hydrate_threads_by_rpc_id: HashMap<u64, String>,
     pub(crate) pending_resume_threads_by_rpc_id: HashMap<u64, String>,
@@ -2199,6 +2201,8 @@ impl Default for AppState {
             pending_task_create_rpc: None,
             pending_agent_profile_upsert_rpc: None,
             pending_mcp_upsert_rpc: None,
+            pending_memory_upsert_rpc: None,
+            pending_advanced_memory_upsert_rpc: None,
             active_file_preview_request_id: None,
             pending_hydrate_threads_by_rpc_id: HashMap::new(),
             pending_resume_threads_by_rpc_id: HashMap::new(),
@@ -9927,7 +9931,11 @@ impl AppState {
                     content,
                     mode: normalized_mode,
                 };
-                let _ = self.send_ws_typed(&workspace_id, "cowork/memory/upsert", &params, false);
+                if let Some(request_id) =
+                    self.send_ws_typed(&workspace_id, "cowork/memory/upsert", &params, false)
+                {
+                    self.pending_memory_upsert_rpc = Some((request_id, workspace_id));
+                }
             }
             SettingsAction::DeleteScopedMemory {
                 workspace_id,
@@ -9956,12 +9964,13 @@ impl AppState {
                 if let Some(c) = cwd {
                     payload.entry("cwd".to_string()).or_insert(Value::String(c));
                 }
-                let _ = self.send_ws_request(
+                let request_id = self.send_ws_request(
                     &workspace_id,
                     "cowork/memory/advanced/upsert",
                     Value::Object(payload),
                     false,
                 );
+                self.pending_advanced_memory_upsert_rpc = Some((request_id, workspace_id));
             }
             SettingsAction::DeleteAdvancedMemory { workspace_id, id } => {
                 let cwd = self.workspace_path(&workspace_id);
@@ -12612,6 +12621,27 @@ impl AppState {
             }
         };
 
+        if method == "cowork/memory/upsert"
+            && self
+                .pending_memory_upsert_rpc
+                .as_ref()
+                .is_some_and(|(id, _)| *id == request_id)
+        {
+            self.pending_memory_upsert_rpc = None;
+            self.settings_ui.memory_dialog_open = false;
+            self.settings_ui.memory_editing_key = None;
+        }
+        if method == "cowork/memory/advanced/upsert"
+            && self
+                .pending_advanced_memory_upsert_rpc
+                .as_ref()
+                .is_some_and(|(id, _)| *id == request_id)
+        {
+            self.pending_advanced_memory_upsert_rpc = None;
+            self.settings_ui.advanced_memory_dialog_open = false;
+            self.settings_ui.advanced_memory_editing_slug = None;
+        }
+
         match method {
             "command/list" => {
                 if let Some(cmds) = payload
@@ -13448,6 +13478,22 @@ impl AppState {
         {
             self.pending_task_create_rpc = None;
             self.shell_ui.task_create_submitting = false;
+        }
+        if method == "cowork/memory/upsert"
+            && self
+                .pending_memory_upsert_rpc
+                .as_ref()
+                .is_some_and(|(id, _)| *id == request_id)
+        {
+            self.pending_memory_upsert_rpc = None;
+        }
+        if method == "cowork/memory/advanced/upsert"
+            && self
+                .pending_advanced_memory_upsert_rpc
+                .as_ref()
+                .is_some_and(|(id, _)| *id == request_id)
+        {
+            self.pending_advanced_memory_upsert_rpc = None;
         }
         if method == "cowork/agentProfiles/upsert"
             && self
@@ -27791,6 +27837,107 @@ mod tests {
             .expect("expected defaults/apply RPC for ws-b after clearing providerOptions");
         assert_eq!(b_clear_rpc["config"]["clearProviderOptions"], json!(true));
         assert!(b_clear_rpc["config"].get("providerOptions").is_none());
+    }
+
+    #[test]
+    fn memory_upserts_keep_drafts_open_until_acknowledged() {
+        let mut state = AppState::default();
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-a", "Project A", "/tmp/a", 1));
+        state.settings_ui.memory_dialog_open = true;
+        state.settings_ui.memory_content_edit = TextEdit::new("Remember this fact");
+        state.dispatch(Action::Settings(SettingsAction::UpsertScopedMemory {
+            workspace_id: "ws-a".to_string(),
+            scope: "workspace".to_string(),
+            id: Some("fact-a".to_string()),
+            content: "Remember this fact".to_string(),
+            mode: Some("create".to_string()),
+        }));
+        assert!(state.settings_ui.memory_dialog_open);
+        assert_eq!(
+            state.settings_ui.memory_content_edit.text,
+            "Remember this fact"
+        );
+        let scoped_rpc = state
+            .pending_memory_upsert_rpc
+            .as_ref()
+            .map(|(id, _)| *id)
+            .expect("scoped upsert should be correlated");
+
+        state.apply_ws_response(
+            "ws-a",
+            scoped_rpc,
+            "cowork/memory/upsert",
+            Err(crate::ws::WsRpcError {
+                code: -32000,
+                message: "duplicate memory title".to_string(),
+                data: None,
+            }),
+        );
+        assert!(state.settings_ui.memory_dialog_open);
+        assert_eq!(
+            state.settings_ui.memory_content_edit.text,
+            "Remember this fact"
+        );
+
+        state.dispatch(Action::Settings(SettingsAction::UpsertScopedMemory {
+            workspace_id: "ws-a".to_string(),
+            scope: "workspace".to_string(),
+            id: Some("fact-a".to_string()),
+            content: "Remember this fact".to_string(),
+            mode: Some("create".to_string()),
+        }));
+        let scoped_retry = state
+            .pending_memory_upsert_rpc
+            .as_ref()
+            .map(|(id, _)| *id)
+            .expect("scoped retry should be correlated");
+        state.apply_ws_response(
+            "ws-a",
+            scoped_retry,
+            "cowork/memory/upsert",
+            Ok(json!({ "ok": true })),
+        );
+        assert!(!state.settings_ui.memory_dialog_open);
+
+        state.settings_ui.advanced_memory_dialog_open = true;
+        state.settings_ui.advanced_memory_editing_slug = Some("guide-a".to_string());
+        state.dispatch(Action::Settings(SettingsAction::UpsertAdvancedMemory {
+            workspace_id: "ws-a".to_string(),
+            entry: json!({
+                "slug": "guide-a",
+                "name": "Guide A",
+                "description": "remembered guidance",
+                "type": "project",
+                "body": "Advanced body"
+            }),
+        }));
+        assert!(state.settings_ui.advanced_memory_dialog_open);
+        assert_eq!(
+            state.settings_ui.advanced_memory_editing_slug.as_deref(),
+            Some("guide-a")
+        );
+        let advanced_rpc = state
+            .pending_advanced_memory_upsert_rpc
+            .as_ref()
+            .map(|(id, _)| *id)
+            .expect("advanced upsert should be correlated");
+        state.apply_ws_response(
+            "ws-a",
+            advanced_rpc,
+            "cowork/memory/advanced/upsert",
+            Err(crate::ws::WsRpcError {
+                code: -32000,
+                message: "connection dropped".to_string(),
+                data: None,
+            }),
+        );
+        assert!(state.settings_ui.advanced_memory_dialog_open);
+        assert_eq!(
+            state.settings_ui.advanced_memory_editing_slug.as_deref(),
+            Some("guide-a")
+        );
     }
 
     #[test]

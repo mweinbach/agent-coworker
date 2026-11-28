@@ -807,8 +807,9 @@ static MXC_PROTECTED_PLACEHOLDER_REFS: std::sync::OnceLock<
     std::sync::Mutex<HashMap<String, usize>>,
 > = std::sync::OnceLock::new();
 
-/// Refcounted RAII guard for temporary empty `.git`/`.cowork` placeholder directories materialized
-/// so Windows PSEC enforces read-only carveouts even before those directories exist on disk.
+/// Refcounted RAII guard for temporary empty `.git`/`.cowork` and credential placeholder
+/// directories materialized so Windows PSEC enforcements remain in place even before those
+/// directories exist on disk.
 ///
 /// Only directories created by this guard are tracked, and a placeholder is only removed via
 /// `std::fs::remove_dir` (which refuses to delete non-empty directories) once the last concurrent
@@ -855,10 +856,179 @@ struct PreparedMxcFilesystemPaths {
     placeholders: MxcProtectedPlaceholders,
 }
 
+/// Tracks an existing placeholder directory when another live sandbox invocation created it.
+/// Returns `true` only when this invocation acquired its own refcount.
+#[cfg(any(windows, test))]
+fn track_registered_deny_placeholder(
+    dir: &Path,
+    registry: &std::sync::Mutex<HashMap<String, usize>>,
+    placeholders: &mut MxcProtectedPlaceholders,
+    materialized_keys: &mut HashSet<String>,
+) -> bool {
+    if !dir.is_dir() {
+        return false;
+    }
+    let key = normalize_mxc_policy_key(&dir.to_string_lossy());
+    if !materialized_keys.insert(key.clone()) {
+        return false;
+    }
+    let mut refs = registry.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(count) = refs.get_mut(&key) {
+        *count += 1;
+        placeholders.created.push((key, dir.to_path_buf()));
+        return true;
+    }
+    false
+}
+
+/// Acquires this invocation's refcounts for every already-materialized placeholder ancestor,
+/// nearest the filesystem root first so Drop unwinds children before parents.
+#[cfg(any(windows, test))]
+fn track_registered_deny_lineage(
+    path: &Path,
+    registry: &std::sync::Mutex<HashMap<String, usize>>,
+    placeholders: &mut MxcProtectedPlaceholders,
+    materialized_keys: &mut HashSet<String>,
+) {
+    let mut lineage = Vec::new();
+    let mut cursor = Some(path);
+    while let Some(dir) = cursor {
+        lineage.push(dir.to_path_buf());
+        cursor = dir.parent();
+    }
+    for dir in lineage.iter().rev() {
+        if !dir.is_dir() {
+            continue;
+        }
+        let key = normalize_mxc_policy_key(&dir.to_string_lossy());
+        let registered = registry
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains_key(&key);
+        if registered {
+            track_registered_deny_placeholder(dir, registry, placeholders, materialized_keys);
+        }
+    }
+}
+
+/// Creates each missing component of a credential deny directory and tracks only the components
+/// created by Cowork. Components that appear concurrently are left untouched; cleanup uses
+/// `remove_dir`, so a placeholder that received real credential material is never deleted.
+#[cfg(any(windows, test))]
+fn materialize_missing_deny_dir(
+    path: &Path,
+    registry: &std::sync::Mutex<HashMap<String, usize>>,
+    placeholders: &mut MxcProtectedPlaceholders,
+    materialized_keys: &mut HashSet<String>,
+) -> Result<(), String> {
+    track_registered_deny_lineage(path, registry, placeholders, materialized_keys);
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => {
+            if !path.exists() {
+                return Err(format!(
+                    "Credential deny path '{}' is a dangling symlink and cannot be safely enforced by Windows MXC.",
+                    path.to_string_lossy()
+                ));
+            }
+            return Ok(());
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => {
+            return Err(format!(
+                "Failed to inspect credential deny path '{}': {err}",
+                path.to_string_lossy()
+            ));
+        }
+    }
+
+    let mut missing = vec![path.to_path_buf()];
+    let mut parent = path.parent();
+    while let Some(dir) = parent {
+        match std::fs::symlink_metadata(dir) {
+            Ok(_) => {
+                if !dir.exists() {
+                    return Err(format!(
+                        "Credential deny path '{}' contains a dangling symlink and cannot be safely enforced by Windows MXC.",
+                        dir.to_string_lossy()
+                    ));
+                }
+                break;
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                missing.push(dir.to_path_buf());
+                parent = dir.parent();
+            }
+            Err(err) => {
+                return Err(format!(
+                    "Failed to inspect credential deny path '{}': {err}",
+                    dir.to_string_lossy()
+                ));
+            }
+        }
+    }
+
+    for dir in missing.iter().rev() {
+        let key = normalize_mxc_policy_key(&dir.to_string_lossy());
+        if !materialized_keys.insert(key.clone()) {
+            continue;
+        }
+        let mut refs = registry.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(count) = refs.get_mut(&key) {
+            if dir.is_dir() {
+                *count += 1;
+                placeholders.created.push((key, dir.clone()));
+                continue;
+            }
+            refs.remove(&key);
+        }
+
+        match std::fs::symlink_metadata(dir) {
+            Ok(_) => {
+                if !dir.exists() {
+                    return Err(format!(
+                        "Credential deny path '{}' is a dangling symlink and cannot be safely enforced by Windows MXC.",
+                        dir.to_string_lossy()
+                    ));
+                }
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                match std::fs::create_dir(dir) {
+                    Ok(()) => {
+                        refs.insert(key.clone(), 1);
+                        placeholders.created.push((key, dir.clone()));
+                    }
+                    Err(create_err) if create_err.kind() == std::io::ErrorKind::AlreadyExists => {
+                        if !dir.exists() {
+                            return Err(format!(
+                                "Credential deny path '{}' already exists as an inaccessible entry.",
+                                dir.to_string_lossy()
+                            ));
+                        }
+                    }
+                    Err(create_err) => {
+                        return Err(format!(
+                            "Failed to materialize credential deny path '{}': {create_err}",
+                            dir.to_string_lossy()
+                        ));
+                    }
+                }
+            }
+            Err(err) => {
+                return Err(format!(
+                    "Failed to inspect credential deny path '{}': {err}",
+                    dir.to_string_lossy()
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Resolves host-existing MXC policy paths while preserving missing protected `.git`/`.cowork`
-/// carveouts inside existing writable roots by materializing temporary empty placeholder
-/// directories for the lifetime of the container. Fails closed if a protected child under an
-/// existing writable root cannot be inspected or materialized.
+/// carveouts and credential deny roots by materializing temporary empty placeholder directories
+/// for the lifetime of the container. Fails closed if a protected child or credential root cannot
+/// be inspected or materialized; a missing deny must never become readable if credentials are
+/// created after the container starts.
 #[cfg(any(windows, test))]
 fn prepare_mxc_filesystem_paths(
     spec: &WindowsMxcRequestSpec,
@@ -938,14 +1108,32 @@ fn prepare_mxc_filesystem_paths(
         }
     }
 
+    if !spec.denied_paths.is_empty() {
+        let registry =
+            MXC_PROTECTED_PLACEHOLDER_REFS.get_or_init(|| std::sync::Mutex::new(HashMap::new()));
+        let mut denied_materialized_keys: HashSet<String> = HashSet::new();
+        for denied in &spec.denied_paths {
+            materialize_missing_deny_dir(
+                Path::new(denied),
+                registry,
+                &mut placeholders,
+                &mut denied_materialized_keys,
+            )?;
+        }
+    }
+
     let mut readonly_paths = filter_existing_mxc_paths(&spec.readonly_paths, Path::exists);
     let mut seen_ro: HashSet<String> = readonly_paths
         .iter()
         .map(|p| normalize_mxc_policy_key(p))
         .collect();
-    for (key, path) in &placeholders.created {
-        if seen_ro.insert(key.clone()) {
-            readonly_paths.push(path.to_string_lossy().into_owned());
+    for protected in &spec.protected_readonly_paths {
+        let path = Path::new(protected);
+        if path.exists() {
+            let key = normalize_mxc_policy_key(protected);
+            if seen_ro.insert(key) {
+                readonly_paths.push(protected.clone());
+            }
         }
     }
     let denied_paths = filter_existing_mxc_paths(&spec.denied_paths, Path::exists);
@@ -2016,7 +2204,8 @@ mod tests {
     }
 
     #[test]
-    fn prepare_mxc_filesystem_paths_materializes_missing_protected_children_and_cleans_up() {
+    fn prepare_mxc_filesystem_paths_materializes_missing_protected_and_credential_children_and_cleans_up()
+     {
         let tmp = tempfile::tempdir().expect("tempdir");
         let empty_ws = tmp.path().join("empty_ws");
         std::fs::create_dir_all(&empty_ws).unwrap();
@@ -2034,6 +2223,18 @@ mod tests {
             .into_owned();
         let existing_cowork = existing_ws.join(".cowork").to_string_lossy().into_owned();
         let existing_git_missing = existing_ws.join(".git").to_string_lossy().into_owned();
+        let missing_auth = empty_ws
+            .join(".cowork")
+            .join("auth")
+            .to_string_lossy()
+            .into_owned();
+        let home = tmp.path().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let missing_home_auth = home
+            .join(".cowork")
+            .join("auth")
+            .to_string_lossy()
+            .into_owned();
 
         let spec = WindowsMxcRequestSpec {
             command_line: "powershell.exe".to_owned(),
@@ -2061,12 +2262,7 @@ mod tests {
                 existing_cowork.clone(),
                 existing_git_missing.clone(),
             ],
-            denied_paths: vec![
-                tmp.path()
-                    .join("missing-creds")
-                    .to_string_lossy()
-                    .into_owned(),
-            ],
+            denied_paths: vec![missing_auth.clone(), missing_home_auth.clone()],
             allow_network: false,
             environment: Vec::new(),
         };
@@ -2079,14 +2275,19 @@ mod tests {
                 .readwrite_paths
                 .contains(&empty_ws.to_string_lossy().into_owned())
         );
-        assert!(first.denied_paths.is_empty());
+        assert!(first.denied_paths.contains(&missing_auth));
+        assert!(first.denied_paths.contains(&missing_home_auth));
         assert!(first.readonly_paths.contains(&missing_git));
         assert!(first.readonly_paths.contains(&missing_cowork));
         assert!(first.readonly_paths.contains(&existing_cowork));
         assert!(first.readonly_paths.contains(&existing_git_missing));
         assert!(!first.readonly_paths.contains(&missing_nested_git));
+        assert!(!first.readonly_paths.contains(&missing_auth));
+        assert!(!first.readonly_paths.contains(&missing_home_auth));
         assert!(empty_ws.join(".git").is_dir());
         assert!(empty_ws.join(".cowork").is_dir());
+        assert!(empty_ws.join(".cowork").join("auth").is_dir());
+        assert!(home.join(".cowork").join("auth").is_dir());
         assert!(!empty_ws.join("output").exists());
 
         // Second overlapping invocation increments refcount; dropping the first must keep
@@ -2099,6 +2300,11 @@ mod tests {
             empty_ws.join(".cowork").is_dir(),
             "overlapping sandbox must keep placeholder alive"
         );
+        assert!(
+            empty_ws.join(".cowork").join("auth").is_dir(),
+            "overlapping sandbox must keep credential deny placeholder alive"
+        );
+        assert!(home.join(".cowork").join("auth").is_dir());
         assert!(empty_ws.join(".git").is_dir());
 
         // Dropping the last invocation removes ONLY the empty placeholders we created and
@@ -2106,8 +2312,43 @@ mod tests {
         drop(second);
         assert!(!empty_ws.join(".git").exists());
         assert!(!empty_ws.join(".cowork").exists());
+        assert!(!home.join(".cowork").exists());
+        assert!(home.is_dir());
         assert!(!existing_ws.join(".git").exists());
         assert!(existing_ws.join(".cowork").join("config.json").is_file());
+    }
+
+    #[test]
+    fn prepare_mxc_filesystem_paths_preserves_credentials_created_during_container_lifetime() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let ws = tmp.path().join("ws");
+        std::fs::create_dir_all(&ws).unwrap();
+        let cowork_dir = ws.join(".cowork");
+        let auth_dir = cowork_dir.join("auth");
+        let auth_policy = auth_dir.to_string_lossy().into_owned();
+        let cowork_policy = cowork_dir.to_string_lossy().into_owned();
+
+        let spec = WindowsMxcRequestSpec {
+            command_line: "powershell.exe".to_owned(),
+            working_directory: ws.to_string_lossy().into_owned(),
+            readwrite_paths: vec![ws.to_string_lossy().into_owned()],
+            readonly_paths: vec![cowork_policy.clone()],
+            protected_readonly_paths: vec![cowork_policy],
+            denied_paths: vec![auth_policy.clone()],
+            allow_network: true,
+            environment: Vec::new(),
+        };
+
+        let prepared = prepare_mxc_filesystem_paths(&spec).expect("prepare succeeds");
+        assert!(prepared.denied_paths.contains(&auth_policy));
+        assert!(auth_dir.is_dir());
+
+        // Simulate a concurrent MCP login creating real credential material while the sandbox is
+        // still running. Placeholder cleanup must never delete that user data.
+        std::fs::write(auth_dir.join("mcp-credentials.json"), "{}").unwrap();
+        drop(prepared);
+        assert!(auth_dir.join("mcp-credentials.json").is_file());
+        assert!(auth_dir.is_dir());
     }
 
     #[cfg(unix)]

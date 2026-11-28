@@ -900,6 +900,26 @@ pub struct ComposerDraft {
     pub submission_error: Option<String>,
 }
 
+/// User-facing subset of the legacy Electron task-creation draft that the native task form can
+/// faithfully restore. Advanced work-graph fields remain server/legacy data; title, objective,
+/// workspace, and idempotency key are the fields the native form owns.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskCreationDraftState {
+    pub workspace_id: String,
+    pub title: String,
+    pub objective: String,
+    pub idempotency_key: String,
+}
+
+impl TaskCreationDraftState {
+    pub fn is_empty(&self) -> bool {
+        self.title.trim().is_empty()
+            && self.objective.trim().is_empty()
+            && self.idempotency_key.trim().is_empty()
+    }
+}
+
 /// LM Studio quick-start modal state used from model/chat flows.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1752,6 +1772,8 @@ pub struct PersistedDesktopState {
     pub product_analytics: Option<Value>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub composer_drafts: HashMap<String, ComposerDraft>,
+    #[serde(default)]
+    pub task_creation_draft: TaskCreationDraftState,
     /// When true, `merge_core_snapshot_into_document` preserves server-added on-disk workspaces
     /// not yet reconciled into the UI snapshot unless explicitly listed in `removed_workspace_ids`.
     #[serde(skip)]
@@ -5183,6 +5205,7 @@ impl AppState {
                 if let Some(dark) = system_dark {
                     self.system_dark_override = Some(dark);
                 }
+                let persisted_task_creation_draft = persisted.task_creation_draft.clone();
                 self.desktop_settings = persisted.settings;
                 self.onboarding = persisted.onboarding;
                 self.product_analytics = persisted.product_analytics;
@@ -5302,6 +5325,27 @@ impl AppState {
                 if let Some(draft) = legacy_unscoped {
                     let landing_key = self.landing_composer_key();
                     restored_drafts.entry(landing_key).or_insert(draft);
+                }
+                if !persisted_task_creation_draft.is_empty()
+                    && (persisted_task_creation_draft.workspace_id.is_empty()
+                        || self.active_workspace_id.as_deref()
+                            == Some(persisted_task_creation_draft.workspace_id.as_str()))
+                {
+                    self.shell_ui.task_create_open = true;
+                    self.shell_ui.task_create_title_edit =
+                        TextEdit::new(&persisted_task_creation_draft.title);
+                    self.shell_ui.task_create_objective_edit =
+                        TextEdit::new(&persisted_task_creation_draft.objective);
+                    if !persisted_task_creation_draft
+                        .idempotency_key
+                        .trim()
+                        .is_empty()
+                    {
+                        self.shell_ui.task_create_idempotency_key = Some((
+                            persisted_task_creation_draft.workspace_id.clone(),
+                            persisted_task_creation_draft.idempotency_key.clone(),
+                        ));
+                    }
                 }
                 self.composer_drafts = restored_drafts;
                 let active_composer_key = self.composer_key();
@@ -15978,6 +16022,37 @@ impl AppState {
         self.flush_persist_state_now();
     }
 
+    fn current_task_creation_draft(&self) -> TaskCreationDraftState {
+        let title = self.shell_ui.task_create_title_edit.text.trim().to_owned();
+        let objective = self
+            .shell_ui
+            .task_create_objective_edit
+            .text
+            .trim()
+            .to_owned();
+        let (workspace_id, idempotency_key) = self
+            .shell_ui
+            .task_create_idempotency_key
+            .clone()
+            .unwrap_or_else(|| {
+                (
+                    self.active_workspace_id.clone().unwrap_or_default(),
+                    String::new(),
+                )
+            });
+        let draft = TaskCreationDraftState {
+            workspace_id,
+            title,
+            objective,
+            idempotency_key,
+        };
+        if draft.is_empty() {
+            TaskCreationDraftState::default()
+        } else {
+            draft
+        }
+    }
+
     fn flush_persist_state_now(&mut self) {
         self.persist_dirty_since = None;
         let raw_active_tid = if self.window_mode == WindowMode::Main {
@@ -16007,6 +16082,7 @@ impl AppState {
             feature_flags: self.feature_flag_overrides.clone(),
             product_analytics: self.product_analytics.clone(),
             composer_drafts: self.persistable_composer_drafts(),
+            task_creation_draft: self.current_task_creation_draft(),
             preserve_unlisted_workspaces: true,
             removed_workspace_ids: self.pending_removed_workspace_ids.drain().collect(),
         };

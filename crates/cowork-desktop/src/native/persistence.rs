@@ -20,8 +20,8 @@ use super::validation::{assert_direction, assert_safe_id, assert_within_transcri
 use crate::actions::SidebarSectionKey;
 use crate::state::{
     ComposerDraft, DesktopSettings, OnboardingState, PersistedDesktopState,
-    PrivacyTelemetrySettings, ReasoningEffortValue, ThreadBusyPolicy, ThreadRecord, ThreadStatus,
-    WorkspaceRecord,
+    PrivacyTelemetrySettings, ReasoningEffortValue, TaskCreationDraftState, ThreadBusyPolicy,
+    ThreadRecord, ThreadStatus, WorkspaceRecord,
 };
 use crate::theme::{AccentPalette, ThemePreference};
 use cowork_protocol::{TurnAttachmentInputPart, TurnReference};
@@ -907,6 +907,34 @@ impl PersistenceService {
     }
 }
 
+fn bounded_draft_string(value: Option<&Value>, max_chars: usize) -> String {
+    value
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default()
+        .chars()
+        .take(max_chars)
+        .collect()
+}
+
+fn task_creation_draft_from_value(value: Option<&Value>) -> TaskCreationDraftState {
+    TaskCreationDraftState {
+        workspace_id: bounded_draft_string(value.and_then(|v| v.get("workspaceId")), 200),
+        title: bounded_draft_string(value.and_then(|v| v.get("title")), 200),
+        objective: bounded_draft_string(value.and_then(|v| v.get("objective")), 20_000),
+        idempotency_key: bounded_draft_string(value.and_then(|v| v.get("idempotencyKey")), 200),
+    }
+}
+
+fn task_creation_draft_to_value(draft: &TaskCreationDraftState) -> Value {
+    json!({
+        "workspaceId": draft.workspace_id,
+        "title": draft.title,
+        "objective": draft.objective,
+        "idempotencyKey": draft.idempotency_key,
+    })
+}
+
 /// Converts a normalized `state.json` document into `crate::state::PersistedDesktopState`.
 pub fn core_state_from_document(doc: &Value) -> PersistedDesktopState {
     let mut out = PersistedDesktopState::default();
@@ -915,6 +943,10 @@ pub fn core_state_from_document(doc: &Value) -> PersistedDesktopState {
     };
 
     out.settings = core_desktop_settings_from_document(obj);
+    out.task_creation_draft = task_creation_draft_from_value(
+        obj.get("creationDrafts")
+            .and_then(|drafts| drafts.get("task")),
+    );
 
     if let Some(arr) = obj.get("workspaces").and_then(Value::as_array) {
         out.workspaces = arr.iter().filter_map(core_workspace_from_value).collect();
@@ -1430,6 +1462,17 @@ pub fn merge_core_snapshot_into_document(base: Value, snapshot: &PersistedDeskto
     }
 
     sync_composer_drafts_into_document(&mut doc, snapshot);
+
+    let mut creation_drafts = doc
+        .get("creationDrafts")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    creation_drafts.insert(
+        "task".to_string(),
+        task_creation_draft_to_value(&snapshot.task_creation_draft),
+    );
+    doc.insert("creationDrafts".to_string(), Value::Object(creation_drafts));
 
     Value::Object(doc)
 }
@@ -2834,7 +2877,15 @@ mod tests {
                 }
             ],
             "activeWorkspaceId": "ws-valid",
-            "creationDrafts": { "research": { "prompt": "keep me" } }
+            "creationDrafts": {
+                "research": { "prompt": "keep me" },
+                "task": {
+                    "workspaceId": "ws-valid",
+                    "title": "Draft migration audit",
+                    "objective": "Restore the unfinished brief",
+                    "idempotencyKey": "draft-key-1"
+                }
+            }
         });
 
         let service = PersistenceService::new(user_data, None, true, None)
@@ -2865,6 +2916,16 @@ mod tests {
         assert_eq!(
             after_core_save["creationDrafts"]["research"]["prompt"],
             "keep me"
+        );
+        assert_eq!(core.task_creation_draft.title, "Draft migration audit");
+        assert_eq!(core.task_creation_draft.workspace_id, "ws-valid");
+        assert_eq!(
+            after_core_save["creationDrafts"]["task"]["objective"],
+            "Restore the unfinished brief"
+        );
+        assert_eq!(
+            after_core_save["creationDrafts"]["task"]["idempotencyKey"],
+            "draft-key-1"
         );
     }
 

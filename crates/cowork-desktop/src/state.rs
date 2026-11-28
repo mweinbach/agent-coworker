@@ -1992,6 +1992,8 @@ pub struct AppState {
     pub shell_ui: crate::views::shell::ShellUiState,
     pub(crate) pending_draft_threads_by_rpc_id: HashMap<u64, String>,
     pub(crate) pending_draft_config_by_rpc_id: HashMap<u64, String>,
+    pub(crate) pending_reasoning_effort_config_by_rpc_id:
+        HashMap<u64, (String, Option<String>, String)>,
     pub(crate) pending_picker_composer_by_request: HashMap<String, String>,
     pub native_ready: bool,
     pub is_packaged: bool,
@@ -2167,6 +2169,7 @@ impl Default for AppState {
             shell_ui: crate::views::shell::ShellUiState::default(),
             pending_draft_threads_by_rpc_id: HashMap::new(),
             pending_draft_config_by_rpc_id: HashMap::new(),
+            pending_reasoning_effort_config_by_rpc_id: HashMap::new(),
             pending_picker_composer_by_request: HashMap::new(),
             native_ready: false,
             is_packaged: false,
@@ -7647,15 +7650,31 @@ impl AppState {
                 effort,
             } => {
                 let mut changed = false;
+                let mut previous_effort = None;
                 if let Some(t) = self.threads.iter_mut().find(|t| t.id == thread_id) {
+                    previous_effort = t.reasoning_effort.clone();
                     t.reasoning_effort = Some(effort.as_str().to_string());
                     changed = !t.draft;
                     self.bump_threads_rev();
                 }
                 if let Some(ws_id) = self.workspace_for_thread(&thread_id) {
                     let config = build_reasoning_effort_config_patch(&provider, effort.as_str());
-                    let params = SessionConfigSetParams { thread_id, config };
-                    let _ = self.send_ws_typed(&ws_id, "cowork/session/config/set", &params, false);
+                    let params = SessionConfigSetParams {
+                        thread_id: thread_id.clone(),
+                        config,
+                    };
+                    if let Some(rpc_id) =
+                        self.send_ws_typed(&ws_id, "cowork/session/config/set", &params, false)
+                    {
+                        self.pending_reasoning_effort_config_by_rpc_id.insert(
+                            rpc_id,
+                            (
+                                thread_id.clone(),
+                                previous_effort,
+                                effort.as_str().to_string(),
+                            ),
+                        );
+                    }
                 }
                 if changed && !self.scene_mode {
                     self.persist_state();
@@ -12827,6 +12846,8 @@ impl AppState {
             }
             "cowork/session/config/set" => {
                 let target = payload.get("event").unwrap_or(&payload);
+                self.pending_reasoning_effort_config_by_rpc_id
+                    .remove(&request_id);
                 self.apply_session_config_event(workspace_id, target);
                 if let Some(tid) = self.pending_draft_config_by_rpc_id.remove(&request_id) {
                     self.flush_next_pending_message(workspace_id, &tid);
@@ -13441,6 +13462,34 @@ impl AppState {
                     message: msg,
                     status: ComposerSubmissionStatus::Failed(err.message.clone()),
                 });
+            }
+        }
+        if method == "cowork/session/config/set"
+            && let Some((tid, previous_effort, requested_effort)) = self
+                .pending_reasoning_effort_config_by_rpc_id
+                .remove(&request_id)
+        {
+            let mut restored = false;
+            if let Some(t) = self.threads.iter_mut().find(|t| t.id == tid)
+                && t.reasoning_effort.as_deref() == Some(requested_effort.as_str())
+            {
+                t.reasoning_effort = previous_effort.clone();
+                self.bump_threads_rev();
+                restored = true;
+            }
+            let requested_value =
+                crate::views::chat::model::parse_reasoning_effort(Some(requested_effort.as_str()));
+            if let Some(requested_value) = requested_value
+                && let Some(draft) = self.composer_drafts.get_mut(&tid)
+                && draft.reasoning_effort == Some(requested_value)
+            {
+                draft.reasoning_effort = previous_effort.as_deref().and_then(|effort| {
+                    crate::views::chat::model::parse_reasoning_effort(Some(effort))
+                });
+                restored = true;
+            }
+            if restored && !self.scene_mode {
+                self.persist_state();
             }
         }
         if method == "cowork/session/config/set"
@@ -19964,6 +20013,62 @@ mod tests {
             &interactions[0],
             ChatInteraction::FileChangeApproval { .. }
         ));
+    }
+
+    #[test]
+    fn rejected_thread_reasoning_effort_restores_thread_and_composer_draft() {
+        let mut state = AppState::default();
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-1", "Demo", "/tmp/demo", 1));
+        state.threads.push(ThreadRecord {
+            id: "th-1".to_string(),
+            workspace_id: "ws-1".to_string(),
+            reasoning_effort: Some("medium".to_string()),
+            ..Default::default()
+        });
+        state
+            .composer_drafts
+            .entry("th-1".to_string())
+            .or_default()
+            .reasoning_effort = Some(ReasoningEffortValue::Medium);
+
+        state.dispatch(Action::Chat(ChatAction::SetThreadReasoningEffort {
+            thread_id: "th-1".to_string(),
+            provider: "openai".to_string(),
+            effort: ReasoningEffortValue::High,
+        }));
+        let request_id = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .find_map(|cmd| match cmd {
+                WsCommand::SendRequest {
+                    method, request_id, ..
+                } if method == "cowork/session/config/set" => Some(*request_id),
+                _ => None,
+            })
+            .expect("config/set request");
+        assert_eq!(state.threads[0].reasoning_effort.as_deref(), Some("high"));
+
+        state.apply_ws_response(
+            "ws-1",
+            request_id,
+            "cowork/session/config/set",
+            Err(WsRpcError {
+                code: -32000,
+                message: "config write failed".to_string(),
+                data: None,
+            }),
+        );
+        assert_eq!(state.threads[0].reasoning_effort.as_deref(), Some("medium"));
+        assert_eq!(
+            state
+                .composer_drafts
+                .get("th-1")
+                .and_then(|d| d.reasoning_effort),
+            Some(ReasoningEffortValue::Medium)
+        );
     }
 
     #[test]

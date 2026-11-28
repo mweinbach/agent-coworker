@@ -1762,6 +1762,10 @@ async fn unsandboxed_native_shell_enforces_strict_command_allowlist_and_blocks_c
         )
         .unwrap();
         std::fs::write(h.ws.join("paths.txt"), "README.md\n").unwrap();
+        std::fs::create_dir_all(h.ws.join("preout")).unwrap();
+        std::fs::write(h.ws.join("preout/--pre=sh"), "not a shell script\n").unwrap();
+        std::fs::write(h.ws.join("preout/a"), "match\n").unwrap();
+        std::fs::write(h.ws.join("preout/b"), "match\n").unwrap();
         std::os::unix::fs::symlink(&cred_file, h.ws.join("credential-link")).unwrap();
 
         let blocked = [
@@ -1799,6 +1803,7 @@ async fn unsandboxed_native_shell_enforces_strict_command_allowlist_and_blocks_c
             "git diff",
             "grep --exclude-from=paths.txt main safe",
             "rg --pre=cat main safe",
+            "cd preout && rg *",
             "rg --hostname-bin=./payload.sh main safe",
             "rg --files-from=paths.txt main",
             "fd -x cat . safe",

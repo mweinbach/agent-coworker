@@ -1948,6 +1948,14 @@ fn collect_globstar_dirs(
     Ok(())
 }
 
+fn glob_first_component_can_inject_option(normalized: &str, cwd_relative: bool) -> bool {
+    if !cwd_relative {
+        return false;
+    }
+    let first = normalized.split('/').next().unwrap_or(normalized);
+    matches!(first.chars().next(), Some('*' | '?' | '['))
+}
+
 fn validate_shell_glob_operand(
     raw: &str,
     base_dir: &Path,
@@ -1963,6 +1971,7 @@ fn validate_shell_glob_operand(
     let normalized = normalized_owned.as_str();
     #[cfg(not(windows))]
     let normalized = raw;
+    let mut cwd_relative_expansion = false;
     let (prefix_dir, rest_segments): (PathBuf, Vec<&str>) =
         if let Some(rest) = normalized.strip_prefix("~/") {
             (
@@ -1993,9 +2002,12 @@ fn validate_shell_glob_operand(
             let rest = normalized[2..].trim_start_matches('/');
             (PathBuf::from(drive), rest.split('/').collect())
         } else {
+            cwd_relative_expansion = true;
             (base_dir.to_path_buf(), normalized.split('/').collect())
         };
 
+    let first_component_can_inject_option =
+        glob_first_component_can_inject_option(normalized, cwd_relative_expansion);
     let segments: Vec<&str> = rest_segments
         .into_iter()
         .filter(|seg| !seg.is_empty() && *seg != ".")
@@ -2038,6 +2050,20 @@ fn validate_shell_glob_operand(
 
         if seg == "**" {
             for dir in &current_dirs {
+                if idx == 0 && first_component_can_inject_option {
+                    let canonical_dir =
+                        assert_read_path_allowed(dir, ctx).map_err(|e| e.to_string())?;
+                    if let Ok(entries) = std::fs::read_dir(&canonical_dir) {
+                        for entry in entries.flatten() {
+                            if entry.file_name().to_string_lossy().starts_with('-') {
+                                return Err(format!(
+                                    "Native shell glob '{raw}' can expand to option-like argument '{}'; prefix the pattern with './' or use an explicit '--' operand.",
+                                    entry.file_name().to_string_lossy()
+                                ));
+                            }
+                        }
+                    }
+                }
                 collect_globstar_dirs(
                     dir,
                     ctx,
@@ -2076,6 +2102,11 @@ fn validate_shell_glob_operand(
                     let name_str = file_name.to_string_lossy();
                     if !glob_name_matches(seg, &name_str) {
                         continue;
+                    }
+                    if idx == 0 && first_component_can_inject_option && name_str.starts_with('-') {
+                        return Err(format!(
+                            "Native shell glob '{raw}' can expand to option-like argument '{name_str}'; prefix the pattern with './' or use an explicit '--' operand."
+                        ));
                     }
                     visited += 1;
                     if visited > MAX_GLOB_EXPANSIONS {

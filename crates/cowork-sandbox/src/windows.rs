@@ -1372,18 +1372,24 @@ mod native_mxc {
         });
 
         enum WaitOutcome {
-            Completed(Result<Result<WaitResult, String>, tokio::task::JoinError>),
+            Completed,
             TimedOut,
             Cancelled,
             Overflowed,
         }
 
+        let completed_wait_result = Arc::new(Mutex::new(None));
         let wait_outcome = {
-            let completion_fut = async {
-                let res = (&mut wait_task).await;
-                join_reader(&mut out_task).await;
-                join_reader(&mut err_task).await;
-                res
+            let completion_fut = {
+                let completed_wait_result = Arc::clone(&completed_wait_result);
+                async {
+                    let res = (&mut wait_task).await;
+                    *completed_wait_result
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner()) = Some(res);
+                    join_reader(&mut out_task).await;
+                    join_reader(&mut err_task).await;
+                }
             };
             tokio::pin!(completion_fut);
 
@@ -1414,7 +1420,7 @@ mod native_mxc {
             tokio::pin!(cancel_fut);
 
             tokio::select! {
-                res = &mut completion_fut => WaitOutcome::Completed(res),
+                () = &mut completion_fut => WaitOutcome::Completed,
                 () = &mut timeout_fut => WaitOutcome::TimedOut,
                 () = &mut cancel_fut => WaitOutcome::Cancelled,
                 () = overflow.notify.notified() => WaitOutcome::Overflowed,
@@ -1423,7 +1429,7 @@ mod native_mxc {
 
         let wait_outcome = if overflow.tripped() && !matches!(wait_outcome, WaitOutcome::Overflowed)
         {
-            if matches!(wait_outcome, WaitOutcome::Completed(_)) {
+            if matches!(wait_outcome, WaitOutcome::Completed) {
                 abandon_guard.disarm();
                 return finish_outcome(
                     &out_buf,
@@ -1439,8 +1445,14 @@ mod native_mxc {
         };
 
         let (exit_code, error_code) = match wait_outcome {
-            WaitOutcome::Completed(res) => {
+            WaitOutcome::Completed => {
                 abandon_guard.disarm();
+                let res = {
+                    let mut guard = completed_wait_result
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
+                    guard.take().expect("completed MXC wait result")
+                };
                 match res {
                     Ok(Ok(WaitResult::Exited(code))) => (code, None),
                     Ok(Ok(WaitResult::TimedOut)) => (124, Some(SandboxErrorCode::Timeout)),
@@ -1462,7 +1474,13 @@ mod native_mxc {
                     _ => STOP_CANCEL,
                 };
                 stop_signal.store(sig, Ordering::SeqCst);
-                let _ = (&mut wait_task).await;
+                let wait_already_finished = completed_wait_result
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .is_some();
+                if !wait_already_finished {
+                    let _ = (&mut wait_task).await;
+                }
                 abandon_guard.disarm();
 
                 let drained = tokio::time::timeout(KILLED_PIPE_DRAIN_GRACE, async {

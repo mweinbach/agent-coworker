@@ -489,15 +489,14 @@ thread_local! {
 }
 
 fn cached_canvas_text(slot: usize, text: &str) -> (u64, Rc<str>) {
-    let hash = hash_text(text);
     CANVAS_TEXT_CACHE.with(|cache| {
         let mut slots = cache.borrow_mut();
         if let Some((cached_hash, cached_rc)) = slots[slot].as_ref()
-            && *cached_hash == hash
             && cached_rc.as_ref() == text
         {
-            return (hash, Rc::clone(cached_rc));
+            return (*cached_hash, Rc::clone(cached_rc));
         }
+        let hash = hash_text(text);
         let rc: Rc<str> = Rc::from(text);
         slots[slot] = Some((hash, Rc::clone(&rc)));
         (hash, rc)
@@ -1822,6 +1821,7 @@ fn estimate_canvas_block_height(text: &str, ranges: &[(usize, usize)]) -> f32 {
 
 struct CanvasDocBlocks {
     live_text: Rc<str>,
+    live_text_hash: u64,
     ranges: CanvasBlockRanges,
     session_key: String,
     workspace_id: String,
@@ -1865,8 +1865,10 @@ impl CanvasDocBlocks {
         let mut h = DefaultHasher::new();
         (
             self.shared_ver,
+            self.live_text_hash,
             idx,
-            block_src,
+            start,
+            end,
             scoped_copied,
             math_gen,
             img_gen,
@@ -1947,6 +1949,7 @@ fn build_document_tab(
             let session_key_for_keys = doc.session_key.clone();
             let blocks = Rc::new(CanvasDocBlocks {
                 live_text: Rc::clone(&inputs.live_text_rc),
+                live_text_hash: inputs.live_text_hash,
                 ranges,
                 session_key: doc.session_key.clone(),
                 workspace_id: doc.workspace_id.clone(),

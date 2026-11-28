@@ -37,6 +37,7 @@ pub mod window_lifecycle;
 pub mod window_state;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
@@ -1384,6 +1385,7 @@ impl NativeWorkerContext {
                 workspace_root,
                 uploads_directory,
                 source_path,
+                upload_token,
                 filename,
                 mime_type,
             } => {
@@ -1405,9 +1407,12 @@ impl NativeWorkerContext {
                             (guard.approved_roots(), ws)
                         };
                         let mut reg = uploads.lock().unwrap_or_else(|e| e.into_inner());
-                        let token = reg
-                            .authorize_file(&source_path)
-                            .map_err(|err| err.to_string())?;
+                        let token = match upload_token {
+                            Some(token) => token,
+                            None => reg
+                                .authorize_file(&source_path)
+                                .map_err(|err| err.to_string())?,
+                        };
                         let uploads_override = uploads_directory
                             .as_deref()
                             .map(str::trim)
@@ -1453,15 +1458,27 @@ impl NativeWorkerContext {
             NativeCommand::ReadComposerInlineAttachment {
                 key,
                 path,
+                upload_token,
                 filename,
                 mime_type,
             } => {
+                let uploads = self.uploads.clone();
                 let emit = self.emit.clone();
                 tokio::spawn(async move {
                     let filename_for_task = filename.clone();
                     let mime_for_task = mime_type.clone();
                     let outcome = tokio::task::spawn_blocking(
                         move || -> Result<ComposerInlineReadOutcome, String> {
+                            let token = match upload_token {
+                                Some(token) => token,
+                                None => {
+                                    let mut reg =
+                                        uploads.lock().unwrap_or_else(|e| e.into_inner());
+                                    reg.authorize_file(&path).map_err(|err| {
+                                        format!("Unable to authorize \"{filename_for_task}\": {err}")
+                                    })?
+                                }
+                            };
                             let meta = std::fs::symlink_metadata(&path).map_err(|err| {
                                 format!("Unable to read \"{filename_for_task}\": {err}")
                             })?;
@@ -1473,9 +1490,18 @@ impl NativeWorkerContext {
                             if meta.len() > MAX_COMPOSER_INLINE_BYTES {
                                 return Ok(ComposerInlineReadOutcome::ExceedsInlineLimit {
                                     source_path: path,
+                                    upload_token: Some(token),
                                 });
                             }
-                            let bytes = std::fs::read(&path).map_err(|err| {
+                            let mut file = {
+                                let mut reg =
+                                    uploads.lock().unwrap_or_else(|e| e.into_inner());
+                                reg.consume_and_open(&token, &path).map_err(|err| {
+                                    format!("Unable to read \"{filename_for_task}\": {err}")
+                                })?
+                            };
+                            let mut bytes = Vec::new();
+                            file.read_to_end(&mut bytes).map_err(|err| {
                                 format!("Unable to read \"{filename_for_task}\": {err}")
                             })?;
                             let content_base64 =
@@ -2178,7 +2204,7 @@ fn authorize_picked_files(
     candidates: Vec<PathBuf>,
     uploads: &Arc<Mutex<AuthorizedUploadRegistry>>,
     logger: &Arc<LocalLogger>,
-) -> Vec<PathBuf> {
+) -> Vec<(PathBuf, String)> {
     let mut reg = uploads.lock().unwrap_or_else(|e| e.into_inner());
     let mut authorized = Vec::with_capacity(candidates.len());
     for path in candidates {
@@ -2186,7 +2212,7 @@ fn authorize_picked_files(
         // (no IPC upload boundary), so `authorize_file` enforces regular-file, non-symlink,
         // and 100 MiB validation before forwarding each selected path.
         match reg.authorize_file(&path) {
-            Ok(_token) => authorized.push(path),
+            Ok(token) => authorized.push((path, token)),
             Err(err) => {
                 let meta = json!({ "error": err.to_string() });
                 logger.warn(

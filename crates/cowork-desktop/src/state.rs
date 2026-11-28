@@ -5073,11 +5073,18 @@ impl AppState {
     }
 
     fn ingest_composer_paths(&mut self, key: &str, paths: Vec<PathBuf>) {
+        self.ingest_composer_path_sources(
+            key,
+            paths.into_iter().map(|path| (path, None)).collect(),
+        );
+    }
+
+    fn ingest_composer_path_sources(&mut self, key: &str, paths: Vec<(PathBuf, Option<String>)>) {
         const MAX_INLINE_BYTES: u64 = 10 * 1024 * 1024;
         let resolved_key = self.resolve_composer_draft_key(key);
         let key = resolved_key.as_str();
         let use_async_reader = self.services.native_tx.is_some();
-        for path in paths {
+        for (path, upload_token) in paths {
             let filename = path
                 .file_name()
                 .and_then(|n| n.to_str())
@@ -5092,6 +5099,7 @@ impl AppState {
                 self.send_native(NativeCommand::ReadComposerInlineAttachment {
                     key: key.to_string(),
                     path,
+                    upload_token,
                     filename,
                     mime_type,
                 });
@@ -5149,6 +5157,7 @@ impl AppState {
                 workspace_root,
                 uploads_directory,
                 source_path: path,
+                upload_token,
                 filename,
                 mime_type,
             });
@@ -5375,7 +5384,13 @@ impl AppState {
             StoreEvent::FolderPicked { path: None, .. } => {}
             StoreEvent::FilesPicked { request_id, paths } => {
                 if let Some(key) = self.pending_picker_composer_by_request.remove(&request_id) {
-                    self.ingest_composer_paths(&key, paths);
+                    self.ingest_composer_path_sources(
+                        &key,
+                        paths
+                            .into_iter()
+                            .map(|(path, token)| (path, Some(token)))
+                            .collect(),
+                    );
                 }
             }
             StoreEvent::ComposerUploadStaged {
@@ -5446,7 +5461,10 @@ impl AppState {
                             mime_type,
                         });
                     }
-                    Ok(ComposerInlineReadOutcome::ExceedsInlineLimit { source_path }) => {
+                    Ok(ComposerInlineReadOutcome::ExceedsInlineLimit {
+                        source_path,
+                        upload_token,
+                    }) => {
                         let Some((workspace_id, workspace_root, uploads_directory)) =
                             self.resolve_composer_upload_target(&key)
                         else {
@@ -5468,6 +5486,7 @@ impl AppState {
                             workspace_root,
                             uploads_directory,
                             source_path,
+                            upload_token,
                             filename,
                             mime_type,
                         });
@@ -24744,6 +24763,71 @@ mod tests {
             .expect("cowork/session/defaults/apply request");
         assert_eq!(params["provider"], json!("openai"));
         assert_eq!(params["model"], json!("gpt-5.4"));
+    }
+
+    #[test]
+    fn picked_file_authorization_token_flows_through_inline_read_and_staging() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws_dir = tmp.path().join("workspace");
+        std::fs::create_dir_all(&ws_dir).unwrap();
+        let picked = tmp.path().join("picked.txt");
+        std::fs::write(&picked, "picked").unwrap();
+
+        let mut state = AppState::default();
+        state.workspaces.push(WorkspaceRecord::new(
+            "ws-1",
+            "Workspace",
+            ws_dir.to_string_lossy().as_ref(),
+            1,
+        ));
+        state.active_workspace_id = Some("ws-1".to_string());
+        state.landing_workspace_id = Some("ws-1".to_string());
+        let (native_tx, mut native_rx) = mpsc::unbounded_channel();
+        state.services.native_tx = Some(native_tx);
+        state
+            .pending_picker_composer_by_request
+            .insert("pick-1".to_string(), "__new__".to_string());
+
+        state.apply_store_event(StoreEvent::FilesPicked {
+            request_id: "pick-1".to_string(),
+            paths: vec![(picked.clone(), "upload-token-1".to_string())],
+        });
+        let read_cmd = native_rx.try_recv().expect("inline read command");
+        let read_key = match read_cmd {
+            NativeCommand::ReadComposerInlineAttachment {
+                key,
+                path,
+                upload_token,
+                ..
+            } => {
+                assert_eq!(path, picked);
+                assert_eq!(upload_token.as_deref(), Some("upload-token-1"));
+                key
+            }
+            other => panic!("expected inline read command, got {other:?}"),
+        };
+
+        state.apply_store_event(StoreEvent::ComposerInlineAttachmentLoaded {
+            key: read_key,
+            filename: "picked.txt".to_string(),
+            mime_type: "text/plain".to_string(),
+            result: Ok(ComposerInlineReadOutcome::ExceedsInlineLimit {
+                source_path: picked.clone(),
+                upload_token: Some("upload-token-1".to_string()),
+            }),
+        });
+        let stage_cmd = native_rx.try_recv().expect("stage command");
+        match stage_cmd {
+            NativeCommand::StageComposerUpload {
+                source_path,
+                upload_token,
+                ..
+            } => {
+                assert_eq!(source_path, picked);
+                assert_eq!(upload_token.as_deref(), Some("upload-token-1"));
+            }
+            other => panic!("expected stage command, got {other:?}"),
+        }
     }
 
     #[test]

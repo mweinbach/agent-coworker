@@ -815,7 +815,10 @@ pub struct ComposerInlineAttachmentPayload {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ComposerInlineReadOutcome {
     Inline(ComposerInlineAttachmentPayload),
-    ExceedsInlineLimit { source_path: PathBuf },
+    ExceedsInlineLimit {
+        source_path: PathBuf,
+        upload_token: Option<String>,
+    },
 }
 
 /// Wire/disk shape matching a JSONL line in local thread transcripts (`TranscriptEvent`).
@@ -855,12 +858,14 @@ pub enum NativeCommand {
         workspace_root: String,
         uploads_directory: Option<String>,
         source_path: PathBuf,
+        upload_token: Option<String>,
         filename: String,
         mime_type: String,
     },
     ReadComposerInlineAttachment {
         key: String,
         path: PathBuf,
+        upload_token: Option<String>,
         filename: String,
         mime_type: String,
     },
@@ -969,7 +974,7 @@ pub enum StoreEvent {
     },
     FilesPicked {
         request_id: String,
-        paths: Vec<PathBuf>,
+        paths: Vec<(PathBuf, String)>,
     },
     ComposerUploadStaged {
         key: String,

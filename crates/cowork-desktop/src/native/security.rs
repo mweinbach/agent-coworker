@@ -623,6 +623,29 @@ mod tests {
         assert!(!outside.join("nonexistent-target").exists());
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn upload_registry_rejects_parent_directory_replacement() {
+        let temp = tempfile::tempdir().unwrap();
+        let parent = temp.path().join("picked-dir");
+        let outside = temp.path().join("outside");
+        fs::create_dir_all(&parent).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        let file = parent.join("auth.json");
+        fs::write(&file, "picked").unwrap();
+        fs::write(outside.join("auth.json"), "replacement-credential").unwrap();
+
+        let mut registry = AuthorizedUploadRegistry::new();
+        let token = registry.authorize_file(&file).unwrap();
+        fs::rename(&parent, temp.path().join("moved-picked-dir")).unwrap();
+        std::os::unix::fs::symlink(&outside, &parent).unwrap();
+
+        assert!(
+            registry.consume_and_open(&token, &file).is_err(),
+            "a parent-directory replacement must not inherit the original picker authorization"
+        );
+    }
+
     #[test]
     fn upload_registry_is_one_time_and_detects_modifications() {
         let temp = tempfile::tempdir().unwrap();

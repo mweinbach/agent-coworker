@@ -2068,6 +2068,11 @@ fn validate_shell_glob_operand(
         .iter()
         .position(|seg| segment_has_glob_meta(seg))
         .unwrap_or(segments.len());
+    if segments[..first_glob_idx].contains(&"..") {
+        return Err(format!(
+            "Native shell glob '{raw}' uses parent traversal before a wildcard; use an explicit physical path instead."
+        ));
+    }
     let mut start_dir = prefix_dir;
     for literal in &segments[..first_glob_idx] {
         start_dir = normalize_lexical_path(&start_dir.join(literal));
@@ -3934,6 +3939,12 @@ fn validate_native_shell_command_text(
                     if text == "-" {
                         return Err(
                             "Dynamic 'cd -' is blocked in unsandboxed native shell execution."
+                                .to_owned(),
+                        );
+                    }
+                    if text.split('/').any(|component| component == "..") {
+                        return Err(
+                            "Parent-directory 'cd ..' navigation is blocked in unsandboxed native shell execution because logical symlink-aware cwd semantics cannot be validated safely."
                                 .to_owned(),
                         );
                     }

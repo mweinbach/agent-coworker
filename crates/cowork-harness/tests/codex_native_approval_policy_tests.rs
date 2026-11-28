@@ -1169,6 +1169,7 @@ async fn claude_native_bash_authorizes_relative_symlink_and_glob_operands() {
         std::fs::create_dir_all(h.ws.join("nested/dir")).unwrap();
         std::os::unix::fs::symlink(h.ws.join("nested/dir"), h.ws.join("safe")).unwrap();
         std::os::unix::fs::symlink(&cred_file, h.ws.join("nested/credential-link")).unwrap();
+        std::os::unix::fs::symlink(&cred_file, h.ws.join("nested/nestedcred-link")).unwrap();
         std::os::unix::fs::symlink(&cred_file, h.ws.join("credential-a")).unwrap();
         std::os::unix::fs::symlink(&cred_file, h.ws.join("credential-link")).unwrap();
         std::os::unix::fs::symlink(&cred_file, h.ws.join("[credential-link")).unwrap();
@@ -1199,6 +1200,8 @@ async fn claude_native_bash_authorizes_relative_symlink_and_glob_operands() {
             "cat -- -credential-link",
             "cat ./credential-link",
             "cat safe/../credential-link",
+            "cat safe/../credential*",
+            "cat safe/../nestedcred*",
             "cat credential-[]a]",
             "cat src/secret-link",
             "cd src && cat secret-link",
@@ -1536,8 +1539,11 @@ async fn unsandboxed_native_shell_restores_parent_cwd_after_subshell_and_control
         std::fs::write(h.ws.join("safe/ok.rs"), "fn main() {}\n").unwrap();
         std::fs::write(h.ws.join("README.md"), "# demo\n").unwrap();
         std::os::unix::fs::symlink(&cred_file, h.ws.join("credential-link")).unwrap();
+        std::fs::create_dir_all(h.ws.join("nested/dir")).unwrap();
+        std::os::unix::fs::symlink(h.ws.join("nested/dir"), h.ws.join("safe-link")).unwrap();
 
         let blocked = [
+            "cd safe-link; cd ..; cat credential-link",
             "(cd safe); cat credential-link",
             "((cd safe)); cat credential-link",
             "(cd safe && cat ok.rs); cat credential-link",

@@ -13,7 +13,7 @@ use crate::state::{AppState, FeedItem, ThreadAgentSummary};
 use crate::theme::ThemeTokens;
 
 use super::attachments::shared_waker_image_cache;
-use super::components::{StatusPillTone, status_pill};
+use super::components::{StatusPresentation, status_pill_from, status_presentation};
 use super::feed::{ChatFeedProps, FeedSource, build_chat_feed, compute_feed_surface_version};
 use super::icons;
 use super::model::is_active_child_agent;
@@ -75,7 +75,7 @@ pub fn build_agent_run_drawer(
     };
 
     let build_drawer = || {
-        let (status_label, status_tone) = resolve_agent_status(agent, is_active);
+        let status = resolve_agent_status(agent, is_active);
         let subtitle = format_agent_metadata(agent);
 
         let close_btn = IconButton::new(k.glyph.close)
@@ -109,7 +109,7 @@ pub fn build_agent_run_drawer(
                             .grow(1.0)
                             .min_w(0.0),
                     )
-                    .child(status_pill(k, t, status_label, status_tone))
+                    .child(status_pill_from(k, t, status))
                     .child(close_btn),
             );
 
@@ -236,22 +236,17 @@ fn resolve_agent_title(viewer_title: &str, agent: Option<&ThreadAgentSummary>) -
     "Subagent".to_string()
 }
 
-fn resolve_agent_status(
-    agent: Option<&ThreadAgentSummary>,
-    is_active: bool,
-) -> (&'static str, StatusPillTone) {
+fn resolve_agent_status(agent: Option<&ThreadAgentSummary>, is_active: bool) -> StatusPresentation {
     if is_active {
-        return ("Running", StatusPillTone::Accent);
+        return status_presentation("running");
     }
-    let Some(a) = agent else {
-        return ("Subagent", StatusPillTone::Neutral);
-    };
-    match a.status.to_ascii_lowercase().as_str() {
-        "failed" | "errored" | "error" => ("Failed", StatusPillTone::Danger),
-        "cancelled" | "canceled" => ("Cancelled", StatusPillTone::Warning),
-        "completed" | "closed" | "done" => ("Completed", StatusPillTone::Success),
-        _ => ("Finished", StatusPillTone::Neutral),
-    }
+    agent.map_or_else(
+        || StatusPresentation {
+            label: "Subagent".to_string(),
+            ..status_presentation("unknown")
+        },
+        |agent| status_presentation(&agent.status),
+    )
 }
 
 fn format_agent_metadata(agent: Option<&ThreadAgentSummary>) -> Option<String> {
@@ -293,7 +288,7 @@ mod tests {
             usage_label: Some("4.2k tok".into()),
             ..Default::default()
         };
-        assert_eq!(resolve_agent_status(Some(&running), true).0, "Running");
+        assert_eq!(resolve_agent_status(Some(&running), true).label, "Running");
         assert_eq!(
             format_agent_metadata(Some(&running)).as_deref(),
             Some("explorer · depth 1 · gpt-5 · 4.2k tok")
@@ -304,6 +299,6 @@ mod tests {
             completed_at: Some(10),
             ..running
         };
-        assert_eq!(resolve_agent_status(Some(&done), false).0, "Completed");
+        assert_eq!(resolve_agent_status(Some(&done), false).label, "Completed");
     }
 }

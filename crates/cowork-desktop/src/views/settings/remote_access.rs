@@ -288,7 +288,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
     .variant(if ra.running {
         ButtonVariant::Outline
     } else {
-        ButtonVariant::Contrast
+        ButtonVariant::Submit
     })
     .icon(&icons::WIFI)
     .control_size(ControlSize::Regular)

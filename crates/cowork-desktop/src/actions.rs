@@ -62,6 +62,7 @@ pub enum NavAction {
     SelectWorkspace(String),
     GoBack,
     GoForward,
+    ExitSettings,
     Replace(NavigationSnapshot),
 }
 

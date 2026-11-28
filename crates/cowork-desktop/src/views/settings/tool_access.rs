@@ -798,7 +798,7 @@ fn plugins_tab_view(
     if !plugins.is_empty() {
         installed_section = installed_section.action(
             Button::new("Install plugin")
-                .variant(ButtonVariant::Contrast)
+                .variant(ButtonVariant::Submit)
                 .icon(&icons::PLUS)
                 .control_size(ControlSize::Small)
                 .on_press(|s: &mut AppState| {
@@ -827,7 +827,7 @@ fn plugins_tab_view(
                     .description("Install a plugin from a GitHub repository, URL, or local path.")
                     .action(
                         Button::new("Install plugin")
-                            .variant(ButtonVariant::Contrast)
+                            .variant(ButtonVariant::Submit)
                             .icon(&icons::PLUS)
                             .control_size(ControlSize::Regular)
                             .on_press(|s: &mut AppState| {
@@ -1233,7 +1233,7 @@ fn append_install_plugin_dialog(
                 )
                 .child(
                     Button::new("Install plugin")
-                        .variant(ButtonVariant::Contrast)
+                        .variant(ButtonVariant::Submit)
                         .control_size(ControlSize::Regular)
                         .disabled(!can_install)
                         .on_press(move |s: &mut AppState| {
@@ -1396,7 +1396,7 @@ fn append_plugin_detail_dialog(
     right_actions = right_actions
         .child(
             Button::new(if plugin.enabled { "Disable" } else { "Enable" })
-                .variant(ButtonVariant::Contrast)
+                .variant(ButtonVariant::Submit)
                 .control_size(ControlSize::Regular)
                 .on_press(move |s: &mut AppState| {
                     s.dispatch(Action::Settings(SettingsAction::SetPluginEnabledScoped {
@@ -1529,7 +1529,7 @@ fn skills_tab_view(
     if !skills.is_empty() {
         skills_section = skills_section.action(
             Button::new("Install skill")
-                .variant(ButtonVariant::Contrast)
+                .variant(ButtonVariant::Submit)
                 .icon(&icons::PLUS)
                 .control_size(ControlSize::Small)
                 .on_press(|s: &mut AppState| {
@@ -1551,7 +1551,7 @@ fn skills_tab_view(
                     )
                     .action(
                         Button::new("Install skill")
-                            .variant(ButtonVariant::Contrast)
+                            .variant(ButtonVariant::Submit)
                             .icon(&icons::PLUS)
                             .control_size(ControlSize::Regular)
                             .on_press(|s: &mut AppState| {
@@ -2064,7 +2064,7 @@ fn append_install_skill_dialog(
                 )
                 .child(
                     Button::new("Install skill")
-                        .variant(ButtonVariant::Contrast)
+                        .variant(ButtonVariant::Submit)
                         .control_size(ControlSize::Regular)
                         .disabled(!can_install)
                         .on_press(move |s: &mut AppState| {
@@ -2255,7 +2255,7 @@ fn append_skill_detail_dialog(
     if can_toggle {
         right_actions = right_actions.child(
             Button::new(if sk.enabled { "Disable" } else { "Enable" })
-                .variant(ButtonVariant::Contrast)
+                .variant(ButtonVariant::Submit)
                 .control_size(ControlSize::Regular)
                 .on_press(move |s: &mut AppState| {
                     if let Some(id) = inst_toggle.as_ref() {
@@ -2408,7 +2408,7 @@ fn append_add_marketplace_dialog(
                 )
                 .child(
                     Button::new("Add marketplace")
-                        .variant(ButtonVariant::Contrast)
+                        .variant(ButtonVariant::Submit)
                         .control_size(ControlSize::Regular)
                         .disabled(!can_add)
                         .on_press(move |s: &mut AppState| {

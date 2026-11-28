@@ -15,6 +15,7 @@ use crate::views::settings::experiments::is_flag_enabled;
 use crate::views::settings::icons;
 use crate::views::settings::primitives::{active_workspace_banner_label, theme_memo_sig};
 use crate::views::shell::helpers::{warm_row, warm_selected};
+use crate::views::shell::state::settings_back_action;
 
 /// One item in the Settings navigation sidebar.
 #[derive(Clone, Copy)]
@@ -228,9 +229,11 @@ fn nav_pane(
     include_dev: bool,
     groups: &[SettingsNavGroup],
 ) -> El {
+    let return_view = s.route().last_non_settings_view;
     let mut h = DefaultHasher::new();
     (
         page_key(active_page),
+        return_view,
         remote_access_available,
         include_dev,
         theme_memo_sig(s, t),
@@ -238,12 +241,17 @@ fn nav_pane(
         .hash(&mut h);
 
     memo("settings-nav-rail", h.finish(), || {
-        let back_button = SidebarRow::new("Back to chat")
+        let back_label = match return_view {
+            ViewId::Task => "Back to Tasks",
+            ViewId::Chat | ViewId::Settings => "Back to chat",
+        };
+        let back_button = SidebarRow::new(back_label)
             .icon(&icons::ARROW_LEFT)
             .height(30.0)
             .on_select(|s: &mut AppState, tx| {
                 s.settings_ui.mobile_nav_open = false;
-                s.dispatch_tx(Action::Navigate(NavAction::OpenView(ViewId::Chat)), tx);
+                let action = settings_back_action(s);
+                s.dispatch_tx(Action::Navigate(action), tx);
             })
             .build(k)
             .key("settings-back-button");

@@ -17,6 +17,9 @@ use crate::state::{
     AppState, ConfirmDialogRequest, NotificationTone, WorkflowRunView, dismiss_toast,
 };
 use crate::theme::ThemeTokens;
+use crate::views::chat::components::{
+    StatusPillTone, status_pill_for, status_presentation, status_tone_color,
+};
 
 pub(crate) use super::onboarding::is_onboarding_visible;
 use super::{helpers, icons, onboarding, palette};
@@ -27,6 +30,7 @@ pub(crate) struct SearchOverlayItem {
     pub(crate) title: String,
     pub(crate) subtitle: String,
     pub(crate) icon_glyph: &'static Icon,
+    pub(crate) status_tone: Option<StatusPillTone>,
     pub(crate) action: Action,
 }
 
@@ -178,7 +182,7 @@ fn push_external_url_dialog(url: Option<&str>, k: &Kit, t: &ThemeTokens, layer: 
                         )
                         .child(
                             Button::new("Open link")
-                                .variant(ButtonVariant::Contrast)
+                                .variant(ButtonVariant::Submit)
                                 .icon(&icons::EXTERNAL_LINK)
                                 .on_press_tx(|s: &mut AppState, _| {
                                     s.dispatch(Action::Shell(ShellAction::ConfirmExternalUrl));
@@ -203,7 +207,7 @@ fn push_confirm_dialog(
     let confirm_variant = if pending.destructive {
         ButtonVariant::Danger
     } else {
-        ButtonVariant::Contrast
+        ButtonVariant::Submit
     };
     let confirm_label = if pending.confirm_label.is_empty() {
         "Confirm".to_owned()
@@ -332,7 +336,7 @@ fn push_lmstudio_start_modal(s: &AppState, k: &Kit, t: &ThemeTokens, layer: &mut
                 } else {
                     "Start LM Studio"
                 })
-                .variant(ButtonVariant::Contrast)
+                .variant(ButtonVariant::Submit)
                 .disabled(modal.starting)
                 .on_press_tx(move |s: &mut AppState, _| {
                     s.dispatch(Action::Shell(ShellAction::RepairCreationReadiness {
@@ -435,6 +439,7 @@ pub(crate) fn collect_search_overlay_items(s: &AppState) -> Vec<SearchOverlayIte
             title,
             subtitle,
             icon_glyph: &icons::MESSAGE,
+            status_tone: None,
             action: Action::Navigate(NavAction::OpenThread(th.id.clone())),
         });
     }
@@ -456,6 +461,7 @@ pub(crate) fn collect_search_overlay_items(s: &AppState) -> Vec<SearchOverlayIte
             title: ws.name.clone(),
             subtitle: ws.path.clone(),
             icon_glyph: &icons::FOLDER,
+            status_tone: None,
             action: Action::Navigate(NavAction::SelectWorkspace(ws.id.clone())),
         });
     }
@@ -479,12 +485,14 @@ pub(crate) fn collect_search_overlay_items(s: &AppState) -> Vec<SearchOverlayIte
                 .get(sum.workspace_id.as_str())
                 .copied()
                 .unwrap_or("Workspace");
+            let status = status_presentation(&sum.status);
             items.push(SearchOverlayItem {
                 key: format!("sr-task-{}", sum.id),
                 section: "Tasks",
                 title: sum.title.clone(),
-                subtitle: format!("{ws_name} · {}", sum.status),
-                icon_glyph: &icons::CHECK_SQUARE,
+                subtitle: format!("{ws_name} · {}", status.label),
+                icon_glyph: status.icon,
+                status_tone: Some(status.tone),
                 action: Action::Navigate(NavAction::OpenTask(sum.id.clone())),
             });
             task_count += 1;
@@ -579,7 +587,7 @@ fn build_sidebar_search_overlay(s: &AppState, k: &Kit, t: &ThemeTokens) -> Optio
         .child(
             Button::new("All projects")
                 .variant(if s.shell_ui.search_workspace_filter.is_none() {
-                    ButtonVariant::Contrast
+                    ButtonVariant::Submit
                 } else {
                     ButtonVariant::Ghost
                 })
@@ -597,7 +605,7 @@ fn build_sidebar_search_overlay(s: &AppState, k: &Kit, t: &ThemeTokens) -> Optio
         chips = chips.child(
             Button::new(ws.name.clone())
                 .variant(if active {
-                    ButtonVariant::Contrast
+                    ButtonVariant::Submit
                 } else {
                     ButtonVariant::Ghost
                 })
@@ -639,6 +647,10 @@ fn build_sidebar_search_overlay(s: &AppState, k: &Kit, t: &ThemeTokens) -> Optio
             }
             let selected = idx == selected_idx;
             let action = item.action;
+            let icon_color = item.status_tone.map_or_else(
+                || if selected { t.accent } else { t.text_muted },
+                |tone| status_tone_color(tone, t),
+            );
             let shortcut_badge = (idx < 9).then(|| {
                 Badge::new(crate::shortcut_label(&format!("Cmd+{}", idx + 1)))
                     .variant(BadgeVariant::Neutral)
@@ -658,11 +670,7 @@ fn build_sidebar_search_overlay(s: &AppState, k: &Kit, t: &ThemeTokens) -> Optio
                     s.shell_ui.search_selected = 0;
                     s.dispatch_tx(action.clone(), tx);
                 })
-                .child(icon(item.icon_glyph, 15.0).color(if selected {
-                    t.accent
-                } else {
-                    t.text_muted
-                }))
+                .child(icon(item.icon_glyph, 15.0).color(icon_color))
                 .child(
                     col()
                         .grow(1.0)
@@ -935,11 +943,11 @@ fn push_workflow_run_detail_dialog(s: &AppState, k: &Kit, t: &ThemeTokens, layer
     let started_rel = helpers::format_relative_age(run.started_at, s.now_secs);
     let duration = format_run_duration(run.started_at, run.finished_at);
 
-    let mut meta = row().w_full().gap(8.0).center_y().child(
-        Badge::new(run.status.clone())
-            .variant(BadgeVariant::Neutral)
-            .build(k),
-    );
+    let mut meta = row()
+        .w_full()
+        .gap(8.0)
+        .center_y()
+        .child(status_pill_for(k, t, &run.status));
     if !started_rel.is_empty() {
         meta = meta.child(
             text(format!("Started {started_rel} ago"))

@@ -1,7 +1,9 @@
 //! Shared composer card, model/reasoning pickers, attachments, drag/drop/paste, and `@`/`/` menus.
 
+use std::cell::Cell;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use std::rc::Rc;
 use std::sync::Arc;
 
 use cowork_protocol::{CommandInfo, TurnAttachmentInputPart, TurnReference};
@@ -1120,6 +1122,11 @@ fn build_effort_drag_bar(
 
     let mut track = row()
         .key(format!("{key_prefix}-track"))
+        .role("slider")
+        .label("Reasoning effort")
+        .a11y_value(format_effort_label(current.as_str()))
+        .range_value(active_idx as f64, 0.0, (count - 1) as f64)
+        .range_step(1.0)
         .w(track_w)
         .h(22.0)
         .child(
@@ -1163,22 +1170,69 @@ fn build_effort_drag_bar(
             .a11y_hidden(),
     );
 
-    if !disabled && !effort_vals.is_empty() {
-        let ck_drag = composer_key.clone();
-        let tid_drag = thread_id.clone();
-        let pid_drag = provider_id.clone();
-        let vals_drag = effort_vals.clone();
-        track = track.cursor(Cursor::Pointer).on_drag(
-            move |s: &mut AppState, d: &mut Drag, _tx| match d.phase {
-                Phase::Down | Phase::Move => {
-                    let idx = effort_index_from_drag_x(d.x, d.w, pad, vals_drag.len());
-                    if let Some(&next) = vals_drag.get(idx) {
-                        apply_effort_selection(s, &ck_drag, tid_drag.as_deref(), &pid_drag, next);
-                    }
+    if disabled || effort_vals.is_empty() {
+        track = track.focusable(false).disabled(true);
+    } else {
+        let last_idx = effort_vals.len() - 1;
+        let live_idx = Rc::new(Cell::new(active_idx));
+        let select = {
+            let ck = composer_key.clone();
+            let tid = thread_id.clone();
+            let pid = provider_id.clone();
+            let vals = effort_vals.clone();
+            Rc::new(move |s: &mut AppState, idx: usize| {
+                if let Some(&next) = vals.get(idx) {
+                    apply_effort_selection(s, &ck, tid.as_deref(), &pid, next);
                 }
-                Phase::Up => {}
+            })
+        };
+
+        let live_drag = Rc::clone(&live_idx);
+        let select_drag = Rc::clone(&select);
+        track = track.focusable(true).cursor(Cursor::Pointer).on_drag(
+            move |s: &mut AppState, d: &mut Drag, _tx| {
+                if d.phase == Phase::Down {
+                    d.data = live_drag.get() as f32;
+                }
+                match d.phase {
+                    Phase::Down | Phase::Move => {
+                        let idx = effort_index_from_drag_x(d.x, d.w, pad, last_idx + 1);
+                        live_drag.set(idx);
+                        select_drag(s, idx);
+                    }
+                    Phase::Up if d.cancelled() => {
+                        let idx = (d.data.round() as usize).min(last_idx);
+                        live_drag.set(idx);
+                        select_drag(s, idx);
+                    }
+                    Phase::Up => {}
+                }
             },
         );
+
+        let live_step = Rc::clone(&live_idx);
+        let select_step = Rc::clone(&select);
+        track = track.on_step(move |s: &mut AppState, delta, _tx| {
+            let idx = (live_step.get() as i32)
+                .saturating_add(delta)
+                .clamp(0, last_idx as i32) as usize;
+            live_step.set(idx);
+            select_step(s, idx);
+        });
+
+        let live_limit = Rc::clone(&live_idx);
+        let select_limit = Rc::clone(&select);
+        track = track.on_step_limit(move |s: &mut AppState, to_max, _tx| {
+            let idx = if to_max { last_idx } else { 0 };
+            live_limit.set(idx);
+            select_limit(s, idx);
+        });
+
+        track = track.on_set_value(move |s: &mut AppState, target, _tx| {
+            let idx = target.round().clamp(0.0, last_idx as f64) as usize;
+            live_idx.set(idx);
+            select(s, idx);
+        });
     }
 
     let use_short = raw_efforts.len() >= 5;
@@ -2775,6 +2829,106 @@ mod tests {
         assert_eq!(effort_index_from_drag_x(260.0, 200.0, 7.0, 4), 3);
         assert_eq!(effort_index_from_drag_x(50.0, 200.0, 7.0, 1), 0);
         assert_eq!(effort_index_from_drag_x(50.0, 200.0, 7.0, 0), 0);
+    }
+
+    #[test]
+    fn effort_slider_supports_accessible_keyboard_input_and_escape_restore() {
+        use rune::{Cx, Env, Key, KeyEvent, Runtime};
+
+        const KEY: &str = "test-effort";
+        const TRACK_KEY: &str = "test-effort-track";
+
+        fn view(s: &AppState, _cx: &mut Cx<AppState>) -> El {
+            let (k, t) = crate::theme::build_kit(false, false, false);
+            let current = s
+                .composer_drafts
+                .get(KEY)
+                .and_then(|d| d.reasoning_effort)
+                .unwrap_or(ReasoningEffortValue::Low);
+            build_effort_drag_bar(
+                &k,
+                &t,
+                KEY,
+                200.0,
+                &["low", "medium", "high"],
+                current,
+                KEY.to_string(),
+                None,
+                "openai".to_string(),
+                false,
+            )
+        }
+
+        fn find_a11y<'a>(node: &'a serde_json::Value, key: &str) -> Option<&'a serde_json::Value> {
+            if node["key"] == key {
+                return Some(node);
+            }
+            node["children"]
+                .as_array()?
+                .iter()
+                .find_map(|child| find_a11y(child, key))
+        }
+
+        let mut rt = Runtime::new(
+            AppState::default(),
+            view,
+            (240.0, 100.0),
+            Env::new(false, 1.0),
+        );
+        rt.frame(0.0);
+
+        let a11y = rt.accessibility_json();
+        let slider = find_a11y(&a11y, TRACK_KEY).expect("slider a11y node");
+        assert_eq!(slider["role"], "slider");
+        assert_eq!(slider["name"], "Reasoning effort");
+        assert_eq!(slider["value"], "Low");
+        assert_eq!(slider["range"], serde_json::json!([0.0, 0.0, 2.0, 1.0]));
+
+        rt.update(|_, tx| tx.focus(TRACK_KEY, true));
+        rt.frame(0.0);
+        rt.key(KeyEvent::from(Key::Right));
+        rt.key(KeyEvent::from(Key::Right));
+        rt.frame(1.0 / 60.0);
+        assert_eq!(
+            rt.state.composer_drafts[KEY].reasoning_effort,
+            Some(ReasoningEffortValue::High),
+            "multiple arrow steps before one frame must accumulate"
+        );
+
+        rt.key(KeyEvent::from(Key::Home));
+        rt.frame(1.0 / 60.0);
+        assert_eq!(
+            rt.state.composer_drafts[KEY].reasoning_effort,
+            Some(ReasoningEffortValue::Low)
+        );
+
+        let track = rt
+            .elements()
+            .into_iter()
+            .find(|e| e.key.as_deref() == Some(TRACK_KEY))
+            .expect("slider track");
+        let x = track.rect[0] + track.rect[2] - 7.0;
+        let y = track.rect[1] + track.rect[3] * 0.5;
+        rt.pointer_down(x, y);
+        rt.frame(1.0 / 60.0);
+        assert_eq!(
+            rt.state.composer_drafts[KEY].reasoning_effort,
+            Some(ReasoningEffortValue::High)
+        );
+
+        rt.key(KeyEvent::from(Key::Escape));
+        rt.frame(1.0 / 60.0);
+        assert_eq!(
+            rt.state.composer_drafts[KEY].reasoning_effort,
+            Some(ReasoningEffortValue::Low),
+            "Escape must restore the value from before the pointer drag"
+        );
+        rt.pointer_up(x, y);
+        rt.frame(1.0 / 60.0);
+        assert_eq!(
+            rt.state.composer_drafts[KEY].reasoning_effort,
+            Some(ReasoningEffortValue::Low)
+        );
     }
 
     #[test]

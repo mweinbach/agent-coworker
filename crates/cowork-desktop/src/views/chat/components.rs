@@ -25,6 +25,81 @@ pub enum StatusPillTone {
     Accent,
 }
 
+/// Canonical display metadata for task, subagent, and workflow-run statuses.
+#[derive(Debug)]
+pub struct StatusPresentation {
+    pub label: String,
+    pub tone: StatusPillTone,
+    pub icon: &'static rune::Icon,
+}
+
+/// Maps serialized status values to one label, tone, and icon across desktop surfaces.
+pub fn status_presentation(status: &str) -> StatusPresentation {
+    let normalized = status.trim().to_ascii_lowercase();
+    let (label, tone, icon) = match normalized.as_str() {
+        "running" | "in_progress" => ("Running", StatusPillTone::Accent, &icons::CIRCLE_DASHED),
+        "waiting_for_input" | "waiting" | "needs_input" => (
+            "Waiting for input",
+            StatusPillTone::Warning,
+            &icons::MESSAGE_SQUARE,
+        ),
+        "completed" | "done" | "closed" => {
+            ("Completed", StatusPillTone::Success, &icons::CHECK_CIRCLE)
+        }
+        "accepted" => ("Accepted", StatusPillTone::Success, &icons::CHECK_CIRCLE),
+        "failed" | "errored" | "error" => ("Failed", StatusPillTone::Danger, &icons::X_CIRCLE),
+        "cancelled" | "canceled" => ("Cancelled", StatusPillTone::Warning, &icons::STOP_SQUARE),
+        "queued" | "pending" => ("Queued", StatusPillTone::Neutral, &icons::CLOCK),
+        "" | "scheduled" => ("Scheduled", StatusPillTone::Neutral, &icons::CLOCK),
+        "draft" => (
+            "Draft",
+            StatusPillTone::Neutral,
+            &crate::views::shell::icons::INFO,
+        ),
+        _ => {
+            return StatusPresentation {
+                label: humanize_status(status),
+                tone: StatusPillTone::Neutral,
+                icon: &crate::views::shell::icons::INFO,
+            };
+        }
+    };
+    StatusPresentation {
+        label: label.to_owned(),
+        tone,
+        icon,
+    }
+}
+
+fn humanize_status(status: &str) -> String {
+    let words: Vec<String> = status
+        .trim()
+        .split(|c: char| c == '_' || c == '-' || c.is_whitespace())
+        .filter(|word| !word.is_empty())
+        .map(|word| word.chars().flat_map(char::to_lowercase).collect())
+        .collect();
+    if words.is_empty() {
+        return "Unknown".to_owned();
+    }
+
+    let label = words.join(" ");
+    let mut chars = label.chars();
+    let Some(first) = chars.next() else {
+        return "Unknown".to_owned();
+    };
+    first.to_uppercase().chain(chars).collect()
+}
+
+pub fn status_tone_color(tone: StatusPillTone, t: &ThemeTokens) -> rune::Color {
+    match tone {
+        StatusPillTone::Neutral => t.text_muted,
+        StatusPillTone::Danger => t.danger,
+        StatusPillTone::Warning => t.warning,
+        StatusPillTone::Success => t.success,
+        StatusPillTone::Accent => t.accent,
+    }
+}
+
 /// Builds inline background/foreground pill `Span`s for recognized `@`/`$`/`/` mentions inside `TextEdit`.
 pub fn composer_mention_spans(
     input_text: &str,
@@ -206,6 +281,25 @@ pub fn canvas_request_pill(k: &Kit, t: &ThemeTokens, filename: &str, spreadsheet
 
 /// Renders a compact status badge (`REVIEW`, `RECOVERED`, `RUNNING`, etc.).
 pub fn status_pill(k: &Kit, t: &ThemeTokens, label: impl Into<String>, tone: StatusPillTone) -> El {
+    status_pill_inner(k, t, label.into(), tone, None)
+}
+
+/// Renders the canonical icon, label, and tone for a serialized task/agent/run status.
+pub fn status_pill_for(k: &Kit, t: &ThemeTokens, status: &str) -> El {
+    status_pill_from(k, t, status_presentation(status))
+}
+
+pub fn status_pill_from(k: &Kit, t: &ThemeTokens, status: StatusPresentation) -> El {
+    status_pill_inner(k, t, status.label, status.tone, Some(status.icon))
+}
+
+fn status_pill_inner(
+    k: &Kit,
+    t: &ThemeTokens,
+    label: String,
+    tone: StatusPillTone,
+    glyph: Option<&'static rune::Icon>,
+) -> El {
     let (bg, fg, border) = match tone {
         StatusPillTone::Neutral => (t.hover, t.text_muted, t.border),
         StatusPillTone::Danger => (k.alpha(t.danger, 0.14), t.danger, k.alpha(t.danger, 0.35)),
@@ -222,14 +316,17 @@ pub fn status_pill(k: &Kit, t: &ThemeTokens, label: impl Into<String>, tone: Sta
         StatusPillTone::Accent => (t.accent_soft, t.accent, k.alpha(t.accent, 0.35)),
     };
 
-    row()
+    let mut pill = row()
         .items_center()
         .px(7.0)
         .py(2.0)
         .radius(9999.0)
         .fill(bg)
-        .border(1.0, border)
-        .child(text(label).font(k.ty.small_medium).color(fg))
+        .border(1.0, border);
+    if let Some(glyph) = glyph {
+        pill = pill.gap(4.0).child(icon(glyph, 11.0).color(fg));
+    }
+    pill.child(text(label).font(k.ty.small_medium).color(fg))
 }
 
 /// Renders a quiet centered day label when a conversation crosses calendar days.
@@ -458,7 +555,7 @@ pub fn locked_task_bar(k: &Kit, t: &ThemeTokens, task_id: String, task_title: St
                 )
                 .child(
                     Button::new("Open task")
-                        .variant(ButtonVariant::Contrast)
+                        .variant(ButtonVariant::Submit)
                         .control_size(ControlSize::Small)
                         .on_press_tx(move |s: &mut AppState, tx| {
                             s.dispatch_tx(
@@ -562,6 +659,49 @@ mod tests {
     use crate::state::SkillSummary;
     use crate::theme;
     use crate::views::chat::model::build_mention_catalog;
+
+    #[test]
+    fn status_presentation_unifies_aliases_and_humanizes_unknown_statuses() {
+        let cases = [
+            (
+                "in_progress",
+                "Running",
+                StatusPillTone::Accent,
+                "chat-circle-dashed",
+            ),
+            (
+                "waiting_for_input",
+                "Waiting for input",
+                StatusPillTone::Warning,
+                "chat-message-square",
+            ),
+            (
+                "done",
+                "Completed",
+                StatusPillTone::Success,
+                "chat-check-circle",
+            ),
+            ("error", "Failed", StatusPillTone::Danger, "chat-x-circle"),
+            (
+                "canceled",
+                "Cancelled",
+                StatusPillTone::Warning,
+                "chat-stop-square",
+            ),
+            ("pending", "Queued", StatusPillTone::Neutral, "chat-clock"),
+        ];
+        for (raw, label, tone, icon_name) in cases {
+            let status = status_presentation(raw);
+            assert_eq!(status.label, label, "label for {raw}");
+            assert_eq!(status.tone, tone, "tone for {raw}");
+            assert_eq!(status.icon.name, icon_name, "icon for {raw}");
+        }
+
+        let unknown = status_presentation("awaiting_final_review");
+        assert_eq!(unknown.label, "Awaiting final review");
+        assert_eq!(unknown.tone, StatusPillTone::Neutral);
+        assert_eq!(unknown.icon.name, "cowork-info");
+    }
 
     #[test]
     fn composer_mention_spans_highlight_known_tokens_only() {

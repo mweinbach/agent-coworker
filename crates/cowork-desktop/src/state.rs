@@ -6092,6 +6092,7 @@ impl AppState {
             NavAction::OpenThread(_)
                 | NavAction::GoBack
                 | NavAction::GoForward
+                | NavAction::ExitSettings
                 | NavAction::Replace(_)
         );
         let mut already_persisted = false;
@@ -6110,6 +6111,14 @@ impl AppState {
         if let Some(ws_id) = nav_target_ws {
             self.ensure_workspace_server_started(&ws_id);
         }
+
+        let action = if matches!(action, NavAction::ExitSettings)
+            && !self.nav.can_go_back_to_non_settings()
+        {
+            NavAction::OpenView(self.route().last_non_settings_view)
+        } else {
+            action
+        };
 
         // Use the ordinary chat navigation paths so hydration and draft switching also
         // run when the user reaches a conversation by selecting its project.
@@ -6360,6 +6369,14 @@ impl AppState {
             NavAction::GoForward => {
                 let old_key = self.composer_key();
                 if self.nav.go_forward() {
+                    let new_key = self.composer_key();
+                    self.sync_composer_edit_across_switch(&old_key, &new_key);
+                    self.refresh_creation_preflight_if_creation_route();
+                }
+            }
+            NavAction::ExitSettings => {
+                let old_key = self.composer_key();
+                if self.nav.go_back_to_non_settings() {
                     let new_key = self.composer_key();
                     self.sync_composer_edit_across_switch(&old_key, &new_key);
                     self.refresh_creation_preflight_if_creation_route();

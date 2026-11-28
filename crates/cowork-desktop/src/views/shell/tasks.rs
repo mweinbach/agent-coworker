@@ -20,6 +20,7 @@ use crate::actions::{Action, NativeAction, NavAction, TaskAction, TaskQuestionAn
 use crate::router::ViewId;
 use crate::state::{AppState, TaskArtifactView, TaskRecordView, TaskSummaryView, WorkflowRunView};
 use crate::theme::ThemeTokens;
+use crate::views::chat::components::status_pill_for;
 
 use super::{helpers, icons};
 
@@ -424,7 +425,7 @@ fn build_new_task_landing(
     } else {
         "New task"
     })
-    .variant(ButtonVariant::Contrast)
+    .variant(ButtonVariant::Submit)
     .icon(&icons::CHECK_SQUARE)
     .on_press_tx(|s: &mut AppState, _| {
         s.shell_ui.task_create_open = !s.shell_ui.task_create_open;
@@ -573,7 +574,7 @@ fn build_task_create_card(
                 } else {
                     "Create task"
                 })
-                .variant(ButtonVariant::Contrast)
+                .variant(ButtonVariant::Submit)
                 .control_size(ControlSize::Small)
                 .disabled(!can_submit || s.shell_ui.task_create_submitting)
                 .on_press_tx(move |s: &mut AppState, _| {
@@ -612,7 +613,6 @@ fn build_task_create_card(
 
 fn task_list_row(s: &AppState, task: &TaskSummaryView, k: &Kit, t: &ThemeTokens) -> El {
     let task_id = task.id.clone();
-    let badge_txt = task_status_label(&task.status);
     let schedule_or_age = task.schedule.clone().unwrap_or_else(|| {
         task.last_run_at
             .map(|ts| helpers::format_relative_age(ts, s.now_secs))
@@ -676,7 +676,7 @@ fn task_list_row(s: &AppState, task: &TaskSummaryView, k: &Kit, t: &ThemeTokens)
         .on_press_tx(move |s: &mut AppState, tx| {
             s.dispatch_tx(Action::Navigate(NavAction::OpenTask(task_id.clone())), tx);
         })
-        .child(row_el.child(Badge::new(badge_txt).build(k)))
+        .child(row_el.child(status_pill_for(k, t, &task.status)))
 }
 
 fn build_active_task_workspace(
@@ -737,7 +737,7 @@ fn build_active_task_workspace(
         .fill(t.panel_bg)
         .child(icon(&icons::CHECK_SQUARE, 16.0).color(t.accent))
         .child(header_meta)
-        .child(Badge::new(task_status_label(&task.summary.status)).build(k))
+        .child(status_pill_for(k, t, &task.summary.status))
         .child(
             Button::new("Refresh")
                 .variant(ButtonVariant::Ghost)
@@ -775,7 +775,7 @@ fn build_active_task_workspace(
         header = header
             .child(
                 Button::new("Accept")
-                    .variant(ButtonVariant::Contrast)
+                    .variant(ButtonVariant::Submit)
                     .control_size(ControlSize::Small)
                     .on_press_tx(move |s: &mut AppState, _| {
                         s.dispatch(Action::Task(TaskAction::AcceptTask {
@@ -948,7 +948,7 @@ fn build_task_details(s: &AppState, task: &TaskRecordView, k: &Kit, t: &ThemeTok
                 )
                 .child(
                     Button::new("Send")
-                        .variant(ButtonVariant::Contrast)
+                        .variant(ButtonVariant::Submit)
                         .control_size(ControlSize::Small)
                         .disabled(fb_edit.text.trim().is_empty() || fb_submitting)
                         .on_press_tx(move |s: &mut AppState, _| {
@@ -1026,7 +1026,7 @@ fn build_task_details(s: &AppState, task: &TaskRecordView, k: &Kit, t: &ThemeTok
         .w_full()
         .child(main_pane)
         .child(el().w(1.0).h_full().fill(t.border_muted))
-        .child(build_task_inspector_sidebar(s, task, t))
+        .child(build_task_inspector_sidebar(s, task, k, t))
 }
 
 fn build_task_questions_card(
@@ -1113,7 +1113,7 @@ fn build_task_questions_card(
                 opts_row = opts_row.child(
                     Button::new(label)
                         .variant(if is_sel {
-                            ButtonVariant::Contrast
+                            ButtonVariant::Submit
                         } else {
                             ButtonVariant::Ghost
                         })
@@ -1195,7 +1195,7 @@ fn build_task_questions_card(
             } else {
                 "Submit answers"
             })
-            .variant(ButtonVariant::Contrast)
+            .variant(ButtonVariant::Submit)
             .control_size(ControlSize::Small)
             .disabled(!can_submit)
             .on_press_tx(move |s: &mut AppState, _| {
@@ -1473,7 +1473,7 @@ fn artifact_row(
     if !accepted {
         r = r.child(
             Button::new("Accept")
-                .variant(ButtonVariant::Contrast)
+                .variant(ButtonVariant::Submit)
                 .control_size(ControlSize::Small)
                 .on_press_tx(move |s: &mut AppState, _| {
                     s.dispatch(Action::Task(TaskAction::AcceptArtifactVersion {
@@ -2039,7 +2039,7 @@ fn build_active_artifact_detail(
                 )
                 .child(
                     Button::new("Open PDF")
-                        .variant(ButtonVariant::Contrast)
+                        .variant(ButtonVariant::Submit)
                         .control_size(ControlSize::Small)
                         .icon(&icons::EXTERNAL_LINK)
                         .on_press_tx(move |s: &mut AppState, _| {
@@ -2238,7 +2238,7 @@ fn build_work_graph_card(
                                 .truncate()
                                 .grow(1.0),
                         )
-                        .child(Badge::new(status).variant(BadgeVariant::Neutral).build(k)),
+                        .child(status_pill_for(k, t, status)),
                 );
             }
         }
@@ -2247,7 +2247,12 @@ fn build_work_graph_card(
     }))
 }
 
-fn build_task_inspector_sidebar(s: &AppState, task: &TaskRecordView, t: &ThemeTokens) -> El {
+fn build_task_inspector_sidebar(
+    s: &AppState,
+    task: &TaskRecordView,
+    k: &Kit,
+    t: &ThemeTokens,
+) -> El {
     let mut side = col()
         .key("task-context-summary")
         .w(290.0)
@@ -2268,13 +2273,15 @@ fn build_task_inspector_sidebar(s: &AppState, task: &TaskRecordView, t: &ThemeTo
         .gap(4.0)
         .child(text("Status").font(t.caption).color(t.text_faint))
         .child(
-            text(format!(
-                "{} (rev {})",
-                task_status_label(&task.summary.status),
-                task.summary.revision
-            ))
-            .font(t.body)
-            .color(t.text_base),
+            row()
+                .gap(8.0)
+                .center_y()
+                .child(status_pill_for(k, t, &task.summary.status))
+                .child(
+                    text(format!("rev {}", task.summary.revision))
+                        .font(t.caption)
+                        .color(t.text_muted),
+                ),
         );
     if let Some(sched) = task.summary.schedule.as_deref() {
         summary_card = summary_card
@@ -2383,7 +2390,7 @@ fn workflow_run_row(s: &AppState, run: &WorkflowRunView, k: &Kit, t: &ThemeToken
                 .center_y()
                 .child(icon(&icons::CLOCK, 14.0).color(t.text_muted))
                 .child(label_col)
-                .child(Badge::new(run.status.as_str()).build(k)),
+                .child(status_pill_for(k, t, &run.status)),
         )
 }
 
@@ -2416,20 +2423,6 @@ fn task_blocker_label(blocker: &Value) -> &str {
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .unwrap_or("Blocked")
-}
-
-fn task_status_label(status: &str) -> &str {
-    match status {
-        "draft" => "Draft",
-        "running" | "in_progress" => "Running",
-        "waiting_for_input" | "waiting" | "needs_input" => "Waiting for input",
-        "completed" => "Completed",
-        "accepted" => "Accepted",
-        "failed" => "Failed",
-        "cancelled" => "Cancelled",
-        "" => "Scheduled",
-        other => other,
-    }
 }
 
 #[cfg(test)]

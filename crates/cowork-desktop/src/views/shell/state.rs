@@ -797,6 +797,11 @@ fn route_active_presentation_key(s: &mut AppState, ev: &KeyEvent, tx: &Tx) -> bo
         .handle_presentation_key(&ev.key, presentation.slides.len())
 }
 
+/// Resolves the shared Settings return action for the sidebar button and Escape.
+pub(crate) fn settings_back_action(_s: &AppState) -> NavAction {
+    NavAction::ExitSettings
+}
+
 /// Dismisses the highest-precedence overlay, preview, or modal route cleanly.
 pub fn handle_escape(s: &mut AppState) -> bool {
     if s.command_palette_open {
@@ -909,11 +914,8 @@ pub fn handle_escape(s: &mut AppState) -> bool {
         return true;
     }
     if s.route().view == ViewId::Settings {
-        if s.nav.can_go_back() {
-            s.dispatch(Action::Navigate(NavAction::GoBack));
-        } else {
-            s.dispatch(Action::Navigate(NavAction::OpenView(ViewId::Chat)));
-        }
+        let action = settings_back_action(s);
+        s.dispatch(Action::Navigate(action));
         return true;
     }
     if super::overlays::is_onboarding_visible(s) {
@@ -959,6 +961,56 @@ mod tests {
         assert_eq!(s.route().view, ViewId::Settings);
         assert!(handle_escape(&mut s));
         assert_eq!(s.route().view, ViewId::Chat);
+    }
+
+    #[test]
+    fn settings_back_and_escape_skip_settings_page_history() {
+        for use_escape in [false, true] {
+            let mut s = AppState::default();
+            s.dispatch(Action::Navigate(NavAction::OpenView(ViewId::Task)));
+            s.dispatch(Action::Navigate(NavAction::OpenSettings(Some(
+                crate::router::SettingsPageId::Updates,
+            ))));
+            s.dispatch(Action::Navigate(NavAction::OpenSettings(Some(
+                crate::router::SettingsPageId::Usage,
+            ))));
+            let history_len = s.nav.len();
+
+            if use_escape {
+                assert!(handle_escape(&mut s));
+            } else {
+                let back = settings_back_action(&s);
+                assert!(matches!(back, NavAction::ExitSettings));
+                s.dispatch(Action::Navigate(back));
+            }
+
+            assert_eq!(s.route().view, ViewId::Task);
+            assert_eq!(s.nav.len(), history_len);
+            assert!(s.nav.can_go_forward());
+        }
+    }
+
+    #[test]
+    fn settings_back_and_escape_use_task_context_without_history() {
+        for use_escape in [false, true] {
+            let mut s = AppState::default();
+            s.nav = crate::router::NavigationHistory::new(crate::router::NavigationSnapshot {
+                view: ViewId::Settings,
+                settings_page: crate::router::SettingsPageId::Defaults,
+                last_non_settings_view: ViewId::Task,
+                ..Default::default()
+            });
+            assert!(!s.nav.can_go_back());
+
+            if use_escape {
+                assert!(handle_escape(&mut s));
+            } else {
+                let back = settings_back_action(&s);
+                assert!(matches!(back, NavAction::ExitSettings));
+                s.dispatch(Action::Navigate(back));
+            }
+            assert_eq!(s.route().view, ViewId::Task);
+        }
     }
 
     #[test]

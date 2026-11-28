@@ -25,6 +25,38 @@ use crate::views::settings::providers::is_provider_connected;
 use crate::views::settings::providers_utils::{model_display_name, sort_and_filter_provider_refs};
 use crate::views::settings::shell::PageContent;
 
+fn disclosure_chevron(open: bool, size: f32, motion: rune::Spring) -> El {
+    rune::icon(&icons::CHEVRON_RIGHT, size)
+        .rotate(if open {
+            std::f32::consts::FRAC_PI_2
+        } else {
+            0.0
+        })
+        .rotate_motion(motion)
+}
+
+fn disclosure_button(
+    label: impl Into<String>,
+    open: bool,
+    variant: ButtonVariant,
+    k: &Kit,
+) -> Button {
+    let label = label.into();
+    let visible_label = label.clone();
+    let motion = k.motion.disclosure;
+    Button::new(label)
+        .variant(variant)
+        .control_size(ControlSize::Small)
+        .expanded(open)
+        .label_with(move |font, ink| {
+            row()
+                .items_center()
+                .gap(6.0)
+                .child(disclosure_chevron(open, 14.0, motion).color(ink))
+                .child(text(visible_label).font(font).color(ink))
+        })
+}
+
 /// Reserved id for always-included hot workspace memory.
 pub const HOT_MEMORY_ID: &str = "hot";
 
@@ -374,7 +406,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
 
     let mut save_row = row().items_center().gap(10.0).child(
         Button::new("Save changes")
-            .variant(ButtonVariant::Contrast)
+            .variant(ButtonVariant::Submit)
             .control_size(ControlSize::Regular)
             .icon(&icons::SAVE)
             .disabled(!profile_dirty)
@@ -626,18 +658,16 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                     if si_enabled { "Enabled" } else { "Off" }
                 ))
                 .control(
-                    Button::new(if si_expanded {
-                        "Hide settings"
-                    } else {
-                        "Configure"
-                    })
-                    .variant(ButtonVariant::Outline)
-                    .control_size(ControlSize::Small)
-                    .icon(if si_expanded {
-                        &icons::CHEVRON_DOWN
-                    } else {
-                        &icons::CHEVRON_RIGHT
-                    })
+                    disclosure_button(
+                        if si_expanded {
+                            "Hide settings"
+                        } else {
+                            "Configure"
+                        },
+                        si_expanded,
+                        ButtonVariant::Outline,
+                        k,
+                    )
                     .on_press(move |s: &mut AppState| {
                         s.settings_ui.skill_improvement_expanded =
                             !s.settings_ui.skill_improvement_expanded;
@@ -1141,14 +1171,7 @@ fn build_advanced_memory_section(
                             .items_center()
                             .gap(8.0)
                             .child(
-                                Button::new(name)
-                                    .variant(ButtonVariant::Ghost)
-                                    .control_size(ControlSize::Small)
-                                    .icon(if expanded {
-                                        &icons::CHEVRON_DOWN
-                                    } else {
-                                        &icons::CHEVRON_RIGHT
-                                    })
+                                disclosure_button(name, expanded, ButtonVariant::Ghost, k)
                                     .on_press(move |s: &mut AppState| {
                                         if s.settings_ui
                                             .expanded_advanced_memory_slugs
@@ -1324,7 +1347,7 @@ fn build_advanced_memory_section(
                 } else {
                     "Add memory"
                 })
-                .variant(ButtonVariant::Contrast)
+                .variant(ButtonVariant::Submit)
                 .control_size(ControlSize::Regular)
                 .disabled(!can_save)
                 .on_press(move |s: &mut AppState| {
@@ -1650,14 +1673,7 @@ fn build_legacy_memory_section(
                             .items_center()
                             .gap(8.0)
                             .child(
-                                Button::new(title)
-                                    .variant(ButtonVariant::Ghost)
-                                    .control_size(ControlSize::Small)
-                                    .icon(if expanded {
-                                        &icons::CHEVRON_DOWN
-                                    } else {
-                                        &icons::CHEVRON_RIGHT
-                                    })
+                                disclosure_button(title, expanded, ButtonVariant::Ghost, k)
                                     .on_press(move |s: &mut AppState| {
                                         if s.settings_ui.expanded_memory_keys.contains(&key_toggle)
                                         {
@@ -1812,7 +1828,7 @@ fn build_legacy_memory_section(
                 } else {
                     "Add remembered fact"
                 })
-                .variant(ButtonVariant::Contrast)
+                .variant(ButtonVariant::Submit)
                 .control_size(ControlSize::Regular)
                 .disabled(!can_save)
                 .on_press(move |s: &mut AppState| {

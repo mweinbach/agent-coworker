@@ -153,6 +153,24 @@ pub fn has_unsaved_or_busy_work(state: &AppState) -> bool {
     state.has_unsaved_or_busy_work()
 }
 
+/// Decides whether a user-initiated native window close needs unsaved-work consent.
+pub fn close_request_decision(state: &AppState) -> rune::CloseResponse {
+    if has_unsaved_or_busy_work(state) {
+        rune::CloseResponse::Defer
+    } else {
+        rune::CloseResponse::Close
+    }
+}
+
+/// Decides whether an OS-initiated app quit needs unsaved-work consent.
+pub fn quit_request_decision(state: &AppState) -> rune::QuitResponse {
+    if has_unsaved_or_busy_work(state) {
+        rune::QuitResponse::Defer
+    } else {
+        rune::QuitResponse::Quit
+    }
+}
+
 /// Builds a destructive confirmation dialog prompt for closing a dirty or busy window.
 pub fn build_window_close_confirm_request(
     window_key: &str,
@@ -426,6 +444,17 @@ pub fn complete_window_close_resolution(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_close_and_quit_requests_defer_for_dirty_work() {
+        let mut state = AppState::default();
+        assert_eq!(close_request_decision(&state), rune::CloseResponse::Close);
+        assert_eq!(quit_request_decision(&state), rune::QuitResponse::Quit);
+
+        state.composer_edit.text = "unsent draft".to_string();
+        assert_eq!(close_request_decision(&state), rune::CloseResponse::Defer);
+        assert_eq!(quit_request_decision(&state), rune::QuitResponse::Defer);
+    }
 
     #[test]
     fn close_coordinator_gates_dirty_close_and_resets_quit_on_cancel() {

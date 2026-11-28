@@ -17,6 +17,7 @@ use crate::actions::{Action, ChatAction, NativeAction, ShellAction};
 use crate::router::ViewId;
 use crate::state::{AppState, ThreadRuntime, WorkflowRunView};
 use crate::theme::ThemeTokens;
+use crate::views::chat::components::{status_pill_for, status_presentation, status_tone_color};
 use crate::views::shell::helpers::{format_bytes, format_cost_usd, format_tokens};
 use crate::views::shell::icons;
 use crate::views::shell::state::ExplorerContextMenu;
@@ -581,16 +582,9 @@ fn build_plan_card(rt: &ThreadRuntime, k: &Kit, t: &ThemeTokens) -> El {
             ),
     );
     for todo in &rt.todos {
-        let icon_ref = match todo.status.as_str() {
-            "completed" => &icons::CHECK_CIRCLE,
-            "in_progress" => &icons::CLOCK,
-            _ => &icons::INFO,
-        };
-        let ink = match todo.status.as_str() {
-            "completed" => t.success,
-            "in_progress" => t.accent,
-            _ => k.c.text_muted,
-        };
+        let status = status_presentation(&todo.status);
+        let icon_ref = status.icon;
+        let ink = status_tone_color(status.tone, t);
         list = list.child(
             row()
                 .key(format!("todo-{}", todo.id))
@@ -625,7 +619,6 @@ fn build_subagents_card(rt: &ThreadRuntime, k: &Kit, t: &ThemeTokens) -> El {
     for agent in &rt.agents {
         let aid = agent.agent_id.clone();
         let name = agent.name.clone();
-        let status = agent.status.clone();
         list = list.child(
             row()
                 .key(format!("subagent-{}", agent.agent_id))
@@ -657,7 +650,7 @@ fn build_subagents_card(rt: &ThreadRuntime, k: &Kit, t: &ThemeTokens) -> El {
                                 .truncate()
                         })),
                 )
-                .child(Badge::new(status).variant(BadgeVariant::Neutral).build(k)),
+                .child(status_pill_for(k, t, &agent.status)),
         );
     }
 
@@ -705,11 +698,7 @@ fn build_workflow_runs_card(
                                 .color(k.c.text_base)
                                 .truncate(),
                         )
-                        .child(
-                            Badge::new(run.status)
-                                .variant(BadgeVariant::Neutral)
-                                .build(k),
-                        ),
+                        .child(status_pill_for(k, t, &run.status)),
                 )
                 .children(
                     run.summary

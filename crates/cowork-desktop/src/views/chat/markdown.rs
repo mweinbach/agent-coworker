@@ -109,6 +109,8 @@ pub fn markdown_style(
         .code_margin(8.0, 12.0)
         .quote(t.border_strong, 2.5, 12.0, t.text_muted)
         .rule(t.border_muted)
+        .table_row_hover(Some(t.hover))
+        .table_column_rules(Some(t.border_muted))
         .body_font(body)
         .heading_font(1, h1)
         .heading_font(2, h2)
@@ -1126,6 +1128,12 @@ fn desktop_markdown_chunk(
     let kit_code = k.clone();
     let tok_code = *t;
 
+    let is_copied_diff = hooks.is_copied.clone();
+    let on_copy_diff = hooks.on_copy.clone();
+    let key_diff = key_prefix.to_owned();
+    let kit_diff = k.clone();
+    let tok_diff = *t;
+
     let is_copied_diag = hooks.is_copied.clone();
     let on_copy_diag = hooks.on_copy.clone();
     let key_diag = key_prefix.to_owned();
@@ -1273,6 +1281,54 @@ fn desktop_markdown_chunk(
                 .clip_rounded(10.0)
                 .child(header)
                 .child(rune::el().w_full().h(1.0).fill(tok_code.border_muted))
+                .child(card)
+        })
+        .diff_frame(move |card, frame| {
+            let block_key = format!("{key_diff}:diff:{}", frame.index);
+            let copied = is_copied_diff.as_ref().is_some_and(|f| f(&block_key));
+            let source_text = frame.source.to_string();
+            let on_copy = on_copy_diff.clone();
+            let block_key_cb = block_key.clone();
+
+            let copy_btn = Button::new(if copied { "Copied" } else { "Copy" })
+                .variant(ButtonVariant::Ghost)
+                .control_size(ControlSize::Small)
+                .icon(if copied {
+                    kit_diff.glyph.check
+                } else {
+                    kit_diff.glyph.copy
+                })
+                .on_press_tx(move |s: &mut AppState, tx| {
+                    tx.copy(source_text.clone());
+                    if let Some(cb) = &on_copy {
+                        cb(s, block_key_cb.clone(), tx);
+                    }
+                })
+                .build(&kit_diff);
+
+            let header = row()
+                .w_full()
+                .items_center()
+                .px(12.0)
+                .py(3.0)
+                .child(
+                    text("diff")
+                        .font(kit_diff.ty.mono)
+                        .color(tok_diff.text_faint),
+                )
+                .child(spacer())
+                .child(copy_btn);
+
+            col()
+                .key(block_key)
+                .w_full()
+                .radius(10.0)
+                .fill(tok_diff.code_bg)
+                .border(1.0, tok_diff.border_muted)
+                .border_layout()
+                .clip_rounded(10.0)
+                .child(header)
+                .child(rune::el().w_full().h(1.0).fill(tok_diff.border_muted))
                 .child(card)
         })
         .on_link_tx(move |s: &mut AppState, url, tx| {

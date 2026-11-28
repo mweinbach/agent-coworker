@@ -7,7 +7,7 @@
 use std::cell::RefCell;
 
 use rune::{Color, TextStyle};
-use rune_kit::{DialogMetrics, Kit, PaletteSeed, SwitchLook};
+use rune_kit::{DialogMetrics, Kit, PaletteSeed, PopupBackdrop, SwitchLook};
 use serde::{Deserialize, Serialize};
 
 /// User theme preference persisted with desktop settings.
@@ -969,6 +969,18 @@ pub fn build_kit_with_accent(
     kit.ty.ui_compact = tok.body.lh(16.0);
     kit.ty.small = tok.caption;
     kit.ty.small_medium = tok.label;
+    kit.ty.body = tok.body_lg;
+    kit.ty.body_medium = TextStyle {
+        weight: 500.0,
+        ..tok.body_lg
+    };
+    kit.ty.text_small = tok.body;
+    kit.ty.text_small_medium = TextStyle {
+        weight: 500.0,
+        ..tok.body
+    };
+    kit.ty.text_xsmall = tok.caption;
+    kit.ty.text_xsmall_medium = tok.label;
     kit.ty.mono = tok.code;
 
     kit.radius.xs = layout::RADIUS_XS;
@@ -986,6 +998,9 @@ pub fn build_kit_with_accent(
         track_border: 1.0,
         ..SwitchLook::flat(&kit)
     });
+    if !reduced_transparency {
+        kit.metrics.popup_backdrop = Some(PopupBackdrop::tinted(20.0, tok.popover_bg.alpha(0.80)));
+    }
 
     // Keep surfaces and buttons crisp and flat: reserve soft drop shadows for floating overlays.
     let hairline_ring = rune::Shadow {

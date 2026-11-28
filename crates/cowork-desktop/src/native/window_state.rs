@@ -402,6 +402,16 @@ pub fn reconcile_opened_window_placement(store: &WindowStateStore, handle: &rune
     store.record_bounds(clamped);
 }
 
+/// Records a placement delivered by Rune's event-driven placement hook.
+pub fn record_window_placement_event(store: &WindowStateStore, placement: &rune::WindowPlacement) {
+    if is_headless_invocation() {
+        return;
+    }
+    if let Some(bounds) = bounds_from_placement(placement, store.last_recorded()) {
+        store.record_bounds(bounds);
+    }
+}
+
 /// Samples a window's current `WindowPlacement` on the UI thread and schedules persistence.
 pub fn record_window_placement(store: &WindowStateStore, handle: &rune::WindowHandle) {
     if is_headless_invocation() {

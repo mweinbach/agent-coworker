@@ -937,25 +937,26 @@ fn preview_ui_state_tracks_slide_navigation_layout_and_resets_on_path_change() {
         ..Default::default()
     };
     let mut ui = PreviewUiState::default();
+    let mut tx = rune::Tx::default();
     ui.sync_for_presentation_data(Some("/ws/deck.pptx"), Some(&data));
     assert_eq!(ui.active_slide, 0);
     assert_eq!(ui.presentation_layout, PresentationLayoutMode::Deck);
 
-    assert!(ui.handle_presentation_key(&Key::Right, data.slides.len()));
+    assert!(ui.handle_presentation_key_tx(&Key::Right, data.slides.len(), &mut tx));
     assert_eq!(ui.active_slide, 1);
-    assert!(ui.handle_presentation_key(&Key::End, data.slides.len()));
+    assert!(ui.handle_presentation_key_tx(&Key::End, data.slides.len(), &mut tx));
     assert_eq!(ui.active_slide, 2);
-    assert!(ui.handle_presentation_key(&Key::Left, data.slides.len()));
+    assert!(ui.handle_presentation_key_tx(&Key::Left, data.slides.len(), &mut tx));
     assert_eq!(ui.active_slide, 1);
-    assert!(ui.handle_presentation_key(&Key::Home, data.slides.len()));
+    assert!(ui.handle_presentation_key_tx(&Key::Home, data.slides.len(), &mut tx));
     assert_eq!(ui.active_slide, 0);
-    ui.prev_slide();
+    ui.prev_slide(&mut tx);
     assert_eq!(ui.active_slide, 0);
     ui.set_presentation_layout(PresentationLayoutMode::Grid);
     assert_eq!(ui.presentation_layout, PresentationLayoutMode::Grid);
 
     // Same-path refresh preserves active slide if still in range, clamping only if shortened.
-    ui.select_slide(2, data.slides.len());
+    ui.select_slide(2, data.slides.len(), &mut tx);
     ui.sync_for_presentation_data(Some("/ws/deck.pptx"), Some(&data));
     assert_eq!(ui.active_slide, 2);
 
@@ -992,7 +993,15 @@ fn renders_presentation_deck_grid_notice_and_navigates_headlessly_in_light_and_d
     const PRES_VIEWPORT: (f32, f32) = (760.0, 560.0);
     const COMPACT_VIEWPORT: (f32, f32) = (440.0, 540.0);
 
-    let slides = sample_presentation_slides();
+    let mut slides = sample_presentation_slides();
+    let extra_slide = slides[2].clone();
+    for idx in slides.len()..18 {
+        let mut slide = extra_slide.clone();
+        slide.slide_index = idx;
+        slide.slide_id = Some(format!("s{}", idx + 1));
+        slide.title = Some(format!("Slide {}", idx + 1));
+        slides.push(slide);
+    }
     let rendered_data = PresentationPreviewData {
         slides: slides.clone(),
         rendering_mode: Some("rendered".to_string()),
@@ -1092,8 +1101,7 @@ fn renders_presentation_deck_grid_notice_and_navigates_headlessly_in_light_and_d
         for key in [
             "pptx-preview-root",
             "pptx-preview-meta",
-            "pptx-layout-deck",
-            "pptx-layout-grid",
+            "pptx-layout-picker",
             "pptx-refresh-btn",
             "pptx-thumb-strip",
             "pptx-thumb-0",
@@ -1143,11 +1151,40 @@ fn renders_presentation_deck_grid_notice_and_navigates_headlessly_in_light_and_d
             click_key(&mut rt, "pptx-next-btn");
             assert_eq!(rt.state.preview_ui.active_slide, 1);
 
-            click_key(&mut rt, "pptx-layout-grid");
+            click_key(&mut rt, "segment1");
             assert_eq!(
                 rt.state.preview_ui.presentation_layout,
                 PresentationLayoutMode::Grid
             );
+            rt.update(|_, tx| tx.focus("pptx-preview-root", false));
+            rt.key(KeyEvent {
+                key: Key::End,
+                mods: Mods::default(),
+            });
+            rt.frame(0.02);
+            assert_eq!(rt.state.preview_ui.active_slide, slides.len() - 1);
+            let els = rt.elements();
+            let grid_rect = els
+                .iter()
+                .find(|e| e.key.as_deref() == Some("pptx-grid-scroll"))
+                .unwrap()
+                .rect;
+            let selected_rect = els
+                .iter()
+                .find(|e| e.key.as_deref() == Some("pptx-grid-card-17"))
+                .expect("End reveals the selected virtual grid card")
+                .rect;
+            assert!(
+                selected_rect[1] >= grid_rect[1] - 0.5
+                    && selected_rect[1] + selected_rect[3] <= grid_rect[1] + grid_rect[3] + 0.5,
+                "selected grid card must be revealed: card={selected_rect:?}, grid={grid_rect:?}"
+            );
+            rt.key(KeyEvent {
+                key: Key::Home,
+                mods: Mods::default(),
+            });
+            rt.frame(0.02);
+
             let grid_rgba = canvas.draw(&mut rt);
             maybe_save_snap_sized(
                 "presentation-preview-grid-light",
@@ -1187,7 +1224,23 @@ fn renders_presentation_deck_grid_notice_and_navigates_headlessly_in_light_and_d
                 mods: Mods::default(),
             });
             rt.frame(0.02);
-            assert_eq!(rt.state.preview_ui.active_slide, 2);
+            assert_eq!(rt.state.preview_ui.active_slide, slides.len() - 1);
+            let els = rt.elements();
+            let strip_rect = els
+                .iter()
+                .find(|e| e.key.as_deref() == Some("pptx-thumb-strip"))
+                .unwrap()
+                .rect;
+            let selected_rect = els
+                .iter()
+                .find(|e| e.key.as_deref() == Some("pptx-thumb-17"))
+                .expect("End reveals the selected virtual filmstrip tile")
+                .rect;
+            assert!(
+                selected_rect[1] >= strip_rect[1] - 0.5
+                    && selected_rect[1] + selected_rect[3] <= strip_rect[1] + strip_rect[3] + 0.5,
+                "selected filmstrip tile must be revealed: tile={selected_rect:?}, strip={strip_rect:?}"
+            );
         }
     }
 
@@ -1279,6 +1332,29 @@ fn renders_presentation_deck_grid_notice_and_navigates_headlessly_in_light_and_d
         assert!(
             strip_rect[1] + strip_rect[3] <= COMPACT_VIEWPORT.1 + 0.5,
             "compact thumbnail strip must fit inside viewport: {strip_rect:?}"
+        );
+
+        rt.update(|_, tx| tx.focus("pptx-preview-root", false));
+        rt.key(KeyEvent {
+            key: Key::End,
+            mods: Mods::default(),
+        });
+        rt.frame(0.02);
+        let els = rt.elements();
+        let strip_rect = els
+            .iter()
+            .find(|e| e.key.as_deref() == Some("pptx-thumb-strip"))
+            .unwrap()
+            .rect;
+        let selected_rect = els
+            .iter()
+            .find(|e| e.key.as_deref() == Some("pptx-thumb-17"))
+            .expect("End reveals the selected compact filmstrip tile")
+            .rect;
+        assert!(
+            selected_rect[0] >= strip_rect[0] - 0.5
+                && selected_rect[0] + selected_rect[2] <= strip_rect[0] + strip_rect[2] + 0.5,
+            "selected compact tile must be revealed horizontally: tile={selected_rect:?}, strip={strip_rect:?}"
         );
     }
 

@@ -266,7 +266,7 @@ fn startup_recovery_view(
         .description(err_msg)
         .action(
             Button::new("Retry server start")
-                .variant(ButtonVariant::Contrast)
+                .variant(ButtonVariant::Submit)
                 .icon(&icons::REFRESH)
                 .on_press_tx(move |s: &mut AppState, _| {
                     s.dispatch(Action::Native(NativeAction::RestartWorkspaceServer(
@@ -432,7 +432,7 @@ fn build_creation_readiness_notice(
         let ws_cloned = ws_id;
         card = card.action(
             Button::new(label)
-                .variant(ButtonVariant::Contrast)
+                .variant(ButtonVariant::Submit)
                 .control_size(ControlSize::Small)
                 .on_press_tx(move |s: &mut AppState, _| {
                     s.dispatch(Action::Shell(ShellAction::RepairCreationReadiness {
@@ -613,7 +613,7 @@ fn build_updater_banner(s: &AppState, k: &Kit, t: &ThemeTokens) -> Option<El> {
                     )
                     .child(
                         Button::new("Restart & install")
-                            .variant(ButtonVariant::Contrast)
+                            .variant(ButtonVariant::Submit)
                             .control_size(ControlSize::Small)
                             .on_press_tx(|s: &mut AppState, _| {
                                 s.dispatch(Action::Settings(SettingsAction::QuitAndInstallUpdate));

@@ -729,7 +729,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                         .description(empty_desc)
                         .action(
                             Button::new("Create")
-                                .variant(ButtonVariant::Contrast)
+                                .variant(ButtonVariant::Submit)
                                 .control_size(ControlSize::Regular)
                                 .icon(&icons::PLUS)
                                 .on_press(open_create_dialog)
@@ -1451,7 +1451,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
             )
             .child(
                 Button::new(if subagent_saving { "Saving..." } else { "Save" })
-                    .variant(ButtonVariant::Contrast)
+                    .variant(ButtonVariant::Submit)
                     .control_size(ControlSize::Regular)
                     .disabled(!can_save || subagent_saving)
                     .on_press(move |s: &mut AppState| {
@@ -1616,7 +1616,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                 })
                 .build(k),
             Button::new("New subagent")
-                .variant(ButtonVariant::Contrast)
+                .variant(ButtonVariant::Submit)
                 .control_size(ControlSize::Regular)
                 .icon(&icons::PLUS)
                 .on_press(open_create_dialog)

@@ -91,13 +91,13 @@ use tray::QuickChatTrayController;
 use updater::{DesktopUpdaterService, UpdaterConfig};
 use watcher::{WatchChangeKind, WorkspaceDirectoryWatcher};
 use window_lifecycle::{
-    WindowCloseCoordinator, complete_window_close_resolution, execute_app_quit_hook,
-    execute_window_close_hook, get_window_handle, register_window_handle,
-    reveal_and_activate_main_window,
+    WindowCloseCoordinator, close_request_decision, complete_window_close_resolution,
+    execute_app_quit_hook, execute_window_close_hook, get_window_handle, quit_request_decision,
+    register_window_handle, reveal_and_activate_main_window,
 };
 use window_state::{
     WindowStateStore, is_headless_invocation, reconcile_opened_window_placement,
-    record_window_placement, startup_window_options,
+    record_window_placement, record_window_placement_event, startup_window_options,
 };
 
 type ShutdownLatch = Arc<(Mutex<bool>, Condvar)>;
@@ -106,7 +106,6 @@ type WatchedExplorerScopes = Arc<Mutex<HashMap<String, (bool, HashSet<String>)>>
 const QUIT_SHUTDOWN_WAIT_TIMEOUT: Duration = Duration::from_secs(15);
 const QUIT_UPDATE_INSTALL_WAIT_TIMEOUT: Duration = Duration::from_secs(90);
 const SHUTDOWN_TELEMETRY_FLUSH_TIMEOUT: Duration = Duration::from_millis(600);
-const BOUNDS_SAMPLE_THROTTLE: Duration = Duration::from_millis(1000);
 const MAX_COMPOSER_INLINE_BYTES: u64 = 10 * 1024 * 1024;
 
 static PENDING_UPDATE_INSTALL_QUIT: AtomicBool = AtomicBool::new(false);
@@ -119,7 +118,6 @@ static WORKER_CMD_TX: OnceLock<Mutex<Option<mpsc::UnboundedSender<NativeCommand>
 static SHUTDOWN_LATCH: OnceLock<Mutex<Option<ShutdownLatch>>> = OnceLock::new();
 static WINDOW_STATE_STORE: OnceLock<WindowStateStore> = OnceLock::new();
 static WINDOW_CLOSE_COORDINATOR: OnceLock<WindowCloseCoordinator> = OnceLock::new();
-static LAST_BOUNDS_SAMPLE: OnceLock<Mutex<Option<Instant>>> = OnceLock::new();
 static SHARED_ANALYTICS: OnceLock<Mutex<Option<ProductAnalyticsService>>> = OnceLock::new();
 
 fn shared_analytics_slot() -> &'static Mutex<Option<ProductAnalyticsService>> {
@@ -170,26 +168,6 @@ fn shared_close_coordinator() -> &'static WindowCloseCoordinator {
 #[cfg(test)]
 pub(crate) fn shared_close_coordinator_for_tests() -> &'static WindowCloseCoordinator {
     shared_close_coordinator()
-}
-
-fn sample_open_window_placements() {
-    if is_headless_invocation() {
-        return;
-    }
-    let throttle = LAST_BOUNDS_SAMPLE.get_or_init(|| Mutex::new(None));
-    let now = Instant::now();
-    {
-        let mut guard = throttle.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(prev) = *guard
-            && now.duration_since(prev) < BOUNDS_SAMPLE_THROTTLE
-        {
-            return;
-        }
-        *guard = Some(now);
-    }
-    if let Some(handle) = get_window_handle("main") {
-        record_window_placement(shared_window_state_store(), &handle);
-    }
 }
 
 fn flush_window_bounds_for(window_key: &str) {
@@ -290,6 +268,24 @@ pub fn on_window_opened(window_key: &str, handle: &rune::WindowHandle) {
     }
 }
 
+/// Consents to a native close immediately when clean, or defers and shows the existing prompt.
+fn on_window_close_request(state: &mut AppState, tx: &mut rune::Tx) -> rune::CloseResponse {
+    let decision = close_request_decision(state);
+    if decision == rune::CloseResponse::Defer {
+        on_window_close("main", state, tx);
+    }
+    decision
+}
+
+/// Consents to an OS quit immediately when clean, or defers and shows the existing prompt.
+fn on_app_quit_request(state: &mut AppState, tx: &mut rune::Tx) -> rune::QuitResponse {
+    let decision = quit_request_decision(state);
+    if decision == rune::QuitResponse::Defer {
+        request_app_quit(state, tx);
+    }
+    decision
+}
+
 /// Evaluates per-window close guards on Rune's UI thread, reopening & confirming when dirty/busy.
 pub fn on_window_close(window_key: &str, state: &mut AppState, tx: &mut rune::Tx) {
     let key = window_key.to_string();
@@ -370,8 +366,9 @@ pub fn configure_app(app: App<AppState>) -> App<AppState> {
         .on_window(|window_handle| {
             on_window_opened("main", window_handle);
         })
-        .on_frame_drawn(|_rt| {
-            sample_open_window_placements();
+        .on_placement(|_state, placement, _tx| {
+            record_window_placement_event(shared_window_state_store(), &placement);
+            false
         })
         .on_reopen(|_state, has_visible_windows, _tx| {
             if !has_visible_windows && let Some(app_handle) = current_app_handle() {
@@ -383,6 +380,8 @@ pub fn configure_app(app: App<AppState>) -> App<AppState> {
         .on_open_url(|state, url, _tx| {
             state.apply_store_event(StoreEvent::DeepLink(url.to_string()));
         })
+        .on_close_request(|state, tx| on_window_close_request(state, tx))
+        .on_quit_request(|state, tx| on_app_quit_request(state, tx))
         .on_close(|state, tx| {
             on_window_close("main", state, tx);
         })
@@ -2147,56 +2146,30 @@ impl NativeWorkerContext {
         let logger = self.logger.clone();
         let req_id = request_id.clone();
 
-        #[cfg(any(target_os = "macos", target_os = "windows"))]
-        if allow_multiple {
-            let emit = self.emit.clone();
-            let tokio_rt = tokio::runtime::Handle::try_current().ok();
-            handle.update(move |_state, _tx| {
-                // `rfd::backend::macos::ModalFuture` calls `MainThreadMarker::new_unchecked()`
-                // inside `pick_files()`, so the dialog future must be constructed on Rune's UI
-                // main thread and awaited asynchronously once the OS sheet completes.
-                let pick_fut = rfd::AsyncFileDialog::new()
-                    .set_title("Select Files")
-                    .pick_files();
-                let finish = async move {
-                    let candidates = pick_fut
-                        .await
-                        .unwrap_or_default()
-                        .into_iter()
-                        .map(|fh| fh.path().to_path_buf())
-                        .collect();
-                    let paths = authorize_picked_files(candidates, &uploads, &logger);
-                    (emit)(StoreEvent::FilesPicked {
-                        request_id: req_id,
-                        paths,
-                    });
-                };
-                if let Some(rt) = tokio_rt {
-                    rt.spawn(finish);
-                } else {
-                    std::thread::spawn(move || {
-                        if let Ok(rt) = tokio::runtime::Builder::new_current_thread().build() {
-                            rt.block_on(finish);
-                        }
-                    });
-                }
-            });
-            return;
-        }
-
         handle.update(move |_state, tx| {
             let uploads_inner = uploads.clone();
             let logger_inner = logger.clone();
             let id_inner = req_id.clone();
             let options = dialogs::build_open_files_dialog(None, allow_multiple);
-            tx.open_file(options, move |state: &mut AppState, result, _tx| {
-                let candidates = result.ok().flatten().into_iter().collect();
-                let paths = authorize_picked_files(candidates, &uploads_inner, &logger_inner);
-                state.apply_store_event(StoreEvent::FilesPicked {
-                    request_id: id_inner,
-                    paths,
+            if allow_multiple {
+                tx.open_files(options, move |state: &mut AppState, result, _tx| {
+                    let candidates = result.ok().flatten().unwrap_or_default();
+                    let paths = authorize_picked_files(candidates, &uploads_inner, &logger_inner);
+                    state.apply_store_event(StoreEvent::FilesPicked {
+                        request_id: id_inner,
+                        paths,
+                    });
                 });
-            });
+            } else {
+                tx.open_file(options, move |state: &mut AppState, result, _tx| {
+                    let candidates = result.ok().flatten().into_iter().collect();
+                    let paths = authorize_picked_files(candidates, &uploads_inner, &logger_inner);
+                    state.apply_store_event(StoreEvent::FilesPicked {
+                        request_id: id_inner,
+                        paths,
+                    });
+                });
+            }
         });
     }
 }

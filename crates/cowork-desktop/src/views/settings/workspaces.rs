@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use rune::{El, col, row, text};
+use rune::{El, col, icon, row, text};
 use rune_kit::{Button, ButtonVariant, Checkbox, ControlSize, Kit, Select, SelectAppearance};
 use serde_json::{Value, json};
 
@@ -23,6 +23,38 @@ use crate::views::settings::primitives::{
 use crate::views::settings::providers::is_provider_connected;
 use crate::views::settings::providers_utils::sort_and_filter_provider_refs;
 use crate::views::settings::shell::PageContent;
+
+fn disclosure_chevron(open: bool, size: f32, motion: rune::Spring) -> El {
+    icon(&icons::CHEVRON_RIGHT, size)
+        .rotate(if open {
+            std::f32::consts::FRAC_PI_2
+        } else {
+            0.0
+        })
+        .rotate_motion(motion)
+}
+
+fn disclosure_button(
+    label: impl Into<String>,
+    open: bool,
+    variant: ButtonVariant,
+    k: &Kit,
+) -> Button {
+    let label = label.into();
+    let visible_label = label.clone();
+    let motion = k.motion.disclosure;
+    Button::new(label)
+        .variant(variant)
+        .control_size(ControlSize::Small)
+        .expanded(open)
+        .label_with(move |font, ink| {
+            row()
+                .items_center()
+                .gap(6.0)
+                .child(disclosure_chevron(open, 14.0, motion).color(ink))
+                .child(text(visible_label).font(font).color(ink))
+        })
+}
 
 /// Normalized per-workspace tool-calling configuration.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -440,7 +472,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
         if workspace_lifecycle_enabled {
             empty = empty.action(
                 Button::new("Add workspace")
-                    .variant(ButtonVariant::Contrast)
+                    .variant(ButtonVariant::Submit)
                     .control_size(ControlSize::Regular)
                     .icon(&icons::PLUS)
                     .on_press(|s: &mut AppState| {
@@ -729,18 +761,16 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
     let adv_toggle = SettingsRow::new("Advanced actions")
         .description("Sharing, server restart, and folder/chat removal controls.")
         .control(
-            Button::new(if adv_open { "Hide" } else { "Show" })
-                .variant(ButtonVariant::Ghost)
-                .control_size(ControlSize::Small)
-                .icon(if adv_open {
-                    &icons::CHEVRON_DOWN
-                } else {
-                    &icons::CHEVRON_RIGHT
-                })
-                .on_press(|s: &mut AppState| {
-                    s.settings_ui.workspace_advanced_open = !s.settings_ui.workspace_advanced_open;
-                })
-                .build(k),
+            disclosure_button(
+                if adv_open { "Hide" } else { "Show" },
+                adv_open,
+                ButtonVariant::Ghost,
+                k,
+            )
+            .on_press(|s: &mut AppState| {
+                s.settings_ui.workspace_advanced_open = !s.settings_ui.workspace_advanced_open;
+            })
+            .build(k),
         );
 
     let mut adv_section = Section::new().child(adv_toggle.build(k, t));

@@ -14,11 +14,11 @@ use std::sync::Arc;
 use base64::Engine as _;
 use rune::{
     Align, Color, Cursor, El, GrowthSpec, Icon, ImageCache, Pixels, ScrollSpec, SurfaceFit,
-    TextStyle, col, el, icon, memo, row, text,
+    TextStyle, Tx, col, el, icon, memo, row, text,
 };
 use rune_kit::{
     Badge, BadgeVariant, Button, ButtonVariant, ControlSize, IconButton, IconButtonVariant, Kit,
-    Spinner,
+    ScrollBar, ScrollBarStyle, SegmentedControl, Spinner,
 };
 
 use super::state::{PresentationLayoutMode, PresentationPreviewData, PresentationSlideData};
@@ -819,6 +819,14 @@ fn grid_cols_for_width(est_width: f32) -> usize {
     }
 }
 
+fn reveal_grid_slide(tx: &mut Tx, index: usize, grid_cols: usize) {
+    let row = index / grid_cols.max(1);
+    tx.scroll_into_view_in(
+        "pptx-grid-scroll",
+        format!("pptx-grid-row-{row}/pptx-grid-card-{index}"),
+    );
+}
+
 #[allow(clippy::too_many_arguments)]
 fn presentation_memo_version(
     s: &AppState,
@@ -922,6 +930,8 @@ fn render_presentation_preview_inner(
     t: &ThemeTokens,
 ) -> El {
     let total_slides = data.slides.len();
+    let presentation_layout = s.preview_ui.presentation_layout;
+    let grid_cols = grid_cols_for_width(est_w);
     let meta_bar = build_meta_bar(s, preview, data, compact, k, t);
 
     let mut root = col()
@@ -931,9 +941,15 @@ fn render_presentation_preview_inner(
         .shrink()
         .min_h(0.0)
         .focusable(true)
-        .on_key(move |s: &mut AppState, ev, _| {
+        .on_key(move |s: &mut AppState, ev, tx| {
             if !ev.mods.cmd && !ev.mods.ctrl && !ev.mods.alt {
-                s.preview_ui.handle_presentation_key(&ev.key, total_slides)
+                let handled = s
+                    .preview_ui
+                    .handle_presentation_key_tx(&ev.key, total_slides, tx);
+                if handled && presentation_layout == PresentationLayoutMode::Grid {
+                    reveal_grid_slide(tx, s.preview_ui.active_slide, grid_cols);
+                }
+                handled
             } else {
                 false
             }
@@ -970,7 +986,7 @@ fn render_presentation_preview_inner(
                 k,
                 t,
             ),
-            PresentationLayoutMode::Grid => build_grid_view(&data.slides, est_w, theme_sig, t),
+            PresentationLayoutMode::Grid => build_grid_view(&data.slides, est_w, theme_sig, k, t),
         }
     };
 
@@ -1019,48 +1035,34 @@ fn build_meta_bar(
 
     if !data.loading && data.error_message.is_none() && !data.slides.is_empty() {
         let layout = s.preview_ui.presentation_layout;
-        let deck_btn = el().key("pptx-layout-deck").child(
-            IconButton::new(&ICON_COLUMNS)
-                .label("Deck view")
-                .help("Deck view")
-                .control_size(ControlSize::Small)
-                .variant(if layout == PresentationLayoutMode::Deck {
-                    IconButtonVariant::Neutral
+        let selected = if layout == PresentationLayoutMode::Deck {
+            0
+        } else {
+            1
+        };
+        let total_slides = data.slides.len();
+        let layout_picker = SegmentedControl::new(&["", ""], Some(selected))
+            .label("Presentation layout")
+            .icons(&[Some(&ICON_COLUMNS), Some(&ICON_LAYOUT_GRID)])
+            .help(0, "Deck view")
+            .help(1, "Grid view")
+            .fit()
+            .on_pick(move |s: &mut AppState, idx, tx| {
+                let mode = if idx == 1 {
+                    PresentationLayoutMode::Grid
                 } else {
-                    IconButtonVariant::GhostMuted
-                })
-                .on_press(|s: &mut AppState| {
-                    s.preview_ui
-                        .set_presentation_layout(PresentationLayoutMode::Deck);
-                })
-                .build(k),
-        );
-        let grid_btn = el().key("pptx-layout-grid").child(
-            IconButton::new(&ICON_LAYOUT_GRID)
-                .label("Grid view")
-                .help("Grid view")
-                .control_size(ControlSize::Small)
-                .variant(if layout == PresentationLayoutMode::Grid {
-                    IconButtonVariant::Neutral
-                } else {
-                    IconButtonVariant::GhostMuted
-                })
-                .on_press(|s: &mut AppState| {
-                    s.preview_ui
-                        .set_presentation_layout(PresentationLayoutMode::Grid);
-                })
-                .build(k),
-        );
-        bar = bar.child(
-            row()
-                .padding(2.0)
-                .gap(2.0)
-                .radius(6.0)
-                .border(1.0, t.border_muted)
-                .fill(t.sidebar_bg)
-                .child(deck_btn)
-                .child(grid_btn),
-        );
+                    PresentationLayoutMode::Deck
+                };
+                let active = s.preview_ui.active_slide;
+                let grid_cols = grid_cols_for_width(estimated_preview_width(s));
+                s.preview_ui.set_presentation_layout(mode);
+                s.preview_ui.select_slide(active, total_slides, tx);
+                if mode == PresentationLayoutMode::Grid {
+                    reveal_grid_slide(tx, active, grid_cols);
+                }
+            })
+            .build(k);
+        bar = bar.child(el().key("pptx-layout-picker").child(layout_picker));
     }
 
     let ws_id = preview.workspace_id.clone();
@@ -1382,6 +1384,7 @@ fn slide_number_pill(idx: usize, pad_x: f32, pad_y: f32, inset: f32, t: &ThemeTo
 #[allow(clippy::too_many_arguments)]
 fn build_memoized_thumbnail_tile(
     s: &AppState,
+    k: &Kit,
     slide: &PresentationSlideData,
     idx: usize,
     total_slides: usize,
@@ -1415,6 +1418,7 @@ fn build_memoized_thumbnail_tile(
     memo(key.as_str(), h.finish(), || {
         build_thumbnail_tile(
             s,
+            k,
             slide,
             idx,
             total_slides,
@@ -1429,6 +1433,7 @@ fn build_memoized_thumbnail_tile(
 #[allow(clippy::too_many_arguments)]
 fn build_thumbnail_tile(
     s: &AppState,
+    k: &Kit,
     slide: &PresentationSlideData,
     idx: usize,
     total_slides: usize,
@@ -1472,9 +1477,12 @@ fn build_thumbnail_tile(
         .radius(6.0)
         .border(if active { 1.5 } else { 1.0 }, border_col)
         .fill(bg_col)
+        .focusable(true)
         .cursor(Cursor::Pointer)
-        .on_press(move |s: &mut AppState| {
-            s.preview_ui.select_slide(idx, total_slides);
+        .role("button")
+        .label(title.clone())
+        .on_press_tx(move |s: &mut AppState, tx| {
+            s.preview_ui.select_slide(idx, total_slides, tx);
         })
         .child(thumb_box)
         .child(
@@ -1490,7 +1498,7 @@ fn build_thumbnail_tile(
     } else {
         tile = tile.w_full();
     }
-    tile
+    k.interactive_with(tile, t.hover, t.pressed)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1524,6 +1532,7 @@ fn build_deck_view(
         for (idx, slide) in slides.iter().enumerate() {
             strip = strip.child(build_memoized_thumbnail_tile(
                 s,
+                k,
                 slide,
                 idx,
                 total,
@@ -1535,9 +1544,10 @@ fn build_deck_view(
                 t,
             ));
         }
-        strip
+        strip.scroll_bar_styled(ScrollBarStyle::from_kit(k).horizontal())
     } else {
         let tokens = *t;
+        let kit = k.clone();
         let rows_stack = col()
             .key("pptx-thumb-strip-rows")
             .w_full()
@@ -1566,6 +1576,7 @@ fn build_deck_view(
                     let live_ready_gen = current_slide_ready_gen();
                     build_memoized_thumbnail_tile(
                         s,
+                        &kit,
                         slide,
                         idx,
                         live_total,
@@ -1578,17 +1589,19 @@ fn build_deck_view(
                     )
                 },
             );
-        col()
-            .key("pptx-thumb-strip")
-            .w(156.0)
-            .h_full()
-            .shrink()
-            .min_h(0.0)
-            .fill(t.sidebar_bg)
-            .scroll(ScrollSpec {
-                stick_bottom: false,
-            })
-            .child(rows_stack)
+        k.scroll_bar(
+            col()
+                .key("pptx-thumb-strip")
+                .w(156.0)
+                .h_full()
+                .shrink()
+                .min_h(0.0)
+                .fill(t.sidebar_bg)
+                .scroll(ScrollSpec {
+                    stick_bottom: false,
+                })
+                .child(rows_stack),
+        )
     };
 
     let stage_visual = decode_slide_visual(s, &active_slide.png_base64, 900.0, text_only_deck);
@@ -1622,8 +1635,8 @@ fn build_deck_view(
             .control_size(ControlSize::Small)
             .variant(IconButtonVariant::Ghost)
             .disabled(active_idx == 0)
-            .on_press(|s: &mut AppState| {
-                s.preview_ui.prev_slide();
+            .on_press_tx(|s: &mut AppState, tx| {
+                s.preview_ui.prev_slide(tx);
             })
             .build(k),
     );
@@ -1634,8 +1647,8 @@ fn build_deck_view(
             .control_size(ControlSize::Small)
             .variant(IconButtonVariant::Ghost)
             .disabled(active_idx + 1 >= total)
-            .on_press(move |s: &mut AppState| {
-                s.preview_ui.next_slide(total);
+            .on_press_tx(move |s: &mut AppState, tx| {
+                s.preview_ui.next_slide(total, tx);
             })
             .build(k),
     );
@@ -1704,6 +1717,7 @@ fn build_deck_view(
 #[allow(clippy::too_many_arguments)]
 fn build_memoized_grid_card(
     s: &AppState,
+    k: &Kit,
     slide: &PresentationSlideData,
     idx: usize,
     total: usize,
@@ -1757,7 +1771,7 @@ fn build_memoized_grid_card(
             ))
             .child(slide_number_pill(idx, 5.0, 2.0, 6.0, t));
 
-        col()
+        let card = col()
             .grow(1.0)
             .shrink()
             .min_w(0.0)
@@ -1766,9 +1780,12 @@ fn build_memoized_grid_card(
             .radius(8.0)
             .border(if active { 1.5 } else { 1.0 }, border_col)
             .fill(bg_col)
+            .focusable(true)
             .cursor(Cursor::Pointer)
-            .on_press(move |s: &mut AppState| {
-                s.preview_ui.select_slide(idx, total);
+            .role("button")
+            .label(slide_display_title(slide, idx))
+            .on_press_tx(move |s: &mut AppState, tx| {
+                s.preview_ui.select_slide(idx, total, tx);
                 s.preview_ui
                     .set_presentation_layout(PresentationLayoutMode::Deck);
             })
@@ -1779,7 +1796,8 @@ fn build_memoized_grid_card(
                     .color(if active { t.text_base } else { t.text_muted })
                     .truncate()
                     .w_full(),
-            )
+            );
+        k.interactive_with(card, t.hover, t.pressed)
     })
 }
 
@@ -1787,6 +1805,7 @@ fn build_grid_view(
     slides: &[PresentationSlideData],
     est_width: f32,
     theme_sig: u64,
+    k: &Kit,
     t: &ThemeTokens,
 ) -> El {
     let total = slides.len();
@@ -1794,6 +1813,7 @@ fn build_grid_view(
     let row_count = total.div_ceil(cols);
     let card_w = ((est_width - 24.0 - 12.0 * (cols as f32 - 1.0)) / cols as f32 - 16.0).max(160.0);
     let tokens = *t;
+    let kit = k.clone();
 
     let grid_rows = col()
         .key("pptx-grid-rows")
@@ -1832,6 +1852,7 @@ fn build_grid_view(
                     let idx = start + offset;
                     grid_row = grid_row.child(build_memoized_grid_card(
                         s,
+                        &kit,
                         slide,
                         idx,
                         live_total,
@@ -1850,14 +1871,16 @@ fn build_grid_view(
             },
         );
 
-    col()
-        .key("pptx-grid-scroll")
-        .w_full()
-        .grow(1.0)
-        .shrink()
-        .min_h(0.0)
-        .scroll(ScrollSpec {
-            stick_bottom: false,
-        })
-        .child(grid_rows)
+    k.scroll_bar(
+        col()
+            .key("pptx-grid-scroll")
+            .w_full()
+            .grow(1.0)
+            .shrink()
+            .min_h(0.0)
+            .scroll(ScrollSpec {
+                stick_bottom: false,
+            })
+            .child(grid_rows),
+    )
 }

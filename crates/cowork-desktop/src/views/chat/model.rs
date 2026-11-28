@@ -653,11 +653,13 @@ pub fn tool_icon_category(tool_name: &str) -> ToolIconCategory {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ToolCardFormatted {
     pub title: String,
+    /// Full source text; the view applies width-aware elision.
     pub subtitle: String,
     pub details: Vec<(String, String)>,
 }
 
-/// Middle-truncates paths keeping directory prefix and filename suffix.
+/// Middle-truncates a path for a detail view with a fixed character budget.
+/// Tool subtitles should instead retain the full path and use Rune's layout-aware elision.
 pub fn middle_truncate_path(path: &str, max_chars: usize) -> String {
     let count = path.chars().count();
     if count <= max_chars || max_chars < 6 {
@@ -671,7 +673,8 @@ pub fn middle_truncate_path(path: &str, max_chars: usize) -> String {
     format!("{prefix}…{suffix}")
 }
 
-/// End-truncates general single-line text safely on char boundaries.
+/// End-truncates text safely on char boundaries for previews with a fixed character budget.
+/// Width-constrained view text should instead use Rune's layout-aware elision.
 pub fn truncate_text(text: &str, max_chars: usize) -> String {
     let count = text.chars().count();
     if count <= max_chars || max_chars < 2 {
@@ -762,6 +765,7 @@ fn value_as_string(v: &Value) -> String {
 }
 
 /// Computes `(title, subtitle)` for a tool call without allocating its detail rows.
+/// The subtitle retains the full source text so the view can elide it for the available width.
 pub(super) fn format_tool_summary(
     tool_name: &str,
     input: &Value,
@@ -773,18 +777,17 @@ pub(super) fn format_tool_summary(
         "bash" | "commandexecution" | "command_execution" => {
             let cmd = json_str(input, &["command", "cmd", "script"]).unwrap_or("");
             let desc = json_str(input, &["description"]);
-            desc.map(|d| truncate_text(d, 72))
-                .unwrap_or_else(|| truncate_text(cmd, 64))
+            desc.map(str::to_string).unwrap_or_else(|| cmd.to_string())
         }
         "read" | "read_file" | "readfile" | "write" | "write_file" | "writefile" | "edit"
         | "edit_file" | "editfile" => {
             let path = json_str(input, &["file_path", "path", "filePath"]).unwrap_or("");
-            middle_truncate_path(path, 52)
+            path.to_string()
         }
         "websearch" | "web_search" | "nativewebsearch" => {
             let query = json_str(input, &["query", "q"]).unwrap_or("");
             if !query.is_empty() {
-                format!("Searching for: {}", truncate_text(query, 80))
+                format!("Searching for: {query}")
             } else {
                 "Searching the web".to_string()
             }
@@ -792,14 +795,14 @@ pub(super) fn format_tool_summary(
         "webfetch" | "web_fetch" => {
             let url = json_str(input, &["url"]).unwrap_or("");
             if !url.is_empty() {
-                format!("Fetching: {}", truncate_text(url, 80))
+                format!("Fetching: {url}")
             } else {
                 String::new()
             }
         }
         "grep" | "glob" | "find" => {
             let pattern = json_str(input, &["pattern", "query"]).unwrap_or("");
-            truncate_text(pattern, 64)
+            pattern.to_string()
         }
         "todowrite" | "todo_write" => {
             let count = json_val(input, &["todos", "items"])
@@ -817,16 +820,16 @@ pub(super) fn format_tool_summary(
         "spawnagent" | "spawn_agent" => {
             let target = json_str(input, &["nickname", "title", "role", "agent"])
                 .or_else(|| json_str(input, &["task", "prompt"]));
-            target.map(|t| truncate_text(t, 64)).unwrap_or_default()
+            target.map(str::to_string).unwrap_or_default()
         }
         "waitforagent" | "wait_for_agent" => json_str(input, &["agentId", "id", "target"])
-            .map(|t| truncate_text(t, 56))
+            .map(str::to_string)
             .unwrap_or_default(),
         _ => json_str(
             input,
             &["path", "file_path", "url", "query", "command", "question"],
         )
-        .map(|t| truncate_text(t, 64))
+        .map(str::to_string)
         .unwrap_or_default(),
     };
     let final_subtitle = if !subtitle.is_empty() {
@@ -865,28 +868,27 @@ pub fn format_tool_card(
             if let Some(cwd) = json_str(input, &["cwd", "workdir"]) {
                 details.push(("Directory".to_string(), middle_truncate_path(cwd, 64)));
             }
-            desc.map(|d| truncate_text(d, 72))
-                .unwrap_or_else(|| truncate_text(cmd, 64))
+            desc.map(str::to_string).unwrap_or_else(|| cmd.to_string())
         }
         "read" | "read_file" | "readfile" => {
             let path = json_str(input, &["file_path", "path", "filePath"]).unwrap_or("");
             if !path.is_empty() {
                 details.push(("Path".to_string(), path.to_string()));
             }
-            middle_truncate_path(path, 52)
+            path.to_string()
         }
         "write" | "write_file" | "writefile" | "edit" | "edit_file" | "editfile" => {
             let path = json_str(input, &["file_path", "path", "filePath"]).unwrap_or("");
             if !path.is_empty() {
                 details.push(("File".to_string(), path.to_string()));
             }
-            middle_truncate_path(path, 52)
+            path.to_string()
         }
         "websearch" | "web_search" | "nativewebsearch" => {
             let query = json_str(input, &["query", "q"]).unwrap_or("");
             if !query.is_empty() {
                 details.push(("Query".to_string(), query.to_string()));
-                format!("Searching for: {}", truncate_text(query, 80))
+                format!("Searching for: {query}")
             } else {
                 "Searching the web".to_string()
             }
@@ -895,7 +897,7 @@ pub fn format_tool_card(
             let url = json_str(input, &["url"]).unwrap_or("");
             if !url.is_empty() {
                 details.push(("URL".to_string(), url.to_string()));
-                format!("Fetching: {}", truncate_text(url, 80))
+                format!("Fetching: {url}")
             } else {
                 String::new()
             }
@@ -908,7 +910,7 @@ pub fn format_tool_card(
             if let Some(path) = json_str(input, &["path", "cwd"]) {
                 details.push(("Path".to_string(), middle_truncate_path(path, 56)));
             }
-            truncate_text(pattern, 64)
+            pattern.to_string()
         }
         "todowrite" | "todo_write" => {
             let count = json_val(input, &["todos", "items"])
@@ -926,16 +928,16 @@ pub fn format_tool_card(
         "spawnagent" | "spawn_agent" => {
             let target = json_str(input, &["nickname", "title", "role", "agent"])
                 .or_else(|| json_str(input, &["task", "prompt"]));
-            target.map(|t| truncate_text(t, 64)).unwrap_or_default()
+            target.map(str::to_string).unwrap_or_default()
         }
         "waitforagent" | "wait_for_agent" => json_str(input, &["agentId", "id", "target"])
-            .map(|t| truncate_text(t, 56))
+            .map(str::to_string)
             .unwrap_or_default(),
         _ => json_str(
             input,
             &["path", "file_path", "url", "query", "command", "question"],
         )
-        .map(|t| truncate_text(t, 64))
+        .map(str::to_string)
         .unwrap_or_default(),
     };
 
@@ -2133,6 +2135,17 @@ mod tests {
         );
         assert_eq!(fmt.title, "Plan checklist");
         assert_eq!(fmt.subtitle, "2 checklist items");
+    }
+
+    #[test]
+    fn tool_subtitles_preserve_source_text_for_layout_elision() {
+        let path = format!("/workspace/{}/src/main.rs", "nested-directory/".repeat(8));
+        let input = json!({ "path": path });
+        let (_, summary) = format_tool_summary("read", &input, ToolRunStatus::Completed);
+        let card = format_tool_card("read", &input, None, None, ToolRunStatus::Completed);
+
+        assert_eq!(summary, path);
+        assert_eq!(card.subtitle, path);
     }
 
     #[test]

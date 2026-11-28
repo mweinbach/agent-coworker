@@ -20,6 +20,38 @@ use crate::views::settings::primitives::{
     search_input, status_pill,
 };
 
+fn disclosure_chevron(open: bool, size: f32, motion: rune::Spring) -> El {
+    icon(&icons::CHEVRON_RIGHT, size)
+        .rotate(if open {
+            std::f32::consts::FRAC_PI_2
+        } else {
+            0.0
+        })
+        .rotate_motion(motion)
+}
+
+fn disclosure_button(
+    label: impl Into<String>,
+    open: bool,
+    variant: ButtonVariant,
+    k: &Kit,
+) -> Button {
+    let label = label.into();
+    let visible_label = label.clone();
+    let motion = k.motion.disclosure;
+    Button::new(label)
+        .variant(variant)
+        .control_size(ControlSize::Small)
+        .expanded(open)
+        .label_with(move |font, ink| {
+            row()
+                .items_center()
+                .gap(6.0)
+                .child(disclosure_chevron(open, 14.0, motion).color(ink))
+                .child(text(visible_label).font(font).color(ink))
+        })
+}
+
 fn source_rank(source: Option<&str>) -> u8 {
     match source.unwrap_or("workspace") {
         "user" => 0,
@@ -330,7 +362,7 @@ pub fn view_tab(
     if !servers.is_empty() {
         section = section.action(
             Button::new("Add connector")
-                .variant(ButtonVariant::Contrast)
+                .variant(ButtonVariant::Submit)
                 .icon(&icons::PLUS)
                 .control_size(ControlSize::Small)
                 .on_press(|s: &mut AppState| {
@@ -346,7 +378,7 @@ pub fn view_tab(
             .description("Add a hosted remote server URL or a local stdio command.")
             .action(
                 Button::new("Add connector")
-                    .variant(ButtonVariant::Contrast)
+                    .variant(ButtonVariant::Submit)
                     .icon(&icons::PLUS)
                     .control_size(ControlSize::Regular)
                     .on_press(|s: &mut AppState| {
@@ -422,12 +454,6 @@ fn render_server_row(
     let can_edit = editable_source(Some(source_str.as_str())).is_some();
     let needs_oauth = server_needs_oauth(srv);
 
-    let chevron = if is_expanded {
-        &icons::CHEVRON_DOWN
-    } else {
-        &icons::CHEVRON_RIGHT
-    };
-
     let identity_toggle = identity.clone();
     let expand_header = row()
         .grow(1.0)
@@ -437,8 +463,9 @@ fn render_server_row(
         .radius(k.radius.md)
         .px(4.0)
         .py(4.0)
-        .hover(t.hover)
+        .focusable(true)
         .role("button")
+        .expanded(is_expanded)
         .label(format!("Toggle details for {}", srv.name))
         .on_press(move |s: &mut AppState| {
             if s.settings_ui
@@ -452,7 +479,7 @@ fn render_server_row(
                     .insert(identity_toggle.clone());
             }
         })
-        .child(icon(chevron, 14.0).color(t.text_muted))
+        .child(disclosure_chevron(is_expanded, 14.0, k.motion.disclosure).color(t.text_muted))
         .child(entity_icon(s, None, &srv.name, EntityIconSize::Sm, k, t))
         .child(
             text(&srv.name)
@@ -467,6 +494,7 @@ fn render_server_row(
             t,
         ));
 
+    let expand_header = k.interactive_with(expand_header, t.hover, t.pressed);
     let mut badges_header = expand_header;
     if !srv.enabled {
         badges_header = badges_header.child(status_pill("Disabled", StatusTone::Neutral, k, t));
@@ -608,7 +636,7 @@ fn render_server_row(
         actions = actions
             .child(
                 Button::new("Sign in")
-                    .variant(ButtonVariant::Contrast)
+                    .variant(ButtonVariant::Submit)
                     .control_size(ControlSize::Small)
                     .on_press(move |s: &mut AppState| {
                         s.dispatch(Action::Settings(SettingsAction::AuthorizeMcpOAuth {
@@ -959,18 +987,16 @@ fn append_editor_dialog(
     let adv_open = s.settings_ui.mcp_editor_advanced_open;
     fields = fields.child(
         row().w_full().child(
-            Button::new(if adv_open {
-                "Hide advanced"
-            } else {
-                "Advanced"
-            })
-            .variant(ButtonVariant::Ghost)
-            .control_size(ControlSize::Small)
-            .icon(if adv_open {
-                &icons::CHEVRON_DOWN
-            } else {
-                &icons::CHEVRON_RIGHT
-            })
+            disclosure_button(
+                if adv_open {
+                    "Hide advanced"
+                } else {
+                    "Advanced"
+                },
+                adv_open,
+                ButtonVariant::Ghost,
+                k,
+            )
             .on_press(|s: &mut AppState| {
                 s.settings_ui.mcp_editor_advanced_open = !s.settings_ui.mcp_editor_advanced_open;
             })
@@ -1247,7 +1273,7 @@ fn append_editor_dialog(
             } else {
                 "Add connector"
             })
-            .variant(ButtonVariant::Contrast)
+            .variant(ButtonVariant::Submit)
             .control_size(ControlSize::Regular)
             .disabled(mcp_saving)
             .on_press(move |s: &mut AppState| {

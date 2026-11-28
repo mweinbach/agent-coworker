@@ -137,9 +137,13 @@ impl SettingsPageId {
         match segment.trim() {
             "models" | "providers" => SettingsPageId::Models,
             "subagents" => SettingsPageId::Subagents,
-            "toolAccess" | "mcp" | "openaiNativeConnectors" => SettingsPageId::ToolAccess,
+            "toolAccess"
+            | "connectors"
+            | "mcp"
+            | "openAiNativeConnectors"
+            | "openaiNativeConnectors" => SettingsPageId::ToolAccess,
             "desktop" => SettingsPageId::Desktop,
-            "defaults" | "workspaces" => SettingsPageId::Defaults,
+            "defaults" | "behavior" | "workspaces" => SettingsPageId::Defaults,
             "profileMemory" | "memory" => SettingsPageId::ProfileMemory,
             "remoteAccess" => SettingsPageId::RemoteAccess,
             "backup" => SettingsPageId::Backup,
@@ -412,6 +416,28 @@ impl NavigationHistory {
         changed
     }
 
+    pub fn can_go_back_to_non_settings(&self) -> bool {
+        self.current().view == ViewId::Settings
+            && self.entries[..self.cursor]
+                .iter()
+                .any(|entry| entry.view != ViewId::Settings)
+    }
+
+    pub fn go_back_to_non_settings(&mut self) -> bool {
+        if !self.can_go_back_to_non_settings() {
+            return false;
+        }
+        let Some(cursor) = (0..self.cursor)
+            .rev()
+            .find(|idx| self.entries[*idx].view != ViewId::Settings)
+        else {
+            return false;
+        };
+        self.cursor = cursor;
+        self.active_creation_intent = None;
+        true
+    }
+
     pub fn go_back(&mut self) -> bool {
         if !self.can_go_back() {
             return false;
@@ -484,6 +510,25 @@ mod tests {
         assert_eq!(nav.current().settings_page, SettingsPageId::ToolAccess);
         assert_eq!(nav.current().last_non_settings_view, ViewId::Chat);
         assert_eq!(nav.len(), 1);
+    }
+
+    #[test]
+    fn route_aliases_accept_behavior_and_connector_spellings() {
+        assert_eq!(
+            SettingsPageId::from_route_segment("behavior"),
+            SettingsPageId::Defaults
+        );
+        for segment in [
+            "connectors",
+            "openAiNativeConnectors",
+            "openaiNativeConnectors",
+        ] {
+            assert_eq!(
+                SettingsPageId::from_route_segment(segment),
+                SettingsPageId::ToolAccess,
+                "{segment} should resolve to Tool Access"
+            );
+        }
     }
 
     #[test]

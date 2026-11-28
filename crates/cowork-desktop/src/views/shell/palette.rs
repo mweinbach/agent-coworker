@@ -10,6 +10,7 @@ use crate::actions::{Action, NativeAction, NavAction, ShellAction};
 use crate::router::{SettingsPageId, ViewId};
 use crate::state::AppState;
 use crate::theme::{ThemePreference, ThemeTokens};
+use crate::views::chat::components::{StatusPillTone, status_presentation, status_tone_color};
 
 use super::icons;
 
@@ -19,6 +20,7 @@ pub(crate) struct PaletteItem {
     pub(crate) title: String,
     pub(crate) subtitle: String,
     pub(crate) icon_glyph: &'static Icon,
+    pub(crate) status_tone: Option<StatusPillTone>,
     pub(crate) action: Action,
 }
 
@@ -235,6 +237,9 @@ pub fn build_command_palette(s: &AppState, k: &Kit, t: &ThemeTokens) -> Option<E
 
 fn palette_row(item: PaletteItem, highlighted: bool, k: &Kit, t: &ThemeTokens) -> El {
     let act = item.action.clone();
+    let icon_color = item
+        .status_tone
+        .map_or(t.text_muted, |tone| status_tone_color(tone, t));
     let row_bg = if highlighted {
         t.accent_soft
     } else {
@@ -259,7 +264,7 @@ fn palette_row(item: PaletteItem, highlighted: bool, k: &Kit, t: &ThemeTokens) -
         .w_full()
         .gap(10.0)
         .center_y()
-        .child(icon(item.icon_glyph, 15.0).color(t.text_muted))
+        .child(icon(item.icon_glyph, 15.0).color(icon_color))
         .child(text_col);
     if highlighted {
         r = r.child(Badge::new("↵").build(k));
@@ -315,6 +320,7 @@ pub(crate) fn collect_palette_items(s: &AppState, query: &str) -> Vec<PaletteIte
                 title: title.to_owned(),
                 subtitle: subtitle.to_owned(),
                 icon_glyph,
+                status_tone: None,
                 action,
             });
         }
@@ -382,6 +388,7 @@ pub(crate) fn collect_palette_items(s: &AppState, query: &str) -> Vec<PaletteIte
                 title: title.to_owned(),
                 subtitle: format!("{subtitle_prefix} ({})", crate::shortcut_label(accel)),
                 icon_glyph,
+                status_tone: None,
                 action,
             });
         } else if !query.is_empty() {
@@ -393,6 +400,7 @@ pub(crate) fn collect_palette_items(s: &AppState, query: &str) -> Vec<PaletteIte
                     title: title.to_owned(),
                     subtitle,
                     icon_glyph,
+                    status_tone: None,
                     action,
                 });
             }
@@ -466,6 +474,7 @@ pub(crate) fn collect_palette_items(s: &AppState, query: &str) -> Vec<PaletteIte
                 title: th.title.clone(),
                 subtitle: ws_name.to_owned(),
                 icon_glyph: &icons::MESSAGE,
+                status_tone: None,
                 action: Action::Navigate(NavAction::OpenThread(th.id.clone())),
             });
             thread_count += 1;
@@ -479,12 +488,14 @@ pub(crate) fn collect_palette_items(s: &AppState, query: &str) -> Vec<PaletteIte
             .filter(|task| matches_query(query, &task.title, &task.status))
             .take(6)
         {
+            let status = status_presentation(&task.status);
             out.push(PaletteItem {
                 key: format!("pal-task-{}", task.id),
                 section: "Tasks",
                 title: task.title.clone(),
-                subtitle: task.status.clone(),
-                icon_glyph: &icons::CHECK_SQUARE,
+                subtitle: status.label,
+                icon_glyph: status.icon,
+                status_tone: Some(status.tone),
                 action: Action::Navigate(NavAction::OpenTask(task.id.clone())),
             });
         }
@@ -498,6 +509,7 @@ pub(crate) fn collect_palette_items(s: &AppState, query: &str) -> Vec<PaletteIte
                 title: ws.name.clone(),
                 subtitle: ws.path.clone(),
                 icon_glyph: &icons::FOLDER,
+                status_tone: None,
                 action: Action::Navigate(NavAction::SelectWorkspace(ws.id.clone())),
             });
         }
@@ -513,6 +525,7 @@ pub(crate) fn collect_palette_items(s: &AppState, query: &str) -> Vec<PaletteIte
                 title: format!("Settings: {title}"),
                 subtitle: desc.to_owned(),
                 icon_glyph: &icons::SETTINGS,
+                status_tone: None,
                 action: Action::Navigate(NavAction::OpenSettingsIntent {
                     page: *page,
                     tab: None,
@@ -541,6 +554,7 @@ pub(crate) fn collect_palette_items(s: &AppState, query: &str) -> Vec<PaletteIte
                 title: format!("/{}", cmd.name),
                 subtitle: desc.to_owned(),
                 icon_glyph: &icons::TERMINAL,
+                status_tone: None,
                 action: Action::Navigate(NavAction::OpenNewChat {
                     workspace_id: Some(ws_id.to_owned()),
                 }),

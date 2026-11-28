@@ -1623,7 +1623,6 @@ dependencies = [
  "parking_lot",
  "qrcode",
  "reqwest",
- "rfd",
  "rune",
  "rune-kit",
  "rune-notify",

@@ -258,10 +258,13 @@ pub(crate) fn push_onboarding_overlays(
         .child(
             // Keep the step dots and footer buttons visible on short windows; only the body
             // scrolls once the card runs out of height (840x560 minimum, or zoomed in).
-            el().w_full().shrink().min_h(0.0).scroll(ScrollSpec {
-                stick_bottom: false,
-            })
-            .child(step_body),
+            el().w_full()
+                .shrink()
+                .min_h(0.0)
+                .scroll(ScrollSpec {
+                    stick_bottom: false,
+                })
+                .child(step_body),
         )
         .child(footer);
 
@@ -487,7 +490,7 @@ fn build_welcome_step(k: &Kit, t: &ThemeTokens) -> (El, El) {
         .child(spacer())
         .child(
             Button::new("Get started")
-                .variant(ButtonVariant::Contrast)
+                .variant(ButtonVariant::Submit)
                 .control_size(ControlSize::Large)
                 .on_press(|s: &mut AppState| {
                     s.shell_ui.onboarding_step = 1;
@@ -718,7 +721,7 @@ fn build_workspace_step(
         if lifecycle_enabled {
             empty_card = empty_card.child(
                 Button::new("Choose folder")
-                    .variant(ButtonVariant::Contrast)
+                    .variant(ButtonVariant::Submit)
                     .control_size(ControlSize::Large)
                     .icon(&icons::FOLDER_PLUS)
                     .on_press(|s: &mut AppState| {
@@ -755,7 +758,7 @@ fn build_workspace_step(
         .child(spacer())
         .child(
             Button::new("Continue")
-                .variant(ButtonVariant::Contrast)
+                .variant(ButtonVariant::Submit)
                 .control_size(ControlSize::Large)
                 .disabled(!can_continue)
                 .on_press(move |s: &mut AppState| {
@@ -989,7 +992,7 @@ fn build_provider_step(s: &AppState, k: &Kit, t: &ThemeTokens) -> (El, El) {
         .child(spacer())
         .child(
             Button::new("Continue")
-                .variant(ButtonVariant::Contrast)
+                .variant(ButtonVariant::Submit)
                 .control_size(ControlSize::Large)
                 .disabled(!can_continue)
                 .on_press(|s: &mut AppState| {
@@ -1063,7 +1066,7 @@ fn build_expanded_provider_controls(
                             .variant(if lm_enabled {
                                 ButtonVariant::Outline
                             } else {
-                                ButtonVariant::Contrast
+                                ButtonVariant::Submit
                             })
                             .control_size(ControlSize::Regular)
                             .on_press(move |s: &mut AppState| {
@@ -1196,7 +1199,7 @@ fn build_expanded_provider_controls(
                     .child(reveal_btn)
                     .child(
                         Button::new("Save")
-                            .variant(ButtonVariant::Contrast)
+                            .variant(ButtonVariant::Submit)
                             .control_size(ControlSize::Regular)
                             .disabled(key_empty)
                             .on_press(move |s: &mut AppState| {
@@ -1259,7 +1262,7 @@ fn build_expanded_provider_controls(
                 .variant(if has_api {
                     ButtonVariant::Outline
                 } else {
-                    ButtonVariant::Contrast
+                    ButtonVariant::Submit
                 })
                 .control_size(ControlSize::Regular)
                 .on_press(move |s: &mut AppState| {
@@ -1725,7 +1728,7 @@ fn build_defaults_step(
         .child(spacer())
         .child(
             Button::new("Continue")
-                .variant(ButtonVariant::Contrast)
+                .variant(ButtonVariant::Submit)
                 .control_size(ControlSize::Large)
                 .on_press(|s: &mut AppState| {
                     sync_connected_workspace_defaults(s);
@@ -1850,7 +1853,7 @@ fn build_first_thread_step(s: &AppState, k: &Kit, t: &ThemeTokens) -> (El, El) {
         .child(spacer())
         .child(
             Button::new(finish_label)
-                .variant(ButtonVariant::Contrast)
+                .variant(ButtonVariant::Submit)
                 .control_size(ControlSize::Large)
                 .on_press_tx(move |s: &mut AppState, tx| {
                     s.dispatch(Action::Shell(ShellAction::CompleteOnboardingStep(
@@ -1883,7 +1886,7 @@ fn push_skip_confirm_dialog(k: &Kit, t: &ThemeTokens, layer: &mut Vec<El>) {
         .child(spacer())
         .child(
             Button::new("Continue setup")
-                .variant(ButtonVariant::Contrast)
+                .variant(ButtonVariant::Submit)
                 .on_press_tx(|s: &mut AppState, _| {
                     s.shell_ui.onboarding_confirm_discard = false;
                 })

@@ -70,7 +70,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
     if status == "available" {
         header_actions.push(
             Button::new("Download update")
-                .variant(ButtonVariant::Contrast)
+                .variant(ButtonVariant::Submit)
                 .control_size(ControlSize::Regular)
                 .on_press(|s: &mut AppState| {
                     s.dispatch(Action::Settings(SettingsAction::DownloadUpdate));
@@ -80,7 +80,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
     } else if status == "downloaded" {
         header_actions.push(
             Button::new("Restart to update")
-                .variant(ButtonVariant::Contrast)
+                .variant(ButtonVariant::Submit)
                 .control_size(ControlSize::Regular)
                 .on_press(|s: &mut AppState| {
                     s.dispatch(Action::Settings(SettingsAction::QuitAndInstallUpdate));
@@ -155,7 +155,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
         if status == "available" {
             install_control = install_control.child(
                 Button::new("Download update")
-                    .variant(ButtonVariant::Contrast)
+                    .variant(ButtonVariant::Submit)
                     .control_size(ControlSize::Regular)
                     .on_press(|s: &mut AppState| {
                         s.dispatch(Action::Settings(SettingsAction::DownloadUpdate));
@@ -165,7 +165,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
         } else if status == "downloaded" {
             install_control = install_control.child(
                 Button::new("Restart & Install")
-                    .variant(ButtonVariant::Contrast)
+                    .variant(ButtonVariant::Submit)
                     .control_size(ControlSize::Regular)
                     .on_press(|s: &mut AppState| {
                         s.dispatch(Action::Settings(SettingsAction::QuitAndInstallUpdate));

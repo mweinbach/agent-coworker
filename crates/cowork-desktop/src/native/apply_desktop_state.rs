@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use rune::AppHandle;
+use rune::{AppHandle, ColorScheme};
 
 use crate::state::{AppState, PersistedDesktopState};
 
@@ -69,6 +69,13 @@ pub(crate) fn apply_desktop_state_with_env(
     }
 
     let _ = appearance_prefs.save_theme_preference(state.settings.theme);
+    if let Some(handle) = app_handle {
+        handle.set_color_scheme(match state.settings.theme {
+            crate::theme::ThemePreference::System => ColorScheme::System,
+            crate::theme::ThemePreference::Light => ColorScheme::Light,
+            crate::theme::ThemePreference::Dark => ColorScheme::Dark,
+        });
+    }
     let effective_flags = resolve_effective_feature_flags(&state.feature_flags, env, is_packaged);
     let menu_bar_enabled = effective_flags.get("menuBar").copied().unwrap_or(true);
     tray.sync_from_settings(&state.settings, menu_bar_enabled, app_handle);

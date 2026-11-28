@@ -731,7 +731,9 @@ fn build_tool_cluster_card(
     if !expanded && !preview_lines.is_empty() {
         for preview in preview_lines {
             trigger = trigger.child(
-                text(truncate_text(&preview, 92))
+                // Elide by width at layout time instead of clipping to a character count, so
+                // wide and narrow panes each keep as much of the preview as fits.
+                text(preview)
                     .font(k.ty.text_xsmall)
                     .color(t.text_muted)
                     .truncate()
@@ -841,10 +843,11 @@ fn build_tool_card(
 
     if !display_subtitle.is_empty() {
         hdr = hdr.child(
-            text(truncate_text(&display_subtitle, 72))
+            // Keep both ends of a long path or command: the middle is elided at layout width.
+            text(display_subtitle)
                 .font(k.ty.text_xsmall)
                 .color(t.text_muted)
-                .truncate()
+                .truncate_middle()
                 .grow(1.0)
                 .min_w(0.0),
         );

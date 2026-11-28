@@ -29,6 +29,16 @@ use crate::views::settings::providers_utils::{
 };
 use crate::views::settings::shell::PageContent;
 
+fn disclosure_chevron(open: bool, size: f32, motion: rune::Spring) -> El {
+    icon(&icons::CHEVRON_RIGHT, size)
+        .rotate(if open {
+            std::f32::consts::FRAC_PI_2
+        } else {
+            0.0
+        })
+        .rotate_motion(motion)
+}
+
 fn fallback_providers_slice() -> &'static [ProviderSummary] {
     static FALLBACK: OnceLock<Vec<ProviderSummary>> = OnceLock::new();
     FALLBACK.get_or_init(|| {
@@ -427,7 +437,7 @@ fn lmstudio_section(
             )
             .child(
                 Button::new("Start server")
-                    .variant(ButtonVariant::Contrast)
+                    .variant(ButtonVariant::Submit)
                     .control_size(ControlSize::Regular)
                     .disabled(!can_mutate)
                     .on_press(move |s: &mut AppState| {
@@ -673,7 +683,7 @@ fn expanded_provider_body(
                     method_row = method_row.child(
                         Button::new(method.label.as_str())
                             .variant(if is_active {
-                                ButtonVariant::Contrast
+                                ButtonVariant::Submit
                             } else {
                                 ButtonVariant::Outline
                             })
@@ -751,7 +761,7 @@ fn expanded_provider_body(
                     .child(reveal_btn)
                     .child(
                         Button::new("Save key")
-                            .variant(ButtonVariant::Contrast)
+                            .variant(ButtonVariant::Submit)
                             .icon(&icons::KEY)
                             .control_size(ControlSize::Regular)
                             .disabled(!can_mutate || key_empty)
@@ -799,7 +809,7 @@ fn expanded_provider_body(
                 method_row = method_row.child(
                     Button::new(method.label.as_str())
                         .variant(if is_active {
-                            ButtonVariant::Contrast
+                            ButtonVariant::Submit
                         } else {
                             ButtonVariant::Outline
                         })
@@ -860,7 +870,7 @@ fn expanded_provider_body(
             cfg_col = cfg_col.child(
                 row().items_center().gap(8.0).child(
                     Button::new("Save credentials")
-                        .variant(ButtonVariant::Contrast)
+                        .variant(ButtonVariant::Submit)
                         .icon(&icons::KEY)
                         .control_size(ControlSize::Regular)
                         .disabled(!can_mutate || missing_required)
@@ -1136,7 +1146,7 @@ fn provider_card(
 
     let build_header_row = || {
         let pid_toggle = summary.id.clone();
-        row()
+        let header = row()
             .key(format!("provider-toggle-{}", summary.id))
             .w_full()
             .justify_between()
@@ -1144,8 +1154,9 @@ fn provider_card(
             .gap(12.0)
             .px(16.0)
             .py(12.0)
-            .hover(t.hover)
+            .focusable(true)
             .role("button")
+            .expanded(expanded)
             .label(format!("Toggle {title} settings"))
             .on_press(move |s: &mut AppState| {
                 if s.settings_ui.expanded_provider_id.as_deref() == Some(pid_toggle.as_str()) {
@@ -1200,17 +1211,10 @@ fn provider_card(
                     .gap(8.0)
                     .child(status_pill(badge_label, badge_tone, k, t))
                     .child(
-                        icon(
-                            if expanded {
-                                &icons::CHEVRON_DOWN
-                            } else {
-                                &icons::CHEVRON_RIGHT
-                            },
-                            16.0,
-                        )
-                        .color(t.text_muted),
+                        disclosure_chevron(expanded, 16.0, k.motion.disclosure).color(t.text_muted),
                     ),
-            )
+            );
+        k.interactive_with(header, t.hover, t.pressed)
     };
 
     if !expanded {

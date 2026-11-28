@@ -1,6 +1,6 @@
 //! Spreadsheet and presentation preview payload types and ephemeral preview UI state.
 
-use rune::Key;
+use rune::{Key, Tx};
 use rune_kit::TableState;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -365,25 +365,34 @@ impl PreviewUiState {
         self.table_rev = self.table_rev.wrapping_add(1);
     }
 
-    /// Selects a slide index clamped within `0..total_slides`.
-    pub fn select_slide(&mut self, index: usize, total_slides: usize) {
+    fn reveal_selected_slide(&self, tx: &mut Tx) {
+        let index = self.active_slide;
+        tx.scroll_into_view_in("pptx-thumb-strip", format!("pptx-thumb-{index}"));
+        tx.scroll_into_view_in("pptx-grid-scroll", format!("pptx-grid-card-{index}"));
+    }
+
+    /// Selects a slide index clamped within `0..total_slides` and reveals it in either layout.
+    pub fn select_slide(&mut self, index: usize, total_slides: usize, tx: &mut Tx) {
         if total_slides == 0 {
             self.active_slide = 0;
         } else {
             self.active_slide = index.min(total_slides - 1);
         }
+        self.reveal_selected_slide(tx);
     }
 
-    /// Advances to the previous slide if not already on the first slide.
-    pub fn prev_slide(&mut self) {
+    /// Advances to the previous slide if not already on the first slide and reveals it.
+    pub fn prev_slide(&mut self, tx: &mut Tx) {
         self.active_slide = self.active_slide.saturating_sub(1);
+        self.reveal_selected_slide(tx);
     }
 
-    /// Advances to the next slide if not already on the last slide.
-    pub fn next_slide(&mut self, total_slides: usize) {
+    /// Advances to the next slide if not already on the last slide and reveals it.
+    pub fn next_slide(&mut self, total_slides: usize, tx: &mut Tx) {
         if self.active_slide + 1 < total_slides {
             self.active_slide += 1;
         }
+        self.reveal_selected_slide(tx);
     }
 
     /// Switches between Deck and Grid presentation preview layouts.
@@ -391,29 +400,41 @@ impl PreviewUiState {
         self.presentation_layout = mode;
     }
 
-    /// Handles slide navigation keys (`Left`/`Up`/`PageUp`, `Right`/`Down`/`PageDown`, `Home`/`End`).
-    pub fn handle_presentation_key(&mut self, key: &Key, total_slides: usize) -> bool {
+    /// Handles slide navigation keys and reveals the selected slide.
+    pub fn handle_presentation_key_tx(
+        &mut self,
+        key: &Key,
+        total_slides: usize,
+        tx: &mut Tx,
+    ) -> bool {
         if total_slides == 0 {
             return false;
         }
         match key {
             Key::Left | Key::Up | Key::PageUp => {
-                self.prev_slide();
+                self.prev_slide(tx);
                 true
             }
             Key::Right | Key::Down | Key::PageDown => {
-                self.next_slide(total_slides);
+                self.next_slide(total_slides, tx);
                 true
             }
             Key::Home => {
-                self.active_slide = 0;
+                self.select_slide(0, total_slides, tx);
                 true
             }
             Key::End => {
-                self.active_slide = total_slides - 1;
+                self.select_slide(total_slides - 1, total_slides, tx);
                 true
             }
             _ => false,
         }
+    }
+
+    /// Handles slide navigation keys for callers without a transaction.
+    ///
+    /// Preview event handlers use `handle_presentation_key_tx` so the selection is revealed.
+    pub fn handle_presentation_key(&mut self, key: &Key, total_slides: usize) -> bool {
+        self.handle_presentation_key_tx(key, total_slides, &mut Tx::default())
     }
 }

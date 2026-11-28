@@ -546,7 +546,7 @@ pub(crate) fn render(s: &AppState, k: &Kit, t: &ThemeTokens, overlays: &mut Vec<
         };
         actions = actions.child(
             Button::new(label)
-                .variant(ButtonVariant::Contrast)
+                .variant(ButtonVariant::Submit)
                 .disabled(!d.ready_to_import(&s.workspaces))
                 .on_press(|s: &mut AppState| {
                     s.dispatch(Action::Settings(SettingsAction::ExecuteConversationImport))

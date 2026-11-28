@@ -195,7 +195,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
     let refresh_ws_id = active_target.map(|target| target.id.clone());
     let mut diagnostics_actions = row().w_full().min_w(0.0).flex_wrap().gap(8.0).child(
         Button::new("Create Diagnostics Bundle")
-            .variant(ButtonVariant::Contrast)
+            .variant(ButtonVariant::Submit)
             .icon(&icons::ARCHIVE_RESTORE)
             .control_size(ControlSize::Regular)
             .disabled(export_busy)
@@ -618,7 +618,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
             let ws_reset = ws_id;
             let persisted_on_save = persisted_str.clone();
             let save_btn = Button::new("Save threshold")
-                .variant(ButtonVariant::Contrast)
+                .variant(ButtonVariant::Submit)
                 .control_size(ControlSize::Regular)
                 .disabled(!overflow_enabled || !dirty || error_msg.is_some())
                 .on_press(move |s: &mut AppState| {

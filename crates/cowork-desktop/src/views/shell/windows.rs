@@ -10,6 +10,7 @@ use crate::actions::{Action, NavAction, ShellAction};
 use crate::state::AppState;
 use crate::theme::ThemeTokens;
 use crate::views::SubviewOutput;
+use crate::views::chat::components::status_pill_for;
 
 use super::{helpers, icons};
 
@@ -106,7 +107,7 @@ pub fn build_utility_window(s: &AppState, cx: &mut Cx<AppState>, k: &Kit, t: &Th
         .child({
             let ws_id = active_ws.map(|w| w.id.clone());
             Button::new("New chat")
-                .variant(ButtonVariant::Contrast)
+                .variant(ButtonVariant::Submit)
                 .control_size(ControlSize::Small)
                 .icon(&icons::PLUS)
                 .on_press_tx(move |s: &mut AppState, tx| {
@@ -181,9 +182,9 @@ pub fn build_utility_window(s: &AppState, cx: &mut Cx<AppState>, k: &Kit, t: &Th
                             .grow(1.0),
                     );
                 if matches!(status, Some(RowStatus::Busy)) {
-                    item_row = item_row.child(Badge::new("Busy").build(k));
+                    item_row = item_row.child(status_pill_for(k, t, "running"));
                 } else if matches!(status, Some(RowStatus::Attention)) {
-                    item_row = item_row.child(Badge::new("Input").build(k));
+                    item_row = item_row.child(status_pill_for(k, t, "waiting_for_input"));
                 }
 
                 el().key(format!("util-th-{}", th.id))

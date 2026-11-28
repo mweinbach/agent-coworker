@@ -966,7 +966,7 @@ pub fn confirm_dialog(
                 .variant(if spec.danger {
                     ButtonVariant::Danger
                 } else {
-                    ButtonVariant::Contrast
+                    ButtonVariant::Submit
                 })
                 .control_size(ControlSize::Regular)
                 .on_press(move |s: &mut AppState| {

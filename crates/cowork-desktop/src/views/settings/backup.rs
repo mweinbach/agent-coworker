@@ -156,8 +156,16 @@ fn collect_backup_rows(backups: &[BackupSummary]) -> Vec<BackupRowItem> {
     rows
 }
 
-fn backup_list_item(entry: &BackupRowItem, selected: bool, k: &Kit, t: &ThemeTokens) -> El {
+fn backup_list_item(
+    entry: &BackupRowItem,
+    entry_index: usize,
+    selection_ids: &Rc<Vec<String>>,
+    selected: bool,
+    k: &Kit,
+    t: &ThemeTokens,
+) -> El {
     let id_for_press = entry.selection_id.clone();
+    let ids_for_keys = Rc::clone(selection_ids);
     let label = if entry.label.trim().is_empty() {
         entry.selection_id.as_str()
     } else {
@@ -183,7 +191,7 @@ fn backup_list_item(entry: &BackupRowItem, selected: bool, k: &Kit, t: &ThemeTok
         ));
     }
 
-    col()
+    let item = col()
         .key(format!("backup-item-{}", entry.selection_id))
         .w_full()
         .px(12.0)
@@ -192,8 +200,34 @@ fn backup_list_item(entry: &BackupRowItem, selected: bool, k: &Kit, t: &ThemeTok
         .radius(k.radius.lg)
         .fill(if selected { t.accent_soft } else { t.panel_bg })
         .border(1.0, if selected { t.accent } else { t.border_muted })
+        .focusable(true)
+        .press_on_return()
         .on_press(move |s: &mut AppState| {
             s.settings_ui.backup_selected_id = Some(id_for_press.clone());
+        })
+        .on_key(move |s: &mut AppState, ev, tx| {
+            if ev.mods.cmd || ev.mods.ctrl || ev.mods.alt || ev.mods.logo {
+                return false;
+            }
+            let last_index = ids_for_keys.len().saturating_sub(1);
+            let next_index = match &ev.key {
+                rune::Key::Up => entry_index.saturating_sub(1),
+                rune::Key::Down => (entry_index + 1).min(last_index),
+                rune::Key::Home => 0,
+                rune::Key::End => last_index,
+                _ => return false,
+            };
+            if next_index == entry_index {
+                return true;
+            }
+            let Some(next_id) = ids_for_keys.get(next_index).cloned() else {
+                return false;
+            };
+            let next_key = format!("backup-item-{next_id}");
+            s.settings_ui.backup_selected_id = Some(next_id);
+            tx.focus(next_key.clone(), true);
+            tx.scroll_into_view_in("backup-snapshots-scroll", next_key);
+            true
         })
         .child(
             row()
@@ -208,7 +242,14 @@ fn backup_list_item(entry: &BackupRowItem, selected: bool, k: &Kit, t: &ThemeTok
                         .grow(1.0)
                         .min_w(0.0)
                         .child(icon(&icons::ARCHIVE_RESTORE, 14.0).color(t.text_base))
-                        .child(text(label).font(k.ty.ui_medium).color(t.text_base)),
+                        .child(
+                            text(label)
+                                .font(k.ty.ui_medium)
+                                .color(t.text_base)
+                                .truncate()
+                                .grow(1.0)
+                                .min_w(0.0),
+                        ),
                 )
                 .child(
                     text(format_byte_size(entry.size_bytes))
@@ -216,7 +257,9 @@ fn backup_list_item(entry: &BackupRowItem, selected: bool, k: &Kit, t: &ThemeTok
                         .color(t.text_muted),
                 ),
         )
-        .child(meta_row)
+        .child(meta_row);
+
+    k.interactive_with(item, t.hover, t.pressed)
 }
 
 /// Renders the Backups settings page.
@@ -249,7 +292,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
             let ws_create = target.id.clone();
             header_actions.push(
                 Button::new("Create checkpoint")
-                    .variant(ButtonVariant::Contrast)
+                    .variant(ButtonVariant::Submit)
                     .icon(&icons::SAVE)
                     .control_size(ControlSize::Regular)
                     .on_press(move |s: &mut AppState| {
@@ -390,6 +433,12 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
         let list_h = ((count as f32) * 74.0).clamp(160.0, 460.0);
         let rows_rc = Rc::new(visible_backups);
         let keys_rc = Rc::clone(&rows_rc);
+        let selection_ids = Rc::new(
+            rows_rc
+                .iter()
+                .map(|entry| entry.selection_id.clone())
+                .collect::<Vec<_>>(),
+        );
         let selected_for_rows = selected_backup_id.clone();
         let kit_clone = k.clone();
         let tokens = *t;
@@ -415,7 +464,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                     };
                     let is_selected =
                         selected_for_rows.as_deref() == Some(entry.selection_id.as_str());
-                    backup_list_item(entry, is_selected, &kit_clone, &tokens)
+                    backup_list_item(entry, i, &selection_ids, is_selected, &kit_clone, &tokens)
                 },
             );
         rail = rail.child(
@@ -481,7 +530,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                     } else {
                         "Restore backup"
                     })
-                    .variant(ButtonVariant::Contrast)
+                    .variant(ButtonVariant::Submit)
                     .icon(&icons::REFRESH_CCW)
                     .control_size(ControlSize::Regular)
                     .on_press(|s: &mut AppState| {
@@ -516,6 +565,8 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                 .gap(16.0)
                 .child(
                     col()
+                        .w_full()
+                        .min_w(0.0)
                         .gap(4.0)
                         .child(
                             text(if checkpoint_opt.is_some() {
@@ -526,11 +577,21 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                             .font(k.ty.small_medium)
                             .color(t.text_muted),
                         )
-                        .child(text(title).font(t.title).color(t.text_base))
+                        .child(
+                            text(title)
+                                .font(t.title)
+                                .color(t.text_base)
+                                .w_full()
+                                .min_w(0.0)
+                                .wrap(),
+                        )
                         .child(
                             text(format!("Snapshot ID: {}", snapshot.selection_id))
                                 .font(t.code)
-                                .color(t.text_muted),
+                                .color(t.text_muted)
+                                .w_full()
+                                .min_w(0.0)
+                                .wrap(),
                         ),
                 )
                 .child(
@@ -581,7 +642,10 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
                     delta_box = delta_box.child(
                         text(format!("{}  {}", file.change, file.path))
                             .font(t.code)
-                            .color(t.text_muted),
+                            .color(t.text_muted)
+                            .w_full()
+                            .min_w(0.0)
+                            .wrap(),
                     );
                 }
                 detail_col = detail_col.child(delta_box);
@@ -599,7 +663,7 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
     let split_card = el()
         .w_full()
         .radius(k.radius.lg)
-        .fill(t.panel_bg)
+        .fill(t.card_bg)
         .border(1.0, t.border_muted)
         .child(
             row()
@@ -703,7 +767,20 @@ pub fn view(s: &AppState, k: &Kit, t: &ThemeTokens) -> PageContent {
         }
     }
 
-    PageContent::simple(settings_page(blocks))
+    let body = k.scroll_bar(
+        col()
+            .key("backup-settings-scroll")
+            .grow(1.0)
+            .min_h(0.0)
+            .min_w(0.0)
+            .w_full()
+            .scroll(ScrollSpec {
+                stick_bottom: false,
+            })
+            .child(settings_page(blocks)),
+    );
+
+    PageContent::simple(body)
         .with_header_actions(header_actions)
         .with_overlays(overlays)
 }

@@ -1760,9 +1760,6 @@ fn glob_name_matches(pattern: &str, name: &str) -> bool {
             star_p = Some(pi);
             pi += 1;
             star_s = si;
-        } else if pi < p.len() && (p[pi] == '?' || p[pi] == s[si]) {
-            pi += 1;
-            si += 1;
         } else if pi < p.len() && p[pi] == '[' {
             // Treat character classes `[...]` conservatively as matching any single char so
             // glob checks never under-block symlink matches. Bash allows `]` as a class member
@@ -1785,6 +1782,9 @@ fn glob_name_matches(pattern: &str, name: &str) -> bool {
                 pi += 1;
                 si += 1;
             }
+        } else if pi < p.len() && (p[pi] == '?' || p[pi] == s[si]) {
+            pi += 1;
+            si += 1;
         } else if let Some(sp) = star_p {
             pi = sp + 1;
             star_s += 1;

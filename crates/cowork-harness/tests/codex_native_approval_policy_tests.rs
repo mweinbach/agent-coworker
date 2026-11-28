@@ -1171,6 +1171,7 @@ async fn claude_native_bash_authorizes_relative_symlink_and_glob_operands() {
         std::os::unix::fs::symlink(&cred_file, h.ws.join("nested/credential-link")).unwrap();
         std::os::unix::fs::symlink(&cred_file, h.ws.join("credential-a")).unwrap();
         std::os::unix::fs::symlink(&cred_file, h.ws.join("credential-link")).unwrap();
+        std::os::unix::fs::symlink(&cred_file, h.ws.join("[credential-link")).unwrap();
         std::fs::create_dir_all(h.ws.join("star-only")).unwrap();
         std::os::unix::fs::symlink(&cred_file, h.ws.join("star-only/*credential-link")).unwrap();
         std::os::unix::fs::symlink(&cred_file, h.ws.join("credential-link ")).unwrap();
@@ -1185,6 +1186,7 @@ async fn claude_native_bash_authorizes_relative_symlink_and_glob_operands() {
         let blocked = [
             "cat credential-link",
             "cat star-only/*",
+            "cat [[]credential-link",
             "cat 'credential-link '",
             "cat ' credential-link'",
             "cat -- -credential-link",

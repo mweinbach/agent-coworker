@@ -3699,10 +3699,7 @@ impl AppState {
             return;
         };
 
-        if doc.truncated
-            || (!doc.dirty() && !matches!(doc.status, CanvasDocumentStatus::Saving))
-            || matches!(doc.status, CanvasDocumentStatus::LoadError { .. })
-        {
+        if doc.truncated || (!doc.dirty() && !matches!(doc.status, CanvasDocumentStatus::Saving)) {
             self.complete_canvas_transition(transition);
             return;
         }
@@ -3725,7 +3722,10 @@ impl AppState {
                 self.request_canvas_save();
             }
             CanvasDocumentStatus::LoadError { .. } => {
-                self.complete_canvas_transition(transition);
+                // A failed rename reopen can still hold the user's preserved unsaved draft.
+                // Never treat that recoverable draft as safe to discard silently.
+                self.pending_canvas_transition = None;
+                self.canvas_discard_confirm = Some(transition);
             }
         }
     }
@@ -3817,6 +3817,18 @@ impl AppState {
         let Some(prev) = self.canvas_document.take() else {
             return;
         };
+        let preserve_failed_open_draft =
+            matches!(prev.status, CanvasDocumentStatus::LoadError { .. }) && prev.dirty();
+        let preserved_draft = preserve_failed_open_draft.then(|| prev.draft_content.clone());
+        let preserved_edit_revision = if preserved_draft.is_some() {
+            prev.edit_revision.max(1)
+        } else {
+            0
+        };
+        let preserved_dirty_since = preserved_draft
+            .as_ref()
+            .and_then(|_| prev.dirty_since_secs.or(Some(self.now_secs)));
+        let preserved_disk_content = preserve_failed_open_draft.then(|| prev.disk_content.clone());
         let _ = self.send_ws_request(
             &prev.workspace_id,
             "cowork/workspace/document/close",
@@ -3839,15 +3851,15 @@ impl AppState {
             document_id: document_id.clone(),
             generation,
             path: path.clone(),
-            disk_content: String::new(),
-            draft_content: String::new(),
-            edit_revision: 0,
+            disk_content: preserved_disk_content.unwrap_or_default(),
+            draft_content: preserved_draft.clone().unwrap_or_default(),
+            edit_revision: preserved_edit_revision,
             last_saved_edit_revision: 0,
             truncated: false,
             revision: None,
             status: CanvasDocumentStatus::Loading,
             last_saved_at_secs: prev.last_saved_at_secs,
-            dirty_since_secs: None,
+            dirty_since_secs: preserved_dirty_since,
             last_poll_secs: self.now_secs,
         });
         let req_id = self.send_ws_request(
@@ -3865,10 +3877,10 @@ impl AppState {
             PendingCanvasRpc {
                 document_id,
                 generation,
-                edit_revision: 0,
+                edit_revision: preserved_edit_revision,
                 target_path: None,
                 submitted_content: None,
-                preserved_draft: None,
+                preserved_draft,
             },
         );
     }
@@ -4339,7 +4351,11 @@ impl AppState {
             }
         } else if method.ends_with("/open") {
             let still_dirty = doc.dirty();
-            doc.dirty_since_secs = None;
+            if still_dirty {
+                doc.dirty_since_secs = doc.dirty_since_secs.or(Some(self.now_secs));
+            } else {
+                doc.dirty_since_secs = None;
+            }
             doc.status = CanvasDocumentStatus::LoadError {
                 kind: None,
                 message: err.message.clone(),
@@ -30268,6 +30284,131 @@ mod tests {
                 if method == "cowork/workspace/document/open"
                     && params["path"] == "/tmp/repo/NOTES.md"
         )));
+    }
+
+    #[test]
+    fn dirty_canvas_load_error_requires_confirmation_and_retry_preserves_draft() {
+        let mut state = AppState::default();
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-1", "Repo", "/tmp/repo", 1));
+        state.active_workspace_id = Some("ws-1".to_string());
+        state.canvas_document = Some(CanvasDocumentSession {
+            workspace_id: "ws-1".to_string(),
+            document_id: "doc-1".to_string(),
+            generation: 1,
+            path: "/tmp/repo/README.md".to_string(),
+            disk_content: "initial".to_string(),
+            draft_content: "initial + precious draft".to_string(),
+            edit_revision: 3,
+            last_saved_edit_revision: 1,
+            truncated: false,
+            revision: None,
+            status: CanvasDocumentStatus::Ready,
+            last_saved_at_secs: None,
+            dirty_since_secs: Some(10.0),
+            last_poll_secs: 10.0,
+        });
+
+        // A Save As/rename reopen carries the dirty draft into the replacement open session.
+        state.reopen_canvas_document_after_rename("RENAMED.md".to_string());
+        let reopen_id = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .find_map(|cmd| match cmd {
+                WsCommand::SendRequest {
+                    request_id, method, ..
+                } if method == "cowork/workspace/document/open" => Some(*request_id),
+                _ => None,
+            })
+            .expect("rename reopen request");
+        state.apply_canvas_rpc_error(
+            reopen_id,
+            "cowork/workspace/document/open",
+            &WsRpcError {
+                code: -32000,
+                message: "connection dropped".to_string(),
+                data: None,
+            },
+        );
+        let doc = state.canvas_document.as_ref().expect("document retained");
+        assert!(matches!(doc.status, CanvasDocumentStatus::LoadError { .. }));
+        assert!(doc.dirty());
+        assert_eq!(doc.draft_content, "initial + precious draft");
+
+        // Closing a dirty load-error session must ask before discarding the preserved edits.
+        let close_requests_before = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .filter(|cmd| {
+                matches!(cmd, WsCommand::SendRequest { method, .. } if method == "cowork/workspace/document/close")
+            })
+            .count();
+        state.dispatch(Action::Chat(ChatAction::CloseCanvasDocument));
+        assert_eq!(
+            state.canvas_discard_confirm,
+            Some(PendingCanvasTransition::Close)
+        );
+        assert!(state.canvas_document.is_some());
+        let close_requests_after = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .filter(|cmd| {
+                matches!(cmd, WsCommand::SendRequest { method, .. } if method == "cowork/workspace/document/close")
+            })
+            .count();
+        assert_eq!(close_requests_after, close_requests_before);
+        state.dispatch(Action::Chat(ChatAction::CancelCanvasTransition));
+
+        // Retry reopens the file but keeps the preserved draft pending instead of resetting it.
+        state.dispatch(Action::Chat(ChatAction::ReloadCanvasDocument));
+        let loading = state.canvas_document.as_ref().expect("retry document");
+        assert!(matches!(loading.status, CanvasDocumentStatus::Loading));
+        assert_eq!(loading.disk_content, "initial");
+        assert_eq!(loading.draft_content, "initial + precious draft");
+        assert!(loading.dirty());
+        let retry_open_id = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .filter_map(|cmd| match cmd {
+                WsCommand::SendRequest {
+                    request_id, method, ..
+                } if method == "cowork/workspace/document/open" => Some(*request_id),
+                _ => None,
+            })
+            .max()
+            .expect("retry open request");
+        assert_ne!(retry_open_id, reopen_id);
+        assert_eq!(
+            state
+                .pending_canvas_rpcs
+                .get(&retry_open_id)
+                .and_then(|pending| pending.preserved_draft.as_deref()),
+            Some("initial + precious draft")
+        );
+
+        state.apply_store_event(StoreEvent::WsResponse {
+            workspace_id: "ws-1".to_string(),
+            request_id: retry_open_id,
+            method: "cowork/workspace/document/open".to_string(),
+            result: Ok(json!({
+                "ok": true,
+                "document": {
+                    "path": "/tmp/repo/RENAMED.md",
+                    "content": "initial",
+                    "truncated": false
+                }
+            })),
+        });
+        let reopened = state.canvas_document.as_ref().expect("reopened document");
+        assert!(matches!(reopened.status, CanvasDocumentStatus::Ready));
+        assert_eq!(reopened.disk_content, "initial");
+        assert_eq!(reopened.draft_content, "initial + precious draft");
+        assert!(reopened.dirty());
     }
 
     #[test]

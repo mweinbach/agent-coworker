@@ -380,8 +380,8 @@ pub fn configure_app(app: App<AppState>) -> App<AppState> {
         .on_open_url(|state, url, _tx| {
             state.apply_store_event(StoreEvent::DeepLink(url.to_string()));
         })
-        .on_close_request(|state, tx| on_window_close_request(state, tx))
-        .on_quit_request(|state, tx| on_app_quit_request(state, tx))
+        .on_close_request(on_window_close_request)
+        .on_quit_request(on_app_quit_request)
         .on_close(|state, tx| {
             on_window_close("main", state, tx);
         })

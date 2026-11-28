@@ -993,13 +993,15 @@ mod tests {
     #[test]
     fn settings_back_and_escape_use_task_context_without_history() {
         for use_escape in [false, true] {
-            let mut s = AppState::default();
-            s.nav = crate::router::NavigationHistory::new(crate::router::NavigationSnapshot {
-                view: ViewId::Settings,
-                settings_page: crate::router::SettingsPageId::Defaults,
-                last_non_settings_view: ViewId::Task,
+            let mut s = AppState {
+                nav: crate::router::NavigationHistory::new(crate::router::NavigationSnapshot {
+                    view: ViewId::Settings,
+                    settings_page: crate::router::SettingsPageId::Defaults,
+                    last_non_settings_view: ViewId::Task,
+                    ..Default::default()
+                }),
                 ..Default::default()
-            });
+            };
             assert!(!s.nav.can_go_back());
 
             if use_escape {

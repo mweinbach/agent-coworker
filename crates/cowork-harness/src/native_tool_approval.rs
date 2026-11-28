@@ -1750,6 +1750,49 @@ fn validate_shell_path_token(
     Ok(Some(canonical))
 }
 
+fn glob_bracket_expression_end(pattern: &[char], open: usize) -> Option<usize> {
+    debug_assert_eq!(pattern.get(open), Some(&'['));
+    let mut cursor = open + 1;
+    if cursor < pattern.len() && matches!(pattern[cursor], '!' | '^') {
+        cursor += 1;
+    }
+    // POSIX shells treat a leading `]` after the optional negation as a class member,
+    // not as the bracket-expression terminator.
+    if cursor < pattern.len() && pattern[cursor] == ']' {
+        cursor += 1;
+    }
+
+    while cursor < pattern.len() {
+        if pattern[cursor] == '['
+            && cursor + 1 < pattern.len()
+            && matches!(pattern[cursor + 1], ':' | '=' | '.')
+        {
+            let marker = pattern[cursor + 1];
+            let mut nested_end = cursor + 2;
+            while nested_end + 1 < pattern.len()
+                && pattern[nested_end] != ']'
+                && !(pattern[nested_end] == marker && pattern[nested_end + 1] == ']')
+            {
+                nested_end += 1;
+            }
+            if nested_end + 1 < pattern.len()
+                && pattern[nested_end] == marker
+                && pattern[nested_end + 1] == ']'
+            {
+                cursor = nested_end + 2;
+                continue;
+            }
+            // If the nested POSIX form is not closed before the next bare `]`, shells
+            // treat the inner `[` as ordinary class content. Fall through to that close.
+        }
+        if pattern[cursor] == ']' {
+            return Some(cursor + 1);
+        }
+        cursor += 1;
+    }
+    None
+}
+
 fn glob_name_matches(pattern: &str, name: &str) -> bool {
     let p: Vec<char> = pattern.chars().collect();
     let s: Vec<char> = name.chars().collect();
@@ -1761,22 +1804,11 @@ fn glob_name_matches(pattern: &str, name: &str) -> bool {
             pi += 1;
             star_s = si;
         } else if pi < p.len() && p[pi] == '[' {
-            // Treat character classes `[...]` conservatively as matching any single char so
-            // glob checks never under-block symlink matches. Bash allows `]` as a class member
-            // when it is first (after an optional negation), so scan past that leading `]` before
-            // looking for the class terminator.
-            let mut close = pi + 1;
-            if close < p.len() && matches!(p[close], '!' | '^') {
-                close += 1;
-            }
-            if close < p.len() && p[close] == ']' {
-                close += 1;
-            }
-            while close < p.len() && p[close] != ']' {
-                close += 1;
-            }
-            if close < p.len() {
-                pi = close + 1;
+            // Treat bracket expressions conservatively as matching any single char so glob
+            // checks never under-block symlink matches. Parse nested POSIX forms such as
+            // `[[:alpha:]]` before accepting the outer closing bracket.
+            if let Some(end) = glob_bracket_expression_end(&p, pi) {
+                pi = end;
                 si += 1;
             } else {
                 pi += 1;

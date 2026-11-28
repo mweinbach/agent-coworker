@@ -40,8 +40,9 @@ use serde_json::{Map, Value, json};
 use tokio::sync::mpsc;
 
 use crate::actions::{
-    Action, ChatAction, ComposerInlineReadOutcome, NativeAction, NativeCommand, NavAction,
-    SettingsAction, ShellAction, SidebarSectionKey, StoreEvent, TaskAction, TranscriptLogEntry,
+    Action, ChatAction, ComposerInlineReadOutcome, ComposerModelRollbackSnapshot, NativeAction,
+    NativeCommand, NavAction, SettingsAction, ShellAction, SidebarSectionKey, StoreEvent,
+    TaskAction, TranscriptLogEntry,
 };
 use crate::router::{
     NavigationHistory, NavigationPatch, NavigationSnapshot, SettingsPageId, ViewId,
@@ -1894,6 +1895,19 @@ impl Default for AppServices {
     }
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct PendingThreadModelRollback {
+    thread_id: String,
+    previous_thread_provider: Option<String>,
+    previous_thread_model: Option<String>,
+    previous_thread_reasoning_effort: Option<String>,
+    requested_provider: String,
+    requested_model: String,
+    optimistic_thread_reasoning_effort: Option<String>,
+    optimistic_composer_reasoning_effort: Option<ReasoningEffortValue>,
+    composer: Option<ComposerModelRollbackSnapshot>,
+}
+
 /// Root reactive UI & client state rendered by Rune views.
 pub struct AppState {
     pub services: AppServices,
@@ -1994,6 +2008,7 @@ pub struct AppState {
     pub(crate) pending_draft_config_by_rpc_id: HashMap<u64, String>,
     pub(crate) pending_reasoning_effort_config_by_rpc_id:
         HashMap<u64, (String, Option<String>, String)>,
+    pub(crate) pending_model_set_by_rpc_id: HashMap<u64, PendingThreadModelRollback>,
     pub(crate) pending_picker_composer_by_request: HashMap<String, String>,
     pub native_ready: bool,
     pub is_packaged: bool,
@@ -2170,6 +2185,7 @@ impl Default for AppState {
             pending_draft_threads_by_rpc_id: HashMap::new(),
             pending_draft_config_by_rpc_id: HashMap::new(),
             pending_reasoning_effort_config_by_rpc_id: HashMap::new(),
+            pending_model_set_by_rpc_id: HashMap::new(),
             pending_picker_composer_by_request: HashMap::new(),
             native_ready: false,
             is_packaged: false,
@@ -7629,16 +7645,52 @@ impl AppState {
                 thread_id,
                 provider,
                 model,
+                rollback,
             } => {
+                let previous = self.threads.iter().find(|t| t.id == thread_id).map(|t| {
+                    (
+                        t.provider.clone(),
+                        t.model.clone(),
+                        t.reasoning_effort.clone(),
+                    )
+                });
                 let changed =
                     self.apply_thread_model_update(&thread_id, Some(&provider), Some(&model));
+                let optimistic_thread_reasoning_effort = self
+                    .threads
+                    .iter()
+                    .find(|t| t.id == thread_id)
+                    .and_then(|t| t.reasoning_effort.clone());
+                let optimistic_composer_reasoning_effort = rollback
+                    .as_ref()
+                    .and_then(|snapshot| self.composer_drafts.get(&snapshot.key))
+                    .and_then(|draft| draft.reasoning_effort);
                 if let Some(ws_id) = self.workspace_for_thread(&thread_id) {
                     let params = SessionModelSetParams {
-                        thread_id,
-                        provider: Some(provider),
-                        model,
+                        thread_id: thread_id.clone(),
+                        provider: Some(provider.clone()),
+                        model: model.clone(),
                     };
-                    let _ = self.send_ws_typed(&ws_id, "cowork/session/model/set", &params, false);
+                    if let Some(rpc_id) =
+                        self.send_ws_typed(&ws_id, "cowork/session/model/set", &params, false)
+                        && let Some((previous_provider, previous_model, previous_reasoning_effort)) =
+                            previous
+                    {
+                        self.pending_model_set_by_rpc_id.insert(
+                            rpc_id,
+                            PendingThreadModelRollback {
+                                thread_id,
+                                previous_thread_provider: previous_provider,
+                                previous_thread_model: previous_model,
+                                previous_thread_reasoning_effort: previous_reasoning_effort,
+                                requested_provider: provider,
+                                requested_model: model,
+                                optimistic_thread_reasoning_effort,
+                                optimistic_composer_reasoning_effort,
+                                composer: rollback,
+                            },
+                        );
+                    }
                 }
                 if changed && !self.scene_mode {
                     self.persist_state();
@@ -12680,6 +12732,10 @@ impl AppState {
             self.settings_ui.advanced_memory_editing_slug = None;
         }
 
+        if method == "cowork/session/model/set" {
+            self.pending_model_set_by_rpc_id.remove(&request_id);
+        }
+
         match method {
             "command/list" => {
                 if let Some(cmds) = payload
@@ -13462,6 +13518,55 @@ impl AppState {
                     message: msg,
                     status: ComposerSubmissionStatus::Failed(err.message.clone()),
                 });
+            }
+        }
+        if method == "cowork/session/model/set"
+            && let Some(pending) = self.pending_model_set_by_rpc_id.remove(&request_id)
+        {
+            let mut restored = false;
+            if let Some(t) = self.threads.iter_mut().find(|t| t.id == pending.thread_id)
+                && t.provider.as_deref() == Some(pending.requested_provider.as_str())
+                && t.model.as_deref() == Some(pending.requested_model.as_str())
+            {
+                t.provider = pending.previous_thread_provider.clone();
+                t.model = pending.previous_thread_model.clone();
+                if t.reasoning_effort == pending.optimistic_thread_reasoning_effort {
+                    t.reasoning_effort = pending.previous_thread_reasoning_effort.clone();
+                }
+                self.bump_threads_rev();
+                restored = true;
+            }
+
+            let composer_snapshot =
+                pending
+                    .composer
+                    .clone()
+                    .unwrap_or_else(|| ComposerModelRollbackSnapshot {
+                        key: pending.thread_id.clone(),
+                        provider: pending.previous_thread_provider.clone(),
+                        model: pending.previous_thread_model.clone(),
+                        reasoning_effort: pending
+                            .previous_thread_reasoning_effort
+                            .as_deref()
+                            .and_then(|effort| {
+                                crate::views::chat::model::parse_reasoning_effort(Some(effort))
+                            }),
+                    });
+            if let Some(draft) = self.composer_drafts.get_mut(&composer_snapshot.key)
+                && draft.provider.as_deref() == Some(pending.requested_provider.as_str())
+                && draft.model.as_deref() == Some(pending.requested_model.as_str())
+            {
+                let restore_effort =
+                    draft.reasoning_effort == pending.optimistic_composer_reasoning_effort;
+                draft.provider = composer_snapshot.provider;
+                draft.model = composer_snapshot.model;
+                if restore_effort {
+                    draft.reasoning_effort = composer_snapshot.reasoning_effort;
+                }
+                restored = true;
+            }
+            if restored && !self.scene_mode {
+                self.persist_state();
             }
         }
         if method == "cowork/session/config/set"
@@ -20013,6 +20118,77 @@ mod tests {
             &interactions[0],
             ChatInteraction::FileChangeApproval { .. }
         ));
+    }
+
+    #[test]
+    fn rejected_thread_model_change_restores_thread_composer_and_reasoning_effort() {
+        let mut state = AppState::default();
+        state
+            .workspaces
+            .push(WorkspaceRecord::new("ws-1", "Demo", "/tmp/demo", 1));
+        state.threads.push(ThreadRecord {
+            id: "th-1".to_string(),
+            workspace_id: "ws-1".to_string(),
+            provider: Some("openai".to_string()),
+            model: Some("gpt-5".to_string()),
+            reasoning_effort: Some("medium".to_string()),
+            ..Default::default()
+        });
+        state
+            .composer_drafts
+            .entry("th-1".to_string())
+            .or_default()
+            .provider = Some("openai".to_string());
+        let draft = state.composer_drafts.get_mut("th-1").unwrap();
+        draft.model = Some("gpt-5".to_string());
+        draft.reasoning_effort = Some(ReasoningEffortValue::Medium);
+
+        state.dispatch(Action::Chat(ChatAction::SetComposerDraftModel {
+            key: "th-1".to_string(),
+            provider: "anthropic".to_string(),
+            model: "claude-opus-4-6".to_string(),
+        }));
+        state.dispatch(Action::Chat(ChatAction::SetThreadModel {
+            thread_id: "th-1".to_string(),
+            provider: "anthropic".to_string(),
+            model: "claude-opus-4-6".to_string(),
+            rollback: Some(ComposerModelRollbackSnapshot {
+                key: "th-1".to_string(),
+                provider: Some("openai".to_string()),
+                model: Some("gpt-5".to_string()),
+                reasoning_effort: Some(ReasoningEffortValue::Medium),
+            }),
+        }));
+        let request_id = state
+            .services
+            .emitted_ws_commands
+            .iter()
+            .find_map(|cmd| match cmd {
+                WsCommand::SendRequest {
+                    method, request_id, ..
+                } if method == "cowork/session/model/set" => Some(*request_id),
+                _ => None,
+            })
+            .expect("model/set request");
+        assert_eq!(state.threads[0].model.as_deref(), Some("claude-opus-4-6"));
+
+        state.apply_ws_response(
+            "ws-1",
+            request_id,
+            "cowork/session/model/set",
+            Err(WsRpcError {
+                code: -32000,
+                message: "connection closed".to_string(),
+                data: None,
+            }),
+        );
+        assert_eq!(state.threads[0].provider.as_deref(), Some("openai"));
+        assert_eq!(state.threads[0].model.as_deref(), Some("gpt-5"));
+        assert_eq!(state.threads[0].reasoning_effort.as_deref(), Some("medium"));
+        let draft = state.composer_drafts.get("th-1").unwrap();
+        assert_eq!(draft.provider.as_deref(), Some("openai"));
+        assert_eq!(draft.model.as_deref(), Some("gpt-5"));
+        assert_eq!(draft.reasoning_effort, Some(ReasoningEffortValue::Medium));
     }
 
     #[test]
@@ -26754,6 +26930,7 @@ mod tests {
             thread_id: "th-1".to_string(),
             provider: "openai".to_string(),
             model: "o3".to_string(),
+            rollback: None,
         }));
         assert_eq!(state.threads[0].reasoning_effort.as_deref(), Some("high"));
         assert_eq!(
@@ -26775,6 +26952,7 @@ mod tests {
             thread_id: "th-1".to_string(),
             provider: "openai".to_string(),
             model: "gpt-4o".to_string(),
+            rollback: None,
         }));
         assert_eq!(state.threads[0].reasoning_effort, None);
         assert_eq!(
@@ -26794,6 +26972,7 @@ mod tests {
             thread_id: "th-1".to_string(),
             provider: "openai".to_string(),
             model: "gpt-5".to_string(),
+            rollback: None,
         }));
         assert_eq!(state.threads[0].reasoning_effort, None);
         assert_eq!(
@@ -26823,6 +27002,7 @@ mod tests {
             thread_id: "th-1".to_string(),
             provider: "anthropic".to_string(),
             model: "claude-opus-4-6".to_string(),
+            rollback: None,
         }));
         assert_eq!(state.threads[0].reasoning_effort, None);
         assert_eq!(
@@ -26838,6 +27018,7 @@ mod tests {
             thread_id: "th-1".to_string(),
             provider: "openai".to_string(),
             model: "gpt-5".to_string(),
+            rollback: None,
         }));
         state.dispatch(Action::Chat(ChatAction::SetComposerDraftEffort {
             key: "th-1".to_string(),

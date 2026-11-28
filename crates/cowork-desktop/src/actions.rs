@@ -33,6 +33,15 @@ pub enum SidebarSectionKey {
     Workspaces,
 }
 
+/// Confirmed composer model state captured before an optimistic thread model change.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ComposerModelRollbackSnapshot {
+    pub key: String,
+    pub provider: Option<String>,
+    pub model: Option<String>,
+    pub reasoning_effort: Option<ReasoningEffortValue>,
+}
+
 /// Top-level user and UI actions dispatched by views and shortcuts.
 #[derive(Clone, Debug)]
 pub enum Action {
@@ -167,6 +176,7 @@ pub enum ChatAction {
         thread_id: String,
         provider: String,
         model: String,
+        rollback: Option<ComposerModelRollbackSnapshot>,
     },
     SetThreadReasoningEffort {
         thread_id: String,

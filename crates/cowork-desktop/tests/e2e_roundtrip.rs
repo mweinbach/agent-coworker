@@ -360,6 +360,7 @@ fn desktop_starts_workspace_server_lists_threads_and_streams_reply() {
         thread_id: thread_id.clone(),
         provider: "openai".to_string(),
         model: "gpt-5.4".to_string(),
+        rollback: None,
     }));
 
     state.dispatch(Action::Chat(ChatAction::SendMessage {

@@ -985,6 +985,22 @@ fn apply_model_selection(
     provider: String,
     model: String,
 ) {
+    let rollback = thread_id.map(|_| {
+        s.composer_drafts
+            .get(composer_key)
+            .map(|draft| crate::actions::ComposerModelRollbackSnapshot {
+                key: composer_key.to_string(),
+                provider: draft.provider.clone(),
+                model: draft.model.clone(),
+                reasoning_effort: draft.reasoning_effort,
+            })
+            .unwrap_or(crate::actions::ComposerModelRollbackSnapshot {
+                key: composer_key.to_string(),
+                provider: None,
+                model: None,
+                reasoning_effort: None,
+            })
+    });
     s.dispatch(Action::Chat(ChatAction::SetComposerDraftModel {
         key: composer_key.to_string(),
         provider: provider.clone(),
@@ -995,6 +1011,7 @@ fn apply_model_selection(
             thread_id: tid.to_string(),
             provider,
             model,
+            rollback,
         }));
     }
 }

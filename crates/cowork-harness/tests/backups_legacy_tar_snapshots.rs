@@ -211,6 +211,7 @@ fn legacy_tar_created_by_system_tar_is_restorable() {
         fs::write(source.join("notes.txt"), "legacy notes\n").unwrap();
         fs::write(source.join("sub/inner.txt"), "legacy inner\n").unwrap();
         let status = Command::new("tar")
+            .env("COPYFILE_DISABLE", "1")
             .arg("-czf")
             .arg(archive)
             .arg("-C")

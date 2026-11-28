@@ -325,6 +325,9 @@ enum CloudSyncJob {
         target_key: String,
         digest: String,
         patch: Value,
+        revision: u64,
+        attempt: u32,
+        retry_tx: mpsc::Sender<CloudSyncJob>,
     },
     Flush(oneshot::Sender<()>),
 }
@@ -338,6 +341,7 @@ struct CloudSyncInner {
     status: CloudSyncRuntimeStatus,
     last_target_key: Option<String>,
     last_synced_digest: Option<String>,
+    latest_patch_revision: u64,
     pending_jobs: usize,
     sender: Option<mpsc::Sender<CloudSyncJob>>,
     on_status_change: Option<StatusChangeCallback>,
@@ -388,6 +392,7 @@ impl CloudSyncService {
                 status,
                 last_target_key: None,
                 last_synced_digest: None,
+                latest_patch_revision: 0,
                 pending_jobs: 0,
                 sender: None,
                 on_status_change,
@@ -478,6 +483,7 @@ impl CloudSyncService {
         });
 
         if let Some(tx) = sender {
+            let revision = guard.latest_patch_revision.wrapping_add(1);
             match tx.try_send(CloudSyncJob::Push {
                 generation,
                 endpoint,
@@ -485,8 +491,12 @@ impl CloudSyncService {
                 target_key,
                 digest,
                 patch,
+                revision,
+                attempt: 0,
+                retry_tx: tx.clone(),
             }) {
                 Ok(()) => {
+                    guard.latest_patch_revision = revision;
                     guard.pending_jobs += 1;
                     if guard.status.status != "connected" {
                         guard.status = CloudSyncRuntimeStatus {
@@ -591,6 +601,18 @@ fn sanitize_sync_error(raw: &str) -> String {
     }
 }
 
+fn retry_backoff_duration(attempt: u32) -> Duration {
+    #[cfg(test)]
+    {
+        let _ = attempt;
+        Duration::from_millis(20)
+    }
+    #[cfg(not(test))]
+    {
+        Duration::from_secs(2u64.saturating_pow(attempt.min(12)).clamp(1, 300))
+    }
+}
+
 fn spawn_cloud_sync_worker(
     inner: Arc<Mutex<CloudSyncInner>>,
     timeout: Duration,
@@ -611,6 +633,9 @@ fn spawn_cloud_sync_worker(
                     target_key,
                     digest,
                     patch,
+                    revision,
+                    attempt,
+                    retry_tx,
                 } => {
                     // Revalidate consent and active target before every POST so turning off
                     // cloud sync or changing endpoints discards buffered jobs without sending.
@@ -619,8 +644,11 @@ fn spawn_cloud_sync_worker(
                         guard.generation == generation
                             && guard.config.is_active()
                             && guard.last_target_key.as_deref() == Some(target_key.as_str())
+                            && guard.latest_patch_revision == revision
                     };
                     if !still_authorized {
+                        let mut guard = inner.lock().unwrap_or_else(|e| e.into_inner());
+                        guard.pending_jobs = guard.pending_jobs.saturating_sub(1);
                         continue;
                     }
 
@@ -637,6 +665,7 @@ fn spawn_cloud_sync_worker(
                         Ok(resp) => Err(format!("HTTP {}", resp.status().as_u16())),
                         Err(err) => Err(sanitize_sync_error(&err.to_string())),
                     };
+                    let mut should_retry = false;
 
                     let maybe_notify = {
                         let mut guard = inner.lock().unwrap_or_else(|e| e.into_inner());
@@ -644,10 +673,14 @@ fn spawn_cloud_sync_worker(
                             && guard.last_target_key.as_deref() == Some(target_key.as_str())
                             && guard.config.is_active()
                         {
-                            guard.pending_jobs = guard.pending_jobs.saturating_sub(1);
+                            should_retry =
+                                outcome.is_err() && guard.latest_patch_revision == revision;
+                            if !should_retry {
+                                guard.pending_jobs = guard.pending_jobs.saturating_sub(1);
+                            }
                             let next = match outcome {
                                 Ok(()) => {
-                                    guard.last_synced_digest = Some(digest);
+                                    guard.last_synced_digest = Some(digest.clone());
                                     CloudSyncRuntimeStatus {
                                         status: "connected",
                                         configured: true,
@@ -676,6 +709,25 @@ fn spawn_cloud_sync_worker(
 
                     if let Some((cb, next_status)) = maybe_notify {
                         cb(&next_status);
+                    }
+
+                    if should_retry {
+                        let backoff = retry_backoff_duration(attempt);
+                        let retry_job = CloudSyncJob::Push {
+                            generation,
+                            endpoint,
+                            token,
+                            target_key,
+                            digest,
+                            patch,
+                            revision,
+                            attempt: attempt.saturating_add(1),
+                            retry_tx: retry_tx.clone(),
+                        };
+                        tokio::spawn(async move {
+                            tokio::time::sleep(backoff).await;
+                            let _ = retry_tx.send(retry_job).await;
+                        });
                     }
                 }
                 CloudSyncJob::Flush(done) => {
@@ -869,6 +921,145 @@ mod tests {
         svc.flush().await;
         assert_eq!(killed.status, "disabled");
         assert_eq!(received.lock().unwrap().len(), before_kill_count);
+
+        svc.shutdown();
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn failed_patch_is_retained_and_retried_until_upload_succeeds() {
+        let received = Arc::new(Mutex::new(Vec::<Value>::new()));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let received_srv = Arc::clone(&received);
+        let server = tokio::spawn(async move {
+            let mut req_idx = 0usize;
+            loop {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    break;
+                };
+                req_idx += 1;
+                let idx = req_idx;
+                let received_srv = Arc::clone(&received_srv);
+                tokio::spawn(async move {
+                    if let Some((_req_line, _auth, body)) = read_http_request(&mut stream).await {
+                        received_srv.lock().unwrap().push(body);
+                        let (code, reason) = if idx == 1 {
+                            (503, "Service Unavailable")
+                        } else {
+                            (200, "OK")
+                        };
+                        let payload = r#"{"cursor":"cur-1"}"#;
+                        let resp = format!(
+                            "HTTP/1.1 {code} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
+                            payload.len()
+                        );
+                        let _ = stream.write_all(resp.as_bytes()).await;
+                    }
+                });
+            }
+        });
+
+        let mut env = HashMap::new();
+        env.insert(
+            "COWORK_CLOUD_SYNC_ENDPOINT".into(),
+            format!("http://127.0.0.1:{port}"),
+        );
+        let mut persisted = PersistedDesktopState::default();
+        persisted.settings.privacy_telemetry.cloud_sync_enabled = true;
+        persisted.settings.developer_mode = true;
+
+        let svc = CloudSyncService::with_timeout(
+            false,
+            &persisted.settings.privacy_telemetry,
+            None,
+            &env,
+            None,
+            Duration::from_secs(3),
+        );
+        let _ = svc.sync_persisted_state(&persisted, None, &env);
+
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if received.lock().unwrap().len() >= 2 {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("failed cloud-sync patch should be retried without another save");
+
+        let status = svc.status_for_env(&persisted.settings.privacy_telemetry, None, &env);
+        assert_eq!(status.status, "connected");
+        assert_eq!(status.queued, 0);
+        assert!(status.message.is_none());
+        assert_eq!(received.lock().unwrap().len(), 2);
+
+        svc.shutdown();
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn disabling_cloud_sync_cancels_scheduled_retry() {
+        let received_count = Arc::new(Mutex::new(0usize));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let received_srv = Arc::clone(&received_count);
+        let server = tokio::spawn(async move {
+            loop {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    break;
+                };
+                let received_srv = Arc::clone(&received_srv);
+                tokio::spawn(async move {
+                    if read_http_request(&mut stream).await.is_some() {
+                        *received_srv.lock().unwrap() += 1;
+                        let payload = r#"{"error":"upstream unavailable"}"#;
+                        let resp = format!(
+                            "HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
+                            payload.len()
+                        );
+                        let _ = stream.write_all(resp.as_bytes()).await;
+                    }
+                });
+            }
+        });
+
+        let mut env = HashMap::new();
+        env.insert(
+            "COWORK_CLOUD_SYNC_ENDPOINT".into(),
+            format!("http://127.0.0.1:{port}"),
+        );
+        let mut persisted = PersistedDesktopState::default();
+        persisted.settings.privacy_telemetry.cloud_sync_enabled = true;
+
+        let svc = CloudSyncService::with_timeout(
+            false,
+            &persisted.settings.privacy_telemetry,
+            None,
+            &env,
+            None,
+            Duration::from_secs(3),
+        );
+        let _ = svc.sync_persisted_state(&persisted, None, &env);
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let status = svc.status_for_env(&persisted.settings.privacy_telemetry, None, &env);
+                if status.status == "error" {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("first upload should fail");
+
+        persisted.settings.privacy_telemetry.cloud_sync_enabled = false;
+        let disabled = svc.sync_persisted_state(&persisted, None, &env);
+        assert_eq!(disabled.status, "disabled");
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        assert_eq!(*received_count.lock().unwrap(), 1);
 
         svc.shutdown();
         server.abort();

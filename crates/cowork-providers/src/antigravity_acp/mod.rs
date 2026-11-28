@@ -3,7 +3,7 @@
 
 pub mod installer;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -22,7 +22,7 @@ use cowork_inference::{
 use parking_lot::Mutex;
 use serde_json::{Map, Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{Mutex as TokioMutex, Notify, mpsc, oneshot};
 use uuid::Uuid;
 
 use crate::codex_app_server::DynamicToolHandler;
@@ -645,6 +645,99 @@ impl AcpStdioClient {
     }
 }
 
+/// Serializes native filesystem permission decisions and tracks approved mutating calls until
+/// the ACP runtime reports their completion. Unlike the Claude SDK, Antigravity can keep several
+/// `session/request_permission` calls in flight at once; validating them against independent
+/// filesystem snapshots would allow one approved mutation to expose a target after another read
+/// had already been authorized.
+#[derive(Default)]
+struct AcpPermissionCoordinator {
+    approval_lock: TokioMutex<()>,
+    active_mutations: TokioMutex<HashSet<String>>,
+    mutation_completed: Notify,
+}
+
+impl AcpPermissionCoordinator {
+    async fn wait_for_mutations(&self) {
+        loop {
+            if self.active_mutations.lock().await.is_empty() {
+                return;
+            }
+            self.mutation_completed.notified().await;
+        }
+    }
+
+    async fn track_mutation(&self, tool_call_id: Option<&str>) -> bool {
+        let Some(id) = tool_call_id.map(str::trim).filter(|id| !id.is_empty()) else {
+            return false;
+        };
+        self.active_mutations.lock().await.insert(id.to_owned());
+        true
+    }
+
+    async fn complete_tool(&self, tool_call_id: &str) {
+        if self.active_mutations.lock().await.remove(tool_call_id) {
+            self.mutation_completed.notify_one();
+        }
+    }
+
+    async fn clear(&self) {
+        self.active_mutations.lock().await.clear();
+        self.mutation_completed.notify_waiters();
+    }
+}
+
+fn acp_permission_tool_call_id(params: &Value) -> Option<&str> {
+    params
+        .get("toolCall")
+        .and_then(|tc| tc.get("toolCallId").or_else(|| tc.get("id")))
+        .or_else(|| params.get("toolCallId"))
+        .and_then(Value::as_str)
+}
+
+fn acp_permission_canonical_tools(params: &Value) -> Vec<&'static str> {
+    let tool_call = params.get("toolCall");
+    let kind = tool_call
+        .and_then(|tc| tc.get("kind"))
+        .or_else(|| params.get("kind"))
+        .and_then(Value::as_str);
+    let name = tool_call
+        .and_then(|tc| {
+            tc.get("toolName")
+                .or_else(|| tc.get("name"))
+                .or_else(|| tc.get("title"))
+        })
+        .or_else(|| {
+            params
+                .get("toolName")
+                .or_else(|| params.get("tool_name"))
+                .or_else(|| params.get("name"))
+        })
+        .and_then(Value::as_str);
+    let mut out = Vec::new();
+    if let Some(kind) = kind {
+        out.extend(acp_kind_canonical_tools(kind));
+    }
+    if let Some(name) = name {
+        out.extend(acp_name_canonical_tools(name));
+    }
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+fn acp_permission_accesses_filesystem(params: &Value) -> bool {
+    acp_permission_canonical_tools(params)
+        .iter()
+        .any(|tool| matches!(*tool, "bash" | "read" | "write" | "edit" | "grep" | "glob"))
+}
+
+fn acp_permission_mutates_filesystem(params: &Value) -> bool {
+    acp_permission_canonical_tools(params)
+        .iter()
+        .any(|tool| matches!(*tool, "bash" | "write" | "edit"))
+}
+
 fn select_permission_option(params: &Value, approved: bool) -> Value {
     let options = params
         .get("options")
@@ -929,6 +1022,7 @@ impl ProviderTransport for AntigravityAcpTransport {
 
         let pending: Arc<Mutex<PendingAcpMap>> = Arc::new(Mutex::new(HashMap::new()));
         let (notif_tx, mut notif_rx) = mpsc::unbounded_channel::<(String, Value)>();
+        let permission_coordinator = Arc::new(AcpPermissionCoordinator::default());
 
         let authorized_tools_for_reqs = Arc::new(request.authorized_tool_names.clone());
 
@@ -936,6 +1030,7 @@ impl ProviderTransport for AntigravityAcpTransport {
         let stdin_for_reqs = stdin_tx.clone();
         let handler_for_reqs = self.tool_handler.clone();
         let mcp_lookup_for_reqs = mcp_lookup.clone();
+        let coordinator_for_reqs = Arc::clone(&permission_coordinator);
         tokio::spawn(async move {
             let mut lines = BufReader::new(child_stdout).lines();
             while let Ok(Some(line)) = lines.next_line().await {
@@ -962,18 +1057,43 @@ impl ProviderTransport for AntigravityAcpTransport {
                         let handler = handler_for_reqs.clone();
                         let authorized_tools = Arc::clone(&authorized_tools_for_reqs);
                         let mcp_lookup_req = mcp_lookup_for_reqs.clone();
+                        let coordinator = Arc::clone(&coordinator_for_reqs);
                         tokio::spawn(async move {
                             let reply = if method == "session/request_permission" {
-                                let approved = if handler.is_some()
+                                let bridged = handler.is_some()
                                     && acp_bridged_tool_if_authorized(
                                         &params,
                                         tools_disabled,
                                         authorized_tools.as_deref(),
                                         mcp_lookup_req.as_deref(),
                                     )
-                                    .is_some()
-                                {
+                                    .is_some();
+                                let approved = if bridged {
                                     true
+                                } else if acp_permission_accesses_filesystem(&params) {
+                                    let _serialization_permit =
+                                        coordinator.approval_lock.lock().await;
+                                    coordinator.wait_for_mutations().await;
+                                    let mut approved = if !acp_permission_is_authorized(
+                                        &params,
+                                        tools_disabled,
+                                        authorized_tools.as_deref(),
+                                    ) {
+                                        false
+                                    } else if let Some(h) = handler {
+                                        h.request_approval(&method, &params).await
+                                    } else {
+                                        false
+                                    };
+                                    if approved
+                                        && acp_permission_mutates_filesystem(&params)
+                                        && !coordinator
+                                            .track_mutation(acp_permission_tool_call_id(&params))
+                                            .await
+                                    {
+                                        approved = false;
+                                    }
+                                    approved
                                 } else if !acp_permission_is_authorized(
                                     &params,
                                     tools_disabled,
@@ -1021,12 +1141,28 @@ impl ProviderTransport for AntigravityAcpTransport {
                     }
                     (None, Some(method)) => {
                         let params = obj.get("params").cloned().unwrap_or(Value::Null);
+                        if method == "session/update" {
+                            let update = params.get("update").unwrap_or(&params);
+                            let kind = update
+                                .get("sessionUpdate")
+                                .or_else(|| update.get("type"))
+                                .and_then(Value::as_str)
+                                .unwrap_or("");
+                            let status = update.get("status").and_then(Value::as_str).unwrap_or("");
+                            if matches!(kind, "tool_call" | "tool_call_update")
+                                && matches!(status, "completed" | "failed" | "cancelled")
+                                && let Some(id) = update.get("toolCallId").and_then(Value::as_str)
+                            {
+                                coordinator_for_reqs.complete_tool(id).await;
+                            }
+                        }
                         let _ = notif_tx.send((method, params));
                     }
                     _ => {}
                 }
             }
-            // Fail all pending RPCs on EOF.
+            // Wake serialized permission waiters and fail all pending RPCs on EOF.
+            coordinator_for_reqs.clear().await;
             let mut guard = pending_reader.lock();
             for (_, tx) in guard.drain() {
                 let _ = tx.send(Err(ProviderTransportError::protocol(

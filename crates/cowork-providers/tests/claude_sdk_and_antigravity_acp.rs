@@ -1036,6 +1036,111 @@ for line in sys.stdin:
 
 #[cfg(unix)]
 #[tokio::test]
+async fn antigravity_acp_serializes_shell_permissions_until_mutation_completion() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = TempDir::new().unwrap();
+    let script_path = tmp.path().join("mock-acp-concurrent-permissions.py");
+    let script = r#"#!/usr/bin/env python3
+import json, select, sys
+
+def send(obj):
+    sys.stdout.write(json.dumps(obj) + "\n")
+    sys.stdout.flush()
+
+def read_msg():
+    return json.loads(sys.stdin.readline().strip())
+
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    msg = json.loads(line)
+    method = msg.get("method")
+    req_id = msg.get("id")
+    params = msg.get("params", {})
+
+    if method == "initialize":
+        send({"jsonrpc": "2.0", "id": req_id, "result": {"protocolVersion": 1}})
+    elif method == "session/new":
+        send({"jsonrpc": "2.0", "id": req_id, "result": {"sessionId": "acp-race-1"}})
+    elif method in ("session/set_model", "session/set_config_option"):
+        send({"jsonrpc": "2.0", "id": req_id, "result": {}})
+    elif method == "session/prompt":
+        sid = params.get("sessionId")
+        options = [
+            {"optionId": "opt-allow", "name": "Allow", "kind": "allow_once"},
+            {"optionId": "opt-deny", "name": "Reject", "kind": "reject_once"}
+        ]
+        send({
+            "jsonrpc": "2.0", "id": 9201, "method": "session/request_permission",
+            "params": {"sessionId": sid, "toolCall": {"toolCallId": "tc-mutate", "title": "run_cmd", "kind": "execute"}, "options": options}
+        })
+        send({
+            "jsonrpc": "2.0", "id": 9202, "method": "session/request_permission",
+            "params": {"sessionId": sid, "toolCall": {"toolCallId": "tc-read", "title": "read_file", "kind": "read"}, "options": options}
+        })
+        first = read_msg()
+        early_second = bool(select.select([sys.stdin], [], [], 0.35)[0])
+        send({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": sid, "update": {"sessionUpdate": "tool_call_update", "toolCallId": "tc-mutate", "status": "completed"}}})
+        second = read_msg()
+        reply = "first=%s;second=%s;early=%s" % (
+            first.get("id"), second.get("id"), early_second
+        )
+        send({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": sid, "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": reply}}}})
+        send({"jsonrpc": "2.0", "id": req_id, "result": {"stopReason": "end_turn"}})
+        break
+"#;
+    std::fs::write(&script_path, script).unwrap();
+    std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let mut env = HashMap::new();
+    env.insert("HOME".into(), tmp.path().to_string_lossy().into_owned());
+    env.insert("PATH".into(), std::env::var("PATH").unwrap_or_default());
+    let handler = Arc::new(TestApprovalHandler {
+        allow: true,
+        calls: AtomicUsize::new(0),
+    });
+    let mut transport = AntigravityAcpTransport::with_env_and_handler(env, Some(handler.clone()));
+    transport.command_override = Some((script_path.to_string_lossy().into_owned(), Vec::new()));
+
+    let mut provider_options = Map::new();
+    provider_options.insert("cwd".into(), json!(tmp.path().to_string_lossy()));
+    let req = ProviderStepRequest {
+        model_id: "gemini-4-neon".to_owned(),
+        base_url: None,
+        api_key: Some("gem-key".to_owned()),
+        extra_headers: HashMap::new(),
+        system_prompt: "Serialize filesystem operations.".to_owned(),
+        messages: vec![user_msg("run")],
+        tools: Vec::new(),
+        authorized_tool_names: None,
+        provider_options,
+        continuation: None,
+        policy: RequestPolicy::default(),
+        turn_id: "turn-acp-race".to_owned(),
+    };
+
+    let budget = StepBudget::unbounded(Some(CancellationToken::new()));
+    let res = transport
+        .stream_step(req, &budget, &mut |_| {})
+        .await
+        .expect("ACP turn succeeds");
+    let text = res
+        .assistant
+        .content
+        .iter()
+        .find_map(|b| match b {
+            ContentBlock::Text { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(text, "first=9201;second=9202;early=False");
+    assert_eq!(handler.calls.load(Ordering::Relaxed), 2);
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn antigravity_acp_returns_error_on_subprocess_exit_without_spinning() {
     use std::os::unix::fs::PermissionsExt;
 

@@ -1750,85 +1750,56 @@ fn validate_shell_path_token(
     Ok(Some(canonical))
 }
 
-fn glob_bracket_expression_end(pattern: &[char], open: usize) -> Option<usize> {
-    debug_assert_eq!(pattern.get(open), Some(&'['));
-    let mut cursor = open + 1;
-    if cursor < pattern.len() && matches!(pattern[cursor], '!' | '^') {
-        cursor += 1;
-    }
-    // POSIX shells treat a leading `]` after the optional negation as a class member,
-    // not as the bracket-expression terminator.
-    if cursor < pattern.len() && pattern[cursor] == ']' {
-        cursor += 1;
-    }
-
-    while cursor < pattern.len() {
-        if pattern[cursor] == '['
-            && cursor + 1 < pattern.len()
-            && matches!(pattern[cursor + 1], ':' | '=' | '.')
-        {
-            let marker = pattern[cursor + 1];
-            let mut nested_end = cursor + 2;
-            while nested_end + 1 < pattern.len()
-                && pattern[nested_end] != ']'
-                && !(pattern[nested_end] == marker && pattern[nested_end + 1] == ']')
-            {
-                nested_end += 1;
-            }
-            if nested_end + 1 < pattern.len()
-                && pattern[nested_end] == marker
-                && pattern[nested_end + 1] == ']'
-            {
-                cursor = nested_end + 2;
-                continue;
-            }
-            // If the nested POSIX form is not closed before the next bare `]`, shells
-            // treat the inner `[` as ordinary class content. Fall through to that close.
-        }
-        if pattern[cursor] == ']' {
-            return Some(cursor + 1);
-        }
-        cursor += 1;
-    }
-    None
-}
-
 fn glob_name_matches(pattern: &str, name: &str) -> bool {
     let p: Vec<char> = pattern.chars().collect();
     let s: Vec<char> = name.chars().collect();
-    let (mut pi, mut si) = (0usize, 0usize);
-    let (mut star_p, mut star_s) = (None, 0usize);
-    while si < s.len() {
-        if pi < p.len() && p[pi] == '*' {
-            star_p = Some(pi);
-            pi += 1;
-            star_s = si;
-        } else if pi < p.len() && p[pi] == '[' {
-            // Treat bracket expressions conservatively as matching any single char so glob
-            // checks never under-block symlink matches. Parse nested POSIX forms such as
-            // `[[:alpha:]]` before accepting the outer closing bracket.
-            if let Some(end) = glob_bracket_expression_end(&p, pi) {
-                pi = end;
-                si += 1;
-            } else {
-                pi += 1;
-                si += 1;
-            }
-        } else if pi < p.len() && (p[pi] == '?' || p[pi] == s[si]) {
-            pi += 1;
-            si += 1;
-        } else if let Some(sp) = star_p {
-            pi = sp + 1;
-            star_s += 1;
-            si = star_s;
-        } else {
-            return false;
+    let mut close_positions = Vec::new();
+    for (idx, ch) in p.iter().enumerate() {
+        if *ch == ']' {
+            close_positions.push(idx);
         }
     }
-    while pi < p.len() && p[pi] == '*' {
-        pi += 1;
+
+    // Shell quote removal happens before this matcher sees the operand, so a `]` in the
+    // remaining text may have been either a bracket terminator or escaped class content in
+    // the original command. Explore every possible terminator plus the literal-`[` reading;
+    // intentionally overmatching here is safe because a match only triggers path validation.
+    let mut stack = vec![(0usize, 0usize)];
+    let mut visited = std::collections::HashSet::new();
+    while let Some((pi, si)) = stack.pop() {
+        if !visited.insert((pi, si)) {
+            continue;
+        }
+        if pi == p.len() {
+            if si == s.len() {
+                return true;
+            }
+            continue;
+        }
+        if p[pi] == '*' {
+            stack.push((pi + 1, si));
+            if si < s.len() {
+                stack.push((pi, si + 1));
+            }
+            continue;
+        }
+        if si == s.len() {
+            continue;
+        }
+        if p[pi] == '[' {
+            if s[si] == '[' {
+                stack.push((pi + 1, si + 1));
+            }
+            for close in close_positions.iter().copied().filter(|close| *close > pi) {
+                stack.push((close + 1, si + 1));
+            }
+            continue;
+        }
+        if p[pi] == '?' || p[pi] == s[si] {
+            stack.push((pi + 1, si + 1));
+        }
     }
-    pi == p.len()
+    false
 }
 
 const MAX_GLOB_EXPANSIONS: usize = 4096;

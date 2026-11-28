@@ -1193,6 +1193,7 @@ async fn claude_native_bash_authorizes_relative_symlink_and_glob_operands() {
             "cat [[=a=]]credential-link",
             "cat [[.a.]]credential-link",
             "cat [![:alpha:]]credential-link",
+            r"cat [a\]]credential-link",
             "cat 'credential-link '",
             "cat ' credential-link'",
             "cat -- -credential-link",

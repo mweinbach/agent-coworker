@@ -27565,7 +27565,8 @@ mod tests {
             "defaultSkillImprovementScope": "workspace",
             "skillImprovementScope": "workspace",
             "defaultSkillImprovementExcludedSkills": ["other-skill"],
-            "skillImprovementExcludedSkills": ["other-skill"]
+            "skillImprovementExcludedSkills": ["other-skill"],
+            "lmStudioEnabled": false
         });
 
         state.workspaces.push(ws_a);
@@ -27616,6 +27617,7 @@ mod tests {
             json!(["noisy-skill"])
         );
         assert_eq!(b.defaults["reasoningEffort"], json!("high"));
+        assert!(b.defaults.get("lmStudioEnabled").is_none());
         assert!(b.defaults.get("defaultToolOutputOverflowChars").is_none());
         assert!(b.defaults.get("toolOutputOverflowChars").is_none());
         assert!(b.defaults.get("defaultToolCalling").is_none());

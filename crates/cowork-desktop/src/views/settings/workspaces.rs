@@ -420,9 +420,10 @@ pub(crate) fn build_shared_workspace_defaults_patch(
         "reasoningEffort".to_string(),
         pick_default(&["reasoningEffort"]).unwrap_or(Value::Null),
     );
-    if let Some(lm) = pick_default(&["lmStudioEnabled"]) {
-        patch.insert("lmStudioEnabled".to_string(), lm);
-    }
+    patch.insert(
+        "lmStudioEnabled".to_string(),
+        pick_default(&["lmStudioEnabled"]).unwrap_or(Value::Null),
+    );
 
     Value::Object(patch)
 }

@@ -874,7 +874,24 @@ impl PersistenceService {
             sanitize_desktop_settings(obj.get("desktopSettings"), fallback_theme);
         obj.insert("desktopSettings".to_string(), desktop_settings);
 
-        let privacy = sanitize_privacy_telemetry_settings(obj.get("privacyTelemetrySettings"));
+        // One-time upgrade bridge: Electron stored cloud-sync consent in `cloudSync.enabled`.
+        // Import it only when the newer privacy setting is absent; once the user has explicitly
+        // saved `cloudSyncEnabled` (including `false`), that newer consent decision wins.
+        let mut privacy_source = obj
+            .get("privacyTelemetrySettings")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        if !privacy_source.contains_key("cloudSyncEnabled")
+            && obj
+                .get("cloudSync")
+                .and_then(|v| v.get("enabled"))
+                .and_then(Value::as_bool)
+                == Some(true)
+        {
+            privacy_source.insert("cloudSyncEnabled".to_string(), Value::Bool(true));
+        }
+        let privacy = sanitize_privacy_telemetry_settings(Some(&Value::Object(privacy_source)));
         obj.insert("privacyTelemetrySettings".to_string(), privacy);
 
         let flags = sanitize_feature_flags(obj.get("desktopFeatureFlagOverrides"));

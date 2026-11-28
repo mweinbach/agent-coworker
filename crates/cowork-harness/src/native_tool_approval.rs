@@ -1756,7 +1756,11 @@ fn glob_name_matches(pattern: &str, name: &str) -> bool {
     let (mut pi, mut si) = (0usize, 0usize);
     let (mut star_p, mut star_s) = (None, 0usize);
     while si < s.len() {
-        if pi < p.len() && (p[pi] == '?' || p[pi] == s[si]) {
+        if pi < p.len() && p[pi] == '*' {
+            star_p = Some(pi);
+            pi += 1;
+            star_s = si;
+        } else if pi < p.len() && (p[pi] == '?' || p[pi] == s[si]) {
             pi += 1;
             si += 1;
         } else if pi < p.len() && p[pi] == '[' {
@@ -1781,10 +1785,6 @@ fn glob_name_matches(pattern: &str, name: &str) -> bool {
                 pi += 1;
                 si += 1;
             }
-        } else if pi < p.len() && p[pi] == '*' {
-            star_p = Some(pi);
-            pi += 1;
-            star_s = si;
         } else if let Some(sp) = star_p {
             pi = sp + 1;
             star_s += 1;
